@@ -1,0 +1,13 @@
+.web/
+.states/
+assets/external/
+uploaded_files/
+*.py[cod]
+*.db
+__pycache__/
+.pytest_cache/
+.playwright-mcp/
+.DS_Store
+
+# E2E testcase artifacts
+testcases/**/output/

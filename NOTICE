@@ -1,0 +1,37 @@
+ReflexGrid
+Copyright (c) 2026 Milo Chen and the ReflexGrid contributors
+
+This project's spreadsheet engine (`gridcore`) is a Python port that follows the
+architecture, algorithms and behaviour of GridCraft (https://github.com/storytold/gridcraft),
+a clean-room spreadsheet written in Rust. GridCraft is dual-licensed under MIT OR Apache-2.0;
+the parts of its design and code that ReflexGrid adapts are used under the MIT license:
+
+    MIT License
+
+    Copyright (c) 2026 ArtCraft Team and the GridCraft contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+ReflexGrid contains no Microsoft code, fonts, icons, templates or other
+assets. "Excel" and "Microsoft Office" are trademarks of Microsoft Corporation; they are
+named only to describe file-format compatibility. Icons in the UI are from Lucide (ISC license),
+bundled with Reflex. The Carlito font in `assets/fonts` (metric-compatible with Calibri, so
+column widths match Excel's) is (c) 2013 The Carlito Project Authors, licensed under the
+SIL Open Font License 1.1 (see `assets/fonts/OFL.txt`). The XLSX support is implemented from the ECMA-376 / ISO/IEC 29500
+specification and observed behaviour.

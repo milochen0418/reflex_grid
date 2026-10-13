@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "reflex-grid"
+version = "0.1.0"
+description = "ReflexGrid: an Excel-compatible spreadsheet (XLSX in, XLSX out) built with Reflex."
+authors = ["Milo Chen"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "reflex_grid"}, {include = "gridcore"}]
+
+[tool.poetry.dependencies]
+python = "~3.11"
+reflex = "0.8.24.post1"
+
+[tool.poetry.scripts]
+gridcore = "gridcore.cli:main"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+playwright = "^1.42.0"
+openpyxl = "^3.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
