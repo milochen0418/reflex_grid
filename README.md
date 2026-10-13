@@ -9,6 +9,8 @@ Its engine, **gridcore**, is pure Python with a layered design (core → number 
 model → calc → xlsx → engine), copy-on-write workbook snapshots for undo, dependency-graph recalculation with
 dynamic arrays, and an "every action is a command" API.
 
+▶ [Demo video](https://www.youtube.com/watch?v=I5rBceuf1tM) (the first version)
+
 ## Why ReflexGrid
 
 - **Excel files in, Excel files out**: reads and writes Office Open XML (`.xlsx`) — formulas with Excel's
@@ -27,6 +29,8 @@ dynamic arrays, and an "every action is a command" API.
   document manager, shared links, who is here and where (everyone's selection in their colour, as in
   Google Sheets), changes reaching everyone at once, undo that takes back only your own changes, and
   "Call everyone" on a workbook.
+- **Sign-in and calls on re_ddns**: install it from the [re_ddns](https://github.com/milochen0418/re_ddns)
+  Agentic App Store — see [With re_ddns](#with-re_ddns-sign-in-and-calls).
 
 ## Features
 
@@ -148,28 +152,22 @@ What people on a workbook share, and what is their own:
   `~/.local/share/reflex_grid` on Linux), as `books/<id>.xlsx` plus `books/<id>.json` (title, creator,
   times).
 
-### Sign-in and calls
+## With re_ddns: sign-in and calls
 
-With [reflex_ddns_auth](https://github.com/milochen0418/reflex_ddns_auth) (a Poetry path dependency,
-`../reflex_ddns_auth`, as in CoDoc in MD), people signed in with the re-ddns SSO appear with their name and
-picture, and "Mine" filters the workbook list; everyone else is a guest ("Guest 1234").
+ReflexGrid runs fine on its own (everyone is a guest). Sign-in and **Call everyone** come from
+[re_ddns](https://github.com/milochen0418/re_ddns) and its **Agentic App Store**: once the App Store is up,
+install a few apps by hand and they work.
 
-**Call everyone** (in the title bar) works as in CoDoc in MD: it rings the people on the workbook, who
-can accept or decline for 45 seconds; while the call is on, everyone on the workbook — also people who
-open it later — sees **Join call · N**. The call runs in a call app opened in a dialog through the DDNS
-Intent `call.join` (e.g. [LiveKit audio chat](https://github.com/milochen0418/reflex_ddns_livekit_audio_chat));
-on re-ddns the app is found through the intent registry. If several apps provide `call.join`, whoever starts
-the call chooses one, and everyone joins that one. Settings (all optional):
+1. Start re_ddns (see its README) and open the App Store at `https://aapps.reflex-ddns.com`.
+2. Install **ReflexGrid**, then open it at `https://grid.reflex-ddns.com`.
+3. Install **Relack** for sign-in: people then appear with their name and picture, and **Mine** filters
+   the workbook list.
+4. Install a call app, e.g. **LiveKit Audio Chat (self-hosted)**, **LiveKit Video Chat** or **LiveKit Avatar
+   Chat**: **Call everyone** rings the people on the workbook and opens the call in a dialog. With several
+   call apps installed, whoever starts the call picks one.
 
-- `DDNS_INTENT_PROVIDER_CALL_JOIN`: the app(s) that handle `call.join` when there is no registry, e.g.
-  `livekit` for local development; `DDNS_INTENT_URL_LIVEKIT`: where that app runs (e.g. `http://localhost:3200`).
-- `REFLEX_GRID_CALL_APP`: always use this app, skipping the registry.
-
-### On re-ddns
-
-`backend-paths.txt` sends `/_reflex_grid/` (a closing tab's goodbye) to the backend. To keep workbooks
-across container restarts, give the app a volume for its data, e.g.
-`"volumes": ["smart-app-grid-data:/root/.local/share/reflex_grid"]` in the App Store catalog entry.
+Apps on re_ddns open each other in dialogs through **DDNS Intents** (a call is the intent `call.join`); this
+video explains the idea: [DDNS Intent](https://www.youtube.com/watch?v=Y5YKXsWkrxg).
 
 ## Tests
 
