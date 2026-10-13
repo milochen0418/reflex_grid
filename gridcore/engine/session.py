@@ -59,6 +59,9 @@ class DocState:
         self.selection = Selection.at(sh.view_active if sh is not None else (0, 0))
         self.sheet_selections: Dict[int, Selection] = {}
         self.warnings: List[str] = []
+        # Set by an edit that moved cells to other addresses (see ``Ctx.moved``); whoever needs
+        # to know resets it (the collaboration layer, before each command).
+        self.cells_moved = False
 
     def is_dirty(self) -> bool:
         return self.wb is not self.saved
@@ -96,13 +99,16 @@ def command(cid: str, label: str, menu: Tuple[str, ...] = (), shortcut: Optional
 
 
 class Ctx:
-    """An edit in progress: a copy of the workbook, the cells whose content changed and whether
-    the edit was structural (rows, columns, sheets: full recalculation)."""
+    """An edit in progress: a copy of the workbook, the cells whose content changed, whether
+    the edit was structural (rows, columns, sheets: full recalculation) and whether it moved
+    cells to other addresses (rows or columns inserted or deleted, cells shifted or moved,
+    sorted, sheets added, removed or reordered)."""
 
     def __init__(self, wb: Workbook, sel: Selection):
         self.wb = wb
         self.changed: List[Tuple[int, int, int]] = []
         self.structural = False
+        self.moved = False
         self.sel = sel
         self.fit_rows: List[Tuple[int, int]] = []
 
@@ -235,6 +241,8 @@ def commit(d: DocState, f: Callable[[Ctx], Any]) -> Any:
         auto_row_height(wb, si, row)
     d.wb = wb
     d.selection = ctx.sel
+    if ctx.moved:
+        d.cells_moved = True
     return r
 
 

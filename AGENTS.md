@@ -80,7 +80,9 @@ poetry run ./run_test_suite.sh smoke_home
 ```
 
 Optional environment variables (see `testcases/README.md`): `BASE_URL` (default `http://127.0.0.1:3000`),
-`HEADLESS=0` to watch the browser.
+`HEADLESS=0` to watch the browser. The runner keeps the workbooks a suite creates in its `output/data`;
+when you run the app yourself, point `REFLEX_GRID_HOME` at a scratch folder to keep test workbooks out of
+the user's own.
 
 ## 5) How the code is organised (keep it that way)
 
@@ -90,8 +92,18 @@ Optional environment variables (see `testcases/README.md`): `BASE_URL` (default 
   The UI, tests and scripts all go through `Session.execute(id, params)`. Add a command (with a unit test)
   before wiring a button to it.
 - The engine never crashes the app: unexpected errors become `EngineError` and the workbook is restored.
-- `reflex_grid/` is the UI: `state.py` bridges events to the engine; `components/sheet_view.jsx` is the grid
-  (a local React component); ribbon, dialogs and chrome are Reflex components.
+- `reflex_grid/` is the UI: `state.py` bridges events to the engine; `assets/grid/sheet_view.jsx` is the grid
+  (a local React component, wrapped in `components/sheet_view.py`); ribbon, dialogs and chrome are Reflex
+  components. Keep JSX as plain assets: `rx.asset(..., shared=True)` writes machine-specific symlinks into
+  `assets/external/` that break the App Store dev mode, which mounts this checkout into a container.
+- Workbooks are shared (see `docs/architecture.md`): a tab's engine work on its workbook runs inside
+  `book.act(view)` (`gridcore/engine/collab.py`), never outside it and never across an `await`; after it,
+  publish the book to its room (`GridState._publish`). Keep cells out of Reflex state: the room
+  (`reflex_grid/room.py`, a `SharedState`) carries only small, broadcast things.
+- Engine edits that move cells to other addresses set `ctx.moved` (per-person undo depends on it).
+- The UI is light only, like Excel's: the theme is `rx.theme(appearance="light")` and the page declares
+  `color-scheme: light`, so an OS in dark mode doesn't turn its text light on our white surfaces. On
+  surfaces we colour ourselves (the title bar, the backstage menu, the grid), give text an explicit colour.
 - Excel compatibility is a feature: anything written to `.xlsx` must open in Excel. When touching
   `gridcore/xlsx`, round-trip with openpyxl in a test.
 - No Microsoft assets (icons, fonts, templates).

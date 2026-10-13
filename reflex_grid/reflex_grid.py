@@ -1,16 +1,22 @@
-"""ReflexGrid: an Excel-compatible spreadsheet in the browser, built with Reflex.
+"""ReflexGrid: Excel-compatible spreadsheets in the browser, shared and edited together live,
+built with Reflex.
 
-The page is the classic layout: title bar, ribbon, formula bar + grid, sheet tabs, status bar.
-All spreadsheet logic lives in the ``gridcore`` engine;
-this module only arranges the UI."""
+Pages: ``/`` lists the workbooks; ``/book/<id>`` is a workbook in the classic layout (title
+bar, ribbon, formula bar + grid, sheet tabs, status bar), shared by everyone who opens that
+address. All spreadsheet logic lives in the ``gridcore`` engine; this module only arranges the UI."""
 
 import reflex as rx
 
-from .components.chrome import backstage, sheet_tabs, status_bar, title_bar
+from .api import api
+from .components.call_views import call_keepalive, incoming_call
+from .components.chrome import backstage, book_gone, sheet_tabs, status_bar, title_bar
 from .components.dialogs import all_dialogs
+from .components.manager import manager_page
 from .components.ribbon import ribbon
 from .components.sheet_view import sheet_view
-from .state import GridState
+from .room import BookRoom
+from .state import AuthState, GridState
+from .workbooks import ManagerState
 
 
 def index() -> rx.Component:
@@ -28,6 +34,10 @@ def index() -> rx.Component:
                     names=GridState.names,
                     focus_key=GridState.focus_key,
                     edit_request=GridState.edit_request,
+                    peers=BookRoom.peers,
+                    rev=BookRoom.rev,
+                    changes=BookRoom.changes,
+                    me=GridState.me["peer"],
                     on_event=GridState.on_event,
                 ),
                 flex="1",
@@ -44,6 +54,8 @@ def index() -> rx.Component:
         ),
         backstage(),
         all_dialogs(),
+        book_gone(),
+        incoming_call(),
         position="relative",
         height="100vh",
         width="100vw",
@@ -62,7 +74,14 @@ FONT_FACES = "".join(
 )
 
 STYLE = FONT_FACES + """
-html, body { margin: 0; padding: 0; overflow: hidden; }
+/* ReflexGrid is a light UI, like Excel's: an OS in dark mode must not recolour it (the theme is
+   light too). color-scheme keeps native inputs and scrollbars light as well. */
+:root { color-scheme: light; }
+html, body { margin: 0; padding: 0; overflow: hidden; background: #FFFFFF; color: #1F2937; }
+/* Ribbon buttons: dark labels and icons, as in Excel (the theme's grey is too faint). */
+.rg-ribbon .rg-rbtn { color: #262626; }
+/* The File backstage's menu: white on the accent colour, also when hovered. */
+.rg-backstage-nav .rt-Button:hover { background: rgba(255, 255, 255, 0.14); }
 .rg-rbtn { cursor: default; flex-shrink: 0; min-width: 26px; margin: 0 !important; }
 .rg-ribbon .rt-Flex { flex-shrink: 0; }
 .rg-biglabel { white-space: normal; max-width: 74px; line-height: 1.1; text-align: center; display: block; }
@@ -71,10 +90,34 @@ html, body { margin: 0; padding: 0; overflow: hidden; }
 @keyframes rg-march { to { stroke-dashoffset: -8; } }
 .rg-ribbon::-webkit-scrollbar { height: 6px; }
 .rg-sheet-tabs::-webkit-scrollbar { height: 4px; }
+.rg-flash { opacity: 0; animation: rg-flash 1.6s ease-out; }
+@keyframes rg-flash { from { opacity: 0.38; } to { opacity: 0; } }
+.rg-title-input { width: 260px; max-width: 30vw; height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #FFFFFF; font: 600 14px 'Segoe UI', system-ui, sans-serif; outline: none; text-overflow: ellipsis; }
+.rg-title-input:hover { border-color: rgba(255, 255, 255, 0.45); }
+.rg-title-input:focus { background: #FFFFFF; color: #111827; border-color: #FFFFFF; }
+#manager { height: 100vh; overflow: auto; }
 """
 
 app = rx.App(
-    theme=rx.theme(accent_color="cyan", gray_color="slate", radius="small", scaling="95%"),
+    # Always light (as CoDoc in MD): the app paints white sheets, ribbon and dialogs, so the theme's
+    # dark colours (light text) would vanish on them when the OS is in dark mode.
+    theme=rx.theme(appearance="light", accent_color="cyan", gray_color="slate", radius="small", scaling="95%"),
     head_components=[rx.el.style(STYLE), rx.el.link(rel="icon", href="/favicon.svg", type="image/svg+xml")],
+    # Our own backend routes (a closing tab's goodbye), next to Reflex's.
+    api_transformer=api,
 )
-app.add_page(index, title="ReflexGrid", description="An Excel-compatible spreadsheet built with Reflex", on_load=GridState.on_load)
+
+_auth_on_load = [AuthState.load_auth] if AuthState is not None else []
+
+try:
+    from reflex_ddns_auth.intent import install_intent_host
+
+    # Intent dialogs (calls) are hosted once, above every page, so a call survives going back
+    # to the workbook list.
+    install_intent_host(app)
+    app.extra_app_wraps[(8, "ReflexGridCallKeepalive")] = lambda stateful: rx.fragment(call_keepalive())
+except ImportError:
+    pass
+
+app.add_page(manager_page, route="/", title="ReflexGrid — Workbooks", description="Shared Excel-compatible workbooks, edited together live", on_load=[*_auth_on_load, GridState.leave_book, ManagerState.load])
+app.add_page(index, route="/book/[book_id]", title="ReflexGrid", description="An Excel-compatible spreadsheet built with Reflex", on_load=[*_auth_on_load, GridState.on_load])

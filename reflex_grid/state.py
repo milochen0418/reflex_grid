@@ -1,22 +1,41 @@
 """Reflex state: the bridge between the browser (grid component, ribbon, dialogs) and the
-gridcore engine session that holds the workbook."""
+gridcore engine.
+
+Each tab shows one shared book (``/book/<id>``): the workbook lives once on the server
+(:mod:`.books`) and everyone on it edits it at the same time. ``GridState`` holds what this tab
+draws — its window of cells, its selection, ribbon and dialogs — and runs the tab's commands
+on the shared book through the tab's view of it (``book.act(view)``). ``BookRoom``, a Reflex
+SharedState linked to the book, tells every tab on it about each change and shows who is where;
+a tab that drew an older revision than the room's asks for its window again (``sync``)."""
 
 from __future__ import annotations
 
 import base64
 import os
+import random
+import re
+import secrets
+import time
 from typing import Any, Dict, List, Optional
 
 import reflex as rx
 
 from gridcore.core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, col_to_letters
-from gridcore.engine import EngineError, Session, geometry, objects, ui_state, viewport
-from gridcore.engine.cmd_format import CELL_STYLE_NAMES, FORMAT_PRESETS
-from gridcore.engine.samples import SAMPLES, new_sample
+from gridcore.engine import EngineError, Session, View, geometry, objects, ui_state, viewport
+from gridcore.engine.cmd_file import encode
+from gridcore.engine.cmd_format import CELL_STYLE_NAMES, FORMAT_PRESETS  # noqa: F401
+from gridcore.engine.samples import SAMPLES
 from gridcore.functions import all_functions
 from gridcore.numfmt import parse as parse_fmt
 
-from . import sessions
+from . import call, sessions
+from .books import STORE, Book, clean_title, valid_id
+from .room import BookRoom, room_token
+
+try:
+    from reflex_ddns_auth import AuthState
+except ImportError:  # runs without sign-in: everyone is a guest
+    AuthState = None
 
 FUNCTIONS = sorted(
     ({"name": f.name, "signature": f.signature, "description": f.description, "category": f.category} for f in all_functions() if not f.name.startswith("_")),
@@ -24,6 +43,11 @@ FUNCTIONS = sorted(
 )
 CATEGORIES = sorted({f["category"] for f in FUNCTIONS})
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MIMES = {"xlsx": XLSX_MIME, "csv": "text/csv", "tsv": "text/tab-separated-values"}
+# A tab that hasn't pinged for this long has left (it pings every 5 s; hidden tabs are throttled).
+PEER_IDLE = 30
+# Events that only redraw this tab: the server's answer never moves its selection.
+_PASSIVE = frozenset({"viewport", "sync", "ping", "presence", "objectSelect"})
 
 
 def _rng(g) -> str:
@@ -36,6 +60,27 @@ def _num(v, default=None):
         return float(v)
     except (TypeError, ValueError):
         return default
+
+
+def _file_stem(name: str) -> str:
+    stem = re.sub(r"\.(xlsx|xlsm|csv|tsv|txt)$", "", name or "", flags=re.I)
+    stem = re.sub(r'[\\/:*?"<>|]+', "-", stem).strip()
+    return stem or "Book"
+
+
+def _peer_json(v: View) -> Dict[str, Any]:
+    sel = v.selection
+    return {
+        "id": v.key,
+        "user": v.info.get("user", v.key),
+        "name": v.name,
+        "color": v.info.get("color", "#5F6368"),
+        "avatar": v.info.get("avatar", ""),
+        "sheet": v.sheet,
+        "active": [sel.active[0], sel.active[1]],
+        "ranges": [[r.r0, r.c0, r.r1, r.c1] for r in sel.ranges[-8:]],
+        "editing": v.info.get("editing"),
+    }
 
 
 class GridState(rx.State):
@@ -58,6 +103,14 @@ class GridState(rx.State):
     dialog: str = ""
     dlg: Dict[str, Any] = {}
     dlg_error: str = ""
+    # The book on screen (``/book/<id>``), who this tab is on it, and whether the book is gone.
+    book: str = ""
+    me: Dict[str, str] = {}
+    book_gone: bool = False
+    # Other books, for the File backstage.
+    recent: List[Dict[str, str]] = []
+    _peer: str = ""
+    _guest: str = ""
 
     # ------------------------------------------------------------ computed
 
@@ -93,19 +146,9 @@ class GridState(rx.State):
         return "    ".join(parts)
 
     @rx.var
-    def doc_title(self) -> str:
-        ui = self.ui or {}
-        name = ui.get("docName", "Book1")
-        return name + (" •" if ui.get("dirty") else "")
-
-    @rx.var
     def circular_ref(self) -> str:
         c = (self.ui or {}).get("circular") or []
         return c[0] if c else ""
-
-    @rx.var
-    def open_docs(self) -> List[Dict[str, Any]]:
-        return [{"name": d.get("name", ""), "index": i} for i, d in enumerate((self.ui or {}).get("docs") or [])]
 
     @rx.var
     def zoom(self) -> int:
@@ -167,29 +210,99 @@ class GridState(rx.State):
     def _entry(self) -> sessions.Entry:
         return sessions.get(self.router.session.client_token)
 
-    def _refresh(self, entry: sessions.Entry, seq: Optional[int] = None, extra_ui: Optional[Dict[str, Any]] = None) -> None:
+    def _bound(self):
+        """This tab's ``(entry, book, view)``, joining the book again when the server lost it (a
+        restart, a book closed while idle); ``(entry, None, None)`` without a book."""
+        entry = self._entry()
+        if not self.book or not self.me:
+            return entry, None, None
+        book = STORE.get(self.book)
+        if book is None:
+            try:
+                if not STORE.exists(self.book):
+                    raise EngineError("deleted")
+                book = STORE.open(self.book)
+            except EngineError:
+                self.book_gone = True
+                return entry, None, None
+        view = entry.view
+        if entry.book_id != book.key or view is None or view.session is not entry.session:
+            view = self._join(entry, book)
+        return entry, book, view
+
+    def _join(self, entry: sessions.Entry, book: Book) -> View:
+        """Puts this tab on ``book`` (leaving the book it was on)."""
+        me = self.me
+        if entry.view is not None and entry.book_id and entry.book_id != book.key:
+            old = STORE.get(entry.book_id)
+            if old is not None:
+                old.leave(entry.view.key)
+        # A tab that reloaded (and so left) comes back with its own view and undo history.
+        before = entry.view if entry.book_id == book.key else None
+        view = book.join(me["peer"], entry.session, me["name"], view=before)
+        view.info.update(user=me["user"], email=me.get("email", ""), avatar=me.get("avatar", ""))
+        if not view.info.get("color"):
+            view.info["color"] = book.color_for(me["user"])
+        entry.book_id, entry.view = book.key, view
+        entry.sig, entry.sheet = (), None
+        if me.get("color") != view.info["color"]:
+            self.me = {**me, "color": view.info["color"]}
+        return view
+
+    async def _identify(self) -> None:
+        """Who this tab is: the signed-in account (reflex_ddns_auth), else a guest."""
+        email = name = avatar = ""
+        if AuthState is not None:
+            try:
+                auth = await self.get_state(AuthState)
+                if not auth._auth_loaded:
+                    await auth.load_auth()
+                if auth.is_logged_in:
+                    email, name, avatar = auth.user_email, auth.user_name or auth.user_email, auth.user_avatar
+            except Exception:
+                pass
+        if not self._peer:
+            self._peer = secrets.token_hex(6)
+        if email:
+            user = email
+        else:
+            if not self._guest:
+                self._guest = str(random.randint(1000, 9999))
+            user, name = f"guest-{self._guest}", f"Guest {self._guest}"
+        me = {"peer": self._peer, "user": user, "name": name, "email": email, "avatar": avatar, "color": (self.me or {}).get("color", "")}
+        if me != self.me:
+            self.me = me
+
+    def _refresh(self, entry: sessions.Entry, book: Book, view: View, seq: Optional[int] = None, extra_ui: Optional[Dict[str, Any]] = None, passive: bool = False) -> None:
+        """Recomputes what this tab draws (inside ``book.act(view)``)."""
         s = entry.session
         d = s.doc()
         wb = d.wb
         si = wb.active_sheet
-        if entry.sheet != si or entry.sig[:1] != (d.uid,):
-            # Another sheet or workbook: start at its top-left.
-            if entry.sheet != -1:
+        sh = wb.sheet(si)
+        zoom, formulas = view.zoom_of(sh), view.formulas_of(sh)
+        if entry.sheet != sh.name:
+            # Another sheet: start at its top-left (not when someone renamed this one).
+            renamed = entry.sheet_index == si and entry.sheet is not None and wb.sheet_index(entry.sheet) is None
+            if entry.sheet is not None and not renamed:
                 self.window = [0, 0, 80, 30]
-            entry.sheet = si
+            entry.sheet = sh.name
+        entry.sheet_index = si
         w = self.window or [0, 0, 80, 30]
-        vp = viewport(wb, si, RangeRef(int(w[0]), int(w[1]), int(w[2]), int(w[3])))
+        vp = viewport(wb, si, RangeRef(int(w[0]), int(w[1]), int(w[2]), int(w[3])), show_formulas=formulas)
         if vp != self.data:
             self.data = vp
-        sig = (d.uid, id(wb), si)
+        sig = (d.uid, id(wb), si, zoom, formulas)
         if sig != entry.sig:
             entry.sig = sig
-            geo = geometry(wb.sheet(si))
+            geo = geometry(sh)
+            geo["zoom"] = zoom
+            geo["formulas"] = formulas
             if geo != self.geometry:
                 self.geometry = geo
             ob = objects(wb, si, with_images=False)
             for im in ob["images"]:
-                img = next((x for x in wb.sheet(si).images if x.id == im["id"]), None)
+                img = next((x for x in sh.images if x.id == im["id"]), None)
                 if img is None:
                     continue
                 k = (d.uid, img.id, len(img.data))
@@ -200,11 +313,25 @@ class GridState(rx.State):
                 im["src"] = src
             if ob != self.objects:
                 self.objects = ob
-            names = sorted({n.name for n in wb.names if not n.hidden} | {t.name for sh in wb.sheets for t in sh.tables}, key=str.lower)
+            names = sorted({n.name for n in wb.names if not n.hidden} | {t.name for x in wb.sheets for t in x.tables}, key=str.lower)
             if names != self.names:
                 self.names = names
         ui = ui_state(s)
-        ui["seq"] = seq if seq is not None else (self.ui or {}).get("seq", 0)
+        ui.update(
+            seq=seq if seq is not None else (self.ui or {}).get("seq", 0),
+            # A redraw this tab didn't ask for by moving: it keeps its own selection.
+            passive=passive,
+            docName=d.name,
+            dirty=book.dirty,
+            docs=[],
+            activeDoc=0,
+            canUndo=bool(view.undo),
+            canRedo=bool(view.redo),
+            undoLabel=view.undo[-1].label if view.undo else None,
+            redoLabel=view.redo[-1].label if view.redo else None,
+            bookRev=book.rev,
+            sheetName=sh.name,
+        )
         if extra_ui:
             ui.update(extra_ui)
         if ui != self.ui:
@@ -212,6 +339,34 @@ class GridState(rx.State):
         if self.selected_object >= 0 and not any(o["id"] == self.selected_object for o in (self.objects.get("charts", []) + self.objects.get("images", []))):
             self.selected_object = -1
             self.selected_kind = ""
+
+    def _publish(self, room: BookRoom, book: Book) -> None:
+        """Shows the book as it is now to everyone on it: revision, title, who is where, recent
+        changes, saving and the call. Only what changed is assigned, so only that is sent."""
+        with book.lock:
+            rev, title = book.rev, book.meta.title
+            peers = [_peer_json(v) for v in book.views.values()]
+            who = {v.key: (v.name, v.info.get("color", "#5F6368")) for v in book.views.values()}
+            changes = [
+                {"rev": c.rev, "author": c.author, "name": who.get(c.author, ("", "#5F6368"))[0], "color": who.get(c.author, ("", "#5F6368"))[1], "areas": [[n, list(r)] for n, r in c.areas]}
+                for c in book.changes[-12:]
+            ]
+            saved, error = not book.dirty, book.save_error
+        if room.rev != rev:
+            room.rev = rev
+        if room.title != title:
+            room.title = title
+        if list(room.peers) != peers:
+            room.peers = peers
+        if changes and (not room.changes or room.changes[-1].get("rev") != changes[-1]["rev"]):
+            room.changes = changes
+        if room.saved != saved:
+            room.saved = saved
+        if room.save_error != error:
+            room.save_error = error
+        if room.deleted:
+            room.deleted = False
+        call.sync_room(room, book.key)
 
     def _run(self, s: Session, cid: str, params: Optional[Dict[str, Any]] = None):
         return s.execute(cid, params or {})
@@ -222,92 +377,147 @@ class GridState(rx.State):
     # ------------------------------------------------------------ lifecycle
 
     @rx.event
-    def on_load(self):
-        entry = self._entry()
+    async def on_load(self):
+        """Opens the book in the URL (a new, blank one when the address is new) and links this
+        tab to its room."""
+        path = str(self.router.url.path or "")
+        book_id = path.rstrip("/").rsplit("/", 1)[-1] if path else ""
+        if not valid_id(book_id):
+            return rx.redirect("/")
+        await self._identify()
         if not self.functions:
             self.functions = FUNCTIONS
-        entry.sig = ()
-        entry.sheet = -1
-        self._refresh(entry)
+        try:
+            book = STORE.open(book_id, creator=self.me)
+        except EngineError as ex:
+            self.book, self.book_gone = "", True
+            return rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+        entry = self._entry()
+        if self.book != book_id:
+            self.window = [0, 0, 80, 30]
+            self.tab, self.backstage = "Home", False
+            self.dialog, self.dlg, self.dlg_error = "", {}, ""
+            self.selected_object, self.selected_kind = -1, ""
+        self.book, self.book_gone = book_id, False
+        view = self._join(entry, book)
+        room = await self.get_state(BookRoom)
+        room = await room._link_to(room_token(book_id))
+        with book.act(view):
+            entry.sig, entry.sheet = (), None
+            self._refresh(entry, book, view)
+        self._publish(room, book)
         self._focus()
+
+    @rx.event
+    async def leave_book(self):
+        """Leaves the book on screen (going back to the workbook list): the others stop seeing
+        this tab, and it stops hearing about the book."""
+        entry = self._entry()
+        book = STORE.get(entry.book_id) if entry.book_id else None
+        if book is not None and entry.view is not None:
+            book.leave(entry.view.key)
+        entry.book_id, entry.view = "", None
+        if not self.book:
+            return None
+        self.book = ""
+        room = await self.get_state(BookRoom)
+        if book is not None:
+            self._publish(room, book)
+        try:
+            return await room._unlink()
+        except Exception:  # not linked (e.g. after a server restart)
+            return None
 
     # ------------------------------------------------------------ grid events
 
     @rx.event
-    def on_event(self, e: Dict[str, Any]):
-        entry = self._entry()
-        s = entry.session
+    async def on_event(self, e: Dict[str, Any]):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
         t = e.get("type")
         seq = int(e.get("seq") or 0)
         out = None
         extra: Dict[str, Any] = {}
-        try:
-            if t == "viewport":
-                w = e.get("window") or [0, 0, 80, 30]
-                self.window = [max(0, int(w[0])), max(0, int(w[1])), min(MAX_ROWS - 1, int(w[2])), min(MAX_COLS - 1, int(w[3]))]
-            elif t == "select":
-                sel = e.get("sel") or {}
-                ranges = sel.get("ranges") or []
-                if ranges:
-                    act = sel.get("active") or ranges[-1][:2]
-                    anc = sel.get("anchor") or act
-                    self._run(s, "selection.set", {"range": ",".join(_rng(g) for g in ranges[:256]), "active": a1(int(act[0]), int(act[1])), "anchor": a1(int(anc[0]), int(anc[1]))})
-            elif t == "commit":
-                out = self._commit(s, e, seq, extra)
-            elif t == "command":
-                out = self._command(entry, str(e.get("id")), e.get("params") or {})
-            elif t == "copy":
-                r = self._run(s, "edit.cut" if e.get("cut") else "edit.copy", {"text": e.get("text")} if isinstance(e.get("text"), str) else {})
-                if not isinstance(e.get("text"), str):
-                    extra["clipboardText"] = {"seq": seq, "text": r["text"]}
-            elif t == "paste":
-                text = e.get("text")
-                self._run(s, "edit.paste", {"text": text} if isinstance(text, str) else {})
-            elif t == "resize":
-                axis = e.get("axis")
-                idx = [int(i) for i in (e.get("indices") or [])][:16384]
-                if idx:
-                    spans = _spans(idx, axis)
-                    if e.get("autofit"):
-                        self._run(s, "home.autofitColumnWidth" if axis == "cols" else "home.autofitRowHeight", {axis: spans})
-                    else:
-                        size = float(e.get("size") or 0)
-                        if axis == "cols":
-                            self._run(s, "home.columnWidth", {"cols": spans, "width": size})
+        with book.act(view) as s:
+            try:
+                if t == "viewport":
+                    w = e.get("window") or [0, 0, 80, 30]
+                    self.window = [max(0, int(w[0])), max(0, int(w[1])), min(MAX_ROWS - 1, int(w[2])), min(MAX_COLS - 1, int(w[3]))]
+                elif t == "presence":
+                    ed = e.get("editing")
+                    view.info["editing"] = [int(ed[0]), int(ed[1])] if isinstance(ed, (list, tuple)) and len(ed) == 2 else None
+                elif t in ("sync", "ping"):
+                    pass
+                elif t == "select":
+                    sel = e.get("sel") or {}
+                    ranges = sel.get("ranges") or []
+                    if ranges:
+                        act = sel.get("active") or ranges[-1][:2]
+                        anc = sel.get("anchor") or act
+                        self._run(s, "selection.set", {"range": ",".join(_rng(g) for g in ranges[:256]), "active": a1(int(act[0]), int(act[1])), "anchor": a1(int(anc[0]), int(anc[1]))})
+                elif t == "commit":
+                    view.info["editing"] = None
+                    out = self._commit(s, e, seq, extra)
+                elif t == "command":
+                    out = self._command(entry, str(e.get("id")), e.get("params") or {})
+                elif t == "copy":
+                    r = self._run(s, "edit.cut" if e.get("cut") else "edit.copy", {"text": e.get("text")} if isinstance(e.get("text"), str) else {})
+                    if not isinstance(e.get("text"), str):
+                        extra["clipboardText"] = {"seq": seq, "text": r["text"]}
+                elif t == "paste":
+                    text = e.get("text")
+                    self._run(s, "edit.paste", {"text": text} if isinstance(text, str) else {})
+                elif t == "resize":
+                    axis = e.get("axis")
+                    idx = [int(i) for i in (e.get("indices") or [])][:16384]
+                    if idx:
+                        spans = _spans(idx, axis)
+                        if e.get("autofit"):
+                            self._run(s, "home.autofitColumnWidth" if axis == "cols" else "home.autofitRowHeight", {axis: spans})
                         else:
-                            self._run(s, "home.rowHeight", {"rows": spans, "height": size})
-            elif t == "fill":
-                self._run(s, "edit.autoFill", {"source": e["source"], "target": e["target"], "mode": e.get("mode", "series")})
-            elif t == "move":
-                self._run(s, "edit.moveCells", {"from": e["from"], "to": e["to"], "copy": bool(e.get("copy"))})
-            elif t == "filter":
-                self._open_filter(s, int(e["r"]), int(e["c"]), e.get("table"))
-            elif t == "link":
-                r = self._run(s, "hyperlink.follow", {"cell": a1(int(e["r"]), int(e["c"]))})
-                if r and r.get("url"):
-                    out = rx.call_script(f"window.open({_js_str(r['url'])}, '_blank', 'noopener')")
-            elif t == "object":
-                self._run(s, "object.move", {k: e[k] for k in ("id", "x", "y", "width", "height") if k in e})
-            elif t == "objectSelect":
-                oid = e.get("id")
-                self.selected_object = int(oid) if oid is not None else -1
-                self.selected_kind = str(e.get("kind") or "")
-                if self.selected_kind == "chart":
-                    self.tab = "Chart Design"
-                elif self.tab == "Chart Design":
-                    self.tab = "Home"
-            elif t == "dialog":
-                self._open_dialog(entry, str(e.get("name")), e.get("params") or {})
-            elif t == "namebox":
-                out = self._namebox(s, str(e.get("text", "")))
-        except EngineError as ex:
-            msg = str(ex).split("\n", 1)[0]
-            extra["lastError"] = {"seq": seq, "message": msg, "kind": t, **({"r": e.get("r"), "c": e.get("c"), "text": e.get("text")} if t == "commit" else {})}
-            out = rx.toast.error(msg, position="bottom-center")
-        except Exception as ex:  # never let a UI event kill the session
-            extra["lastError"] = {"seq": seq, "message": str(ex), "kind": t}
-            out = rx.toast.error(f"Something went wrong: {ex}", position="bottom-center")
-        self._refresh(entry, seq, extra)
+                            size = float(e.get("size") or 0)
+                            if axis == "cols":
+                                self._run(s, "home.columnWidth", {"cols": spans, "width": size})
+                            else:
+                                self._run(s, "home.rowHeight", {"rows": spans, "height": size})
+                elif t == "fill":
+                    self._run(s, "edit.autoFill", {"source": e["source"], "target": e["target"], "mode": e.get("mode", "series")})
+                elif t == "move":
+                    self._run(s, "edit.moveCells", {"from": e["from"], "to": e["to"], "copy": bool(e.get("copy"))})
+                elif t == "filter":
+                    self._open_filter(s, int(e["r"]), int(e["c"]), e.get("table"))
+                elif t == "link":
+                    r = self._run(s, "hyperlink.follow", {"cell": a1(int(e["r"]), int(e["c"]))})
+                    if r and r.get("url"):
+                        out = rx.call_script(f"window.open({_js_str(r['url'])}, '_blank', 'noopener')")
+                elif t == "object":
+                    self._run(s, "object.move", {k: e[k] for k in ("id", "x", "y", "width", "height") if k in e})
+                elif t == "objectSelect":
+                    oid = e.get("id")
+                    self.selected_object = int(oid) if oid is not None else -1
+                    self.selected_kind = str(e.get("kind") or "")
+                    if self.selected_kind == "chart":
+                        self.tab = "Chart Design"
+                    elif self.tab == "Chart Design":
+                        self.tab = "Home"
+                elif t == "dialog":
+                    self._open_dialog(entry, str(e.get("name")), e.get("params") or {})
+                elif t == "namebox":
+                    out = self._namebox(s, str(e.get("text", "")))
+            except EngineError as ex:
+                msg = str(ex).split("\n", 1)[0]
+                extra["lastError"] = {"seq": seq, "message": msg, "kind": t, **({"r": e.get("r"), "c": e.get("c"), "text": e.get("text")} if t == "commit" else {})}
+                out = rx.toast.error(msg, position="bottom-center")
+            except Exception as ex:  # never let a UI event kill the session
+                extra["lastError"] = {"seq": seq, "message": str(ex), "kind": t}
+                out = rx.toast.error(f"Something went wrong: {ex}", position="bottom-center")
+            self._refresh(entry, book, view, seq, extra, passive=t in _PASSIVE)
+        if t == "ping":
+            book.prune(PEER_IDLE)
+            STORE.close_idle()
+        self._publish(room, book)
         return out
 
     def _commit(self, s: Session, e: Dict[str, Any], seq: int, extra: Dict[str, Any]):
@@ -353,9 +563,9 @@ class GridState(rx.State):
         return None
 
     def _download(self, s: Session, fmt: str):
-        r = self._run(s, "file.saveBytes", {"format": fmt})
-        data = base64.b64decode(r["data"])
-        return rx.download(data=data, filename=r["name"], mime_type=r["mime"])
+        """A copy of the workbook as a file (the shared book itself is saved on the server)."""
+        data = encode(s, fmt)
+        return rx.download(data=data, filename=f"{_file_stem(s.doc().name)}.{fmt}", mime_type=MIMES[fmt])
 
     def _print(self, s: Session):
         r = self._run(s, "file.exportHtml", {"print": True})
@@ -387,14 +597,19 @@ class GridState(rx.State):
     # ------------------------------------------------------------ ribbon actions
 
     @rx.event
-    def cmd(self, cid: str, params: Dict[str, Any] = {}):
-        entry = self._entry()
+    async def cmd(self, cid: str, params: Dict[str, Any] = {}):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
         out = None
-        try:
-            out = self._command(entry, cid, dict(params or {}))
-        except EngineError as ex:
-            out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
-        self._refresh(entry)
+        with book.act(view):
+            try:
+                out = self._command(entry, cid, dict(params or {}))
+            except EngineError as ex:
+                out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+            self._refresh(entry, book, view)
+        self._publish(room, book)
         self._focus()
         return out
 
@@ -404,6 +619,11 @@ class GridState(rx.State):
         self.backstage = tab == "File"
         if tab == "File":
             self.tab = "Home"
+            self.recent = [
+                {"id": m.id, "title": m.title, "when": time.strftime("%Y-%m-%d %H:%M", time.localtime(m.updated_at)) if m.updated_at else ""}
+                for m in STORE.list()
+                if m.id != self.book
+            ][:8]
 
     @rx.event
     def close_backstage(self):
@@ -411,14 +631,18 @@ class GridState(rx.State):
         self._focus()
 
     @rx.event
-    def zoom_to(self, z):
-        entry = self._entry()
-        try:
-            self._run(entry.session, "view.zoom", {"percent": int(float(z if not isinstance(z, list) else z[0]))})
-        except EngineError:
-            pass
-        entry.sig = ()
-        self._refresh(entry)
+    async def zoom_to(self, z):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        with book.act(view) as s:
+            try:
+                self._run(s, "view.zoom", {"percent": int(float(z if not isinstance(z, list) else z[0]))})
+            except (EngineError, TypeError, ValueError):
+                pass
+            self._refresh(entry, book, view)
+        self._publish(room, book)
 
     @rx.event
     def zoom_step(self, delta: int):
@@ -426,135 +650,191 @@ class GridState(rx.State):
         return GridState.zoom_to(z)
 
     @rx.event
-    def activate_sheet(self, index: int):
-        entry = self._entry()
-        try:
-            self._run(entry.session, "sheet.activate", {"sheet": int(index)})
-        except EngineError as ex:
-            return rx.toast.error(str(ex))
-        self._refresh(entry)
+    async def activate_sheet(self, index: int):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        out = None
+        with book.act(view) as s:
+            try:
+                self._run(s, "sheet.activate", {"sheet": int(index)})
+            except EngineError as ex:
+                out = rx.toast.error(str(ex))
+            self._refresh(entry, book, view)
+        self._publish(room, book)
         self._focus()
-
-    @rx.event
-    def new_sheet(self):
-        entry = self._entry()
-        s = entry.session
-        try:
-            self._run(s, "home.insertSheet", {"index": len(s.doc().wb.sheets)})
-        except EngineError as ex:
-            return rx.toast.error(str(ex))
-        self._refresh(entry)
-        self._focus()
-
-    @rx.event
-    def new_workbook(self, sample: str = ""):
-        entry = self._entry()
-        s = entry.session
-        if sample and sample in SAMPLES:
-            new_sample(s, sample)
-        else:
-            self._run(s, "file.new", {})
-        self.backstage = False
-        self.window = [0, 0, 80, 30]
-        entry.sig = ()
-        self._refresh(entry)
-        self._focus()
-
-    @rx.event
-    def switch_window(self, index: int):
-        entry = self._entry()
-        self._run(entry.session, "window.activate", {"index": int(index)})
-        self.backstage = False
-        self.window = [0, 0, 80, 30]
-        entry.sig = ()
-        self._refresh(entry)
-        self._focus()
-
-    @rx.event
-    def close_workbook(self):
-        entry = self._entry()
-        self._run(entry.session, "file.close", {})
-        self.backstage = False
-        entry.sig = ()
-        self._refresh(entry)
-        self._focus()
-
-    @rx.event
-    def save_as(self, fmt: str):
-        entry = self._entry()
-        self.backstage = False
-        try:
-            out = self._download(entry.session, fmt)
-        except EngineError as ex:
-            return rx.toast.error(str(ex))
-        self._refresh(entry)
         return out
 
     @rx.event
-    def print_sheet(self):
-        entry = self._entry()
-        self.backstage = False
-        try:
-            return self._print(entry.session)
-        except EngineError as ex:
-            return rx.toast.error(str(ex))
+    async def new_sheet(self):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        out = None
+        with book.act(view) as s:
+            try:
+                self._run(s, "home.insertSheet", {"index": len(s.doc().wb.sheets)})
+            except EngineError as ex:
+                out = rx.toast.error(str(ex))
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        self._focus()
+        return out
 
     @rx.event
-    def save_html(self):
-        entry = self._entry()
-        self.backstage = False
+    def new_workbook(self, sample: str = ""):
+        """A new shared workbook (blank or a sample), opened in this tab."""
         try:
-            r = self._run(entry.session, "file.exportHtml", {"print": False})
+            meta = STORE.create_sample(sample, self.me) if sample and sample in SAMPLES else STORE.create_blank(self.me)
         except EngineError as ex:
-            return rx.toast.error(str(ex))
+            return rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+        self.backstage = False
+        return rx.redirect(f"/book/{meta.id}")
+
+    @rx.event
+    def close_workbook(self):
+        self.backstage = False
+        return rx.redirect("/")
+
+    async def _rename(self, title: str):
+        if not self.book:
+            return None
+        room = await self.get_state(BookRoom)
+        meta = STORE.meta(self.book)
+        if meta is not None and clean_title(title) == meta.title:
+            return None
+        try:
+            STORE.rename(self.book, title)
+        except EngineError as ex:
+            return rx.toast.error(str(ex), position="bottom-center")
+        book = STORE.get(self.book)
+        if book is not None:
+            self._publish(room, book)
+        return None
+
+    @rx.event
+    async def rename_book(self, title: str):
+        """Renames the workbook for everyone on it (and in the workbook list)."""
+        return await self._rename(title)
+
+    @rx.event
+    async def rename_from_form(self, form: Dict[str, Any]):
+        """Enter in the title: rename, and give the keyboard back to the grid."""
+        out = await self._rename(str(form.get("title", "")))
+        self._focus()
+        blur = rx.call_script("document.activeElement && document.activeElement.blur()")
+        return [out, blur] if out is not None else blur
+
+    @rx.event
+    async def follow(self, peer: str):
+        """Jumps to where someone on the book is (their sheet and selection)."""
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        target = book.views.get(peer)
+        if target is None or target is view:
+            return None
+        with book.act(view) as s:
+            try:
+                self._run(s, "sheet.activate", {"sheet": target.sheet})
+                sel = target.selection
+                self._run(s, "selection.set", {"range": sel.a1(), "active": a1(*sel.active)})
+            except EngineError:
+                pass
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        self._focus()
+
+    @rx.event
+    async def save_as(self, fmt: str):
+        entry, book, view = self._bound()
+        self.backstage = False
+        if book is None:
+            return None
+        with book.act(view) as s:
+            try:
+                return self._download(s, fmt)
+            except EngineError as ex:
+                return rx.toast.error(str(ex))
+
+    @rx.event
+    async def print_sheet(self):
+        entry, book, view = self._bound()
+        self.backstage = False
+        if book is None:
+            return None
+        with book.act(view) as s:
+            try:
+                return self._print(s)
+            except EngineError as ex:
+                return rx.toast.error(str(ex))
+
+    @rx.event
+    async def save_html(self):
+        entry, book, view = self._bound()
+        self.backstage = False
+        if book is None:
+            return None
+        with book.act(view) as s:
+            try:
+                r = self._run(s, "file.exportHtml", {"print": False})
+            except EngineError as ex:
+                return rx.toast.error(str(ex))
         return rx.download(data=r["html"].encode("utf-8"), filename=r["name"], mime_type="text/html")
 
     @rx.event
     async def open_upload(self, files: List[rx.UploadFile]):
-        entry = self._entry()
-        s = entry.session
-        out = None
+        """Opens an uploaded file as a new shared workbook."""
         for f in files[:1]:
             data = await f.read()
             name = os.path.basename(f.name or f.filename or "Book.xlsx")
             try:
-                r = self._run(s, "file.open", {"data": data, "name": name})
-                w = r.get("warnings") or []
-                out = rx.toast.success(f"Opened {name}" + (f" ({len(w)} warnings)" if w else ""), position="bottom-center")
+                meta, warnings = STORE.create_from_file(data, name, self.me)
             except EngineError as ex:
-                out = rx.toast.error(str(ex), position="bottom-center")
-        self.backstage = False
-        self.dialog = ""
-        self.window = [0, 0, 80, 30]
-        entry.sig = ()
-        self._refresh(entry)
-        self._focus()
-        return out
+                return rx.toast.error(str(ex), position="bottom-center")
+            self.backstage = False
+            self.dialog = ""
+            return [
+                rx.redirect(f"/book/{meta.id}"),
+                rx.toast.success(f"Opened {name}" + (f" ({len(warnings)} warnings)" if warnings else ""), position="bottom-center"),
+            ]
+        return None
 
     @rx.event
     async def picture_upload(self, files: List[rx.UploadFile]):
-        entry = self._entry()
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
         out = None
-        for f in files[:1]:
-            data = await f.read()
-            try:
-                self._run(entry.session, "insert.picture", {"data": data, "name": f.name or f.filename or "picture"})
-            except EngineError as ex:
-                out = rx.toast.error(str(ex), position="bottom-center")
-        self.dialog = ""
-        self._refresh(entry)
+        pictures = [(await f.read(), f.name or f.filename or "picture") for f in files[:1]]
+        with book.act(view) as s:
+            for data, name in pictures:
+                try:
+                    self._run(s, "insert.picture", {"data": data, "name": name})
+                except EngineError as ex:
+                    out = rx.toast.error(str(ex), position="bottom-center")
+            self.dialog = ""
+            self._refresh(entry, book, view)
+        self._publish(room, book)
         self._focus()
         return out
 
     # ------------------------------------------------------------ dialogs
 
     @rx.event
-    def open_dialog(self, name: str, params: Dict[str, Any] = {}):
-        entry = self._entry()
-        try:
-            self._open_dialog(entry, name, dict(params or {}))
-        except EngineError as ex:
-            return rx.toast.error(str(ex).split("\n", 1)[0])
+    async def open_dialog(self, name: str, params: Dict[str, Any] = {}):
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        with book.act(view):
+            try:
+                self._open_dialog(entry, name, dict(params or {}))
+            except EngineError as ex:
+                return rx.toast.error(str(ex).split("\n", 1)[0])
 
     @rx.event
     def dialog_open_change(self, is_open: bool):
@@ -807,26 +1087,30 @@ class GridState(rx.State):
         self.dialog = "filter"
 
     @rx.event
-    def dialog_ok(self, action: str = "ok"):
-        entry = self._entry()
-        s = entry.session
+    async def dialog_ok(self, action: str = "ok"):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
         name = self.dialog
         d = dict(self.dlg)
         out = None
-        keep_open = False
-        try:
-            out, keep_open = self._dialog_action(s, name, action, d)
-        except EngineError as ex:
-            self.dlg_error = str(ex).split("\n", 1)[0]
-            self._refresh(entry)
-            return None
-        if not keep_open:
-            self.dialog = ""
-            self.dlg = {}
-            self.dlg_error = ""
-            self._focus()
-        self._refresh(entry)
-        return out
+        failed = False
+        with book.act(view) as s:
+            try:
+                out, keep_open = self._dialog_action(s, name, action, d)
+            except EngineError as ex:
+                self.dlg_error = str(ex).split("\n", 1)[0]
+                failed = True
+            else:
+                if not keep_open:
+                    self.dialog = ""
+                    self.dlg = {}
+                    self.dlg_error = ""
+                    self._focus()
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        return None if failed else out
 
     def _dialog_action(self, s: Session, name: str, action: str, d: Dict[str, Any]):
         run = lambda cid, **p: s.execute(cid, p)
@@ -1131,53 +1415,91 @@ class GridState(rx.State):
         self.edit_request = {"seq": (self.edit_request or {}).get("seq", 0) + 1, "text": text}
 
     @rx.event
-    def audit(self, what: str):
-        entry = self._entry()
-        s = entry.session
-        try:
-            if what == "precedents":
-                r = s.execute("formulas.tracePrecedents", {})
-                items = [f"{p['sheet']}!{p['range']}" for p in r["precedents"]]
-                return rx.toast.info("Precedents: " + (", ".join(items) if items else "none"), position="bottom-center")
-            if what == "dependents":
-                r = s.execute("formulas.traceDependents", {})
-                items = [f"{p['sheet']}!{p['cell']}" for p in r["dependents"]]
-                return rx.toast.info("Dependents: " + (", ".join(items[:30]) if items else "none"), position="bottom-center")
-            if what == "errors":
-                r = s.execute("formulas.errorChecking", {})
-                items = [f"{e['sheet']}!{e['cell']} {e['error']}" for e in r["errors"]]
-                circ = r.get("circular") or []
-                msg = ("Errors: " + ", ".join(items[:20])) if items else "No formula errors were found."
-                if circ:
-                    msg += " Circular references: " + ", ".join(circ)
-                return rx.toast.info(msg, position="bottom-center")
-            if what == "invalid":
-                r = s.execute("data.circleInvalid", {})
-                items = r["invalid"]
-                return rx.toast.info(("Invalid data in: " + ", ".join(items[:40])) if items else "All data is valid.", position="bottom-center")
-        except EngineError as ex:
-            return rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+    async def audit(self, what: str):
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        with book.act(view) as s:
+            try:
+                if what == "precedents":
+                    r = s.execute("formulas.tracePrecedents", {})
+                    items = [f"{p['sheet']}!{p['range']}" for p in r["precedents"]]
+                    return rx.toast.info("Precedents: " + (", ".join(items) if items else "none"), position="bottom-center")
+                if what == "dependents":
+                    r = s.execute("formulas.traceDependents", {})
+                    items = [f"{p['sheet']}!{p['cell']}" for p in r["dependents"]]
+                    return rx.toast.info("Dependents: " + (", ".join(items[:30]) if items else "none"), position="bottom-center")
+                if what == "errors":
+                    r = s.execute("formulas.errorChecking", {})
+                    items = [f"{e['sheet']}!{e['cell']} {e['error']}" for e in r["errors"]]
+                    circ = r.get("circular") or []
+                    msg = ("Errors: " + ", ".join(items[:20])) if items else "No formula errors were found."
+                    if circ:
+                        msg += " Circular references: " + ", ".join(circ)
+                    return rx.toast.info(msg, position="bottom-center")
+                if what == "invalid":
+                    r = s.execute("data.circleInvalid", {})
+                    items = r["invalid"]
+                    return rx.toast.info(("Invalid data in: " + ", ".join(items[:40])) if items else "All data is valid.", position="bottom-center")
+            except EngineError as ex:
+                return rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
 
     # ------------------------------------------------------------ chart ribbon
 
     @rx.event
-    def chart_cmd(self, field: str, value: Any):
-        entry = self._entry()
+    async def chart_cmd(self, field: str, value: Any):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
         oid = self.selected_object
         if oid < 0:
             return rx.toast.error("Select a chart first.")
+        out = None
+        with book.act(view) as s:
+            try:
+                if field == "switch":
+                    self._run(s, "chart.switchRowColumn", {"id": oid})
+                elif field == "delete":
+                    self._run(s, "object.delete", {"id": oid})
+                    self.selected_object = -1
+                    self.tab = "Home"
+                else:
+                    self._run(s, "chart.update", {"id": oid, field: value})
+            except EngineError as ex:
+                out = rx.toast.error(str(ex).split("\n", 1)[0])
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        return out
+
+
+async def push(book_id: str) -> None:
+    """Shows a book as it is now to everyone on it, from outside their own events (a tab that
+    closed, a deletion, a save that finished): one of them publishes it to the room, and the
+    room — a SharedState — carries it to all the others."""
+    from reflex.state import _substate_key
+    from reflex.utils.prerequisites import get_app
+
+    app = get_app().app
+    for token in sessions.tokens_on(book_id):
         try:
-            if field == "switch":
-                self._run(entry.session, "chart.switchRowColumn", {"id": oid})
-            elif field == "delete":
-                self._run(entry.session, "object.delete", {"id": oid})
-                self.selected_object = -1
-                self.tab = "Home"
-            else:
-                self._run(entry.session, "chart.update", {"id": oid, field: value})
-        except EngineError as ex:
-            return rx.toast.error(str(ex).split("\n", 1)[0])
-        self._refresh(entry)
+            async with app.modify_state(_substate_key(token, GridState)) as root:
+                grid = await root.get_state(GridState)
+                if grid.book != book_id:
+                    continue
+                room = await root.get_state(BookRoom)
+                book = STORE.get(book_id)
+                if book is None:
+                    if not room.deleted:
+                        room.deleted = True
+                else:
+                    grid._publish(room, book)
+            return
+        except Exception:  # that tab went away meanwhile: try the next one
+            continue
+
+
+STORE.on_saved = push
 
 
 def _spans(idx: List[int], axis: str) -> str:

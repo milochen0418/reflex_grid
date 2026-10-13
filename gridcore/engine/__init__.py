@@ -1,5 +1,6 @@
 """The engine: documents, every user-visible action as a command (``Session.execute``),
-undo/redo, the clipboard, and what the grid draws (:mod:`.viewport`)."""
+undo/redo, the clipboard, what the grid draws (:mod:`.viewport`) and several people editing
+one workbook (:mod:`.collab`)."""
 
 from . import (  # noqa: F401  (imported for command registration)
     cmd_cf,
@@ -14,8 +15,9 @@ from . import (  # noqa: F401  (imported for command registration)
     cmd_whatif,
 )
 from .cmd_file import open_bytes
+from .collab import CollabSession, SharedBook, View
 from .selection import Selection
 from .session import COMMANDS, DocState, EngineError, Session
 from .viewport import geometry, objects, ui_state, viewport
 
-__all__ = ["COMMANDS", "DocState", "EngineError", "Selection", "Session", "geometry", "objects", "open_bytes", "ui_state", "viewport"]
+__all__ = ["COMMANDS", "CollabSession", "DocState", "EngineError", "Selection", "Session", "SharedBook", "View", "geometry", "objects", "open_bytes", "ui_state", "viewport"]

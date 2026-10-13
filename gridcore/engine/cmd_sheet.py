@@ -225,6 +225,8 @@ def insert_sheet(s, p):
         wb.active_sheet = index
         ctx.sel = Selection.at((0, 0))
         ctx.structural = True
+        # Sheets after it moved along (appending one moves none).
+        ctx.moved = index < len(wb.sheets) - 1
 
     edit(s, f)
     d.sheet_selections = {}
@@ -277,6 +279,7 @@ def delete_sheet(s, p):
         wb.active_sheet = a
         ctx.sel = Selection.at(wb.sheets[a].view_active)
         ctx.structural = True
+        ctx.moved = True
 
     edit(s, f)
     d.sheet_selections = {}
@@ -381,6 +384,7 @@ def move_sheet(s, p):
         _remap_scopes(wb, mapping)
         wb.active_sheet = to
         ctx.structural = True
+        ctx.moved = True
 
     edit(s, f)
     d.sheet_selections = {}
@@ -448,6 +452,7 @@ def _copy_sheet(s: Session, si: int, to: int, name: Optional[str]):
         wb.active_sheet = to
         ctx.sel = Selection.at(sh.view_active)
         ctx.structural = True
+        ctx.moved = to < len(wb.sheets) - 1
 
     edit(s, f)
     d.sheet_selections = {}

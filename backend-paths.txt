@@ -1,0 +1,5 @@
+# Extra URL paths that re-ddns' nginx should send to the backend (Reflex/Starlette) port instead
+# of the frontend port. One path per line; comments (#) and blank lines are ignored.
+
+# A closing tab's goodbye (navigator.sendBeacon), see reflex_grid/api.py.
+/_reflex_grid/

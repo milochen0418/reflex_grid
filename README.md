@@ -2,7 +2,8 @@
 
 ReflexGrid is an Excel-compatible spreadsheet that runs in the browser, built with [Reflex](https://reflex.dev/).
 It opens and saves real `.xlsx` workbooks (formulas, cached values, styles, tables, charts…), so files move
-between ReflexGrid and Microsoft Excel without conversion.
+between ReflexGrid and Microsoft Excel without conversion. Workbooks are shared: everyone who opens a
+workbook's link edits it together, live — they see each other's selections, and can call everyone on it.
 
 Its engine, **gridcore**, is pure Python with a layered design (core → number formats → formulas → functions →
 model → calc → xlsx → engine), copy-on-write workbook snapshots for undo, dependency-graph recalculation with
@@ -22,6 +23,10 @@ dynamic arrays, and an "every action is a command" API.
   undo/redo, and the familiar keyboard shortcuts.
 - **Scriptable**: every user-visible action is a command with a stable id (`cell.set`, `home.bold`,
   `data.sortAscending`…); the UI, the tests and your own scripts all use the same `Session.execute` API.
+- **Edit together, live**: a workbook list like [CoDoc in MD](https://github.com/milochen0418/codoc_in_md)'s
+  document manager, shared links, who is here and where (everyone's selection in their colour, as in
+  Google Sheets), changes reaching everyone at once, undo that takes back only your own changes, and
+  "Call everyone" on a workbook.
 
 ## Features
 
@@ -40,7 +45,8 @@ dynamic arrays, and an "every action is a command" API.
 | Sheets | Add, delete, rename, move/copy, duplicate, tab colour, hide/unhide, protect (with password) and workbook structure protection |
 | View | Freeze panes, gridlines, headings, zoom 10–400 %, right-to-left |
 | What-if | Goal Seek |
-| Files | Open `.xlsx`/`.xlsm`/`.csv`/`.tsv` (upload), save `.xlsx`, export CSV, print (with the sheet's page setup), save as web page, document properties, several open workbooks |
+| Files | Open `.xlsx`/`.xlsm`/`.csv`/`.tsv` (upload), download `.xlsx`, export CSV, print (with the sheet's page setup), save as web page, document properties; workbooks are saved on the server as `.xlsx` while you edit |
+| Together | Workbook list (search, filters, who is editing now, new, upload, download, delete), shared links, presence (avatars, "N here"), everyone's selection and typing cell in their colour, changes highlighted for a moment, per-person sheets, zoom and undo, a shared title, calls |
 
 ### Excel compatibility
 
@@ -81,8 +87,10 @@ poetry install
 poetry run ./reflex_rerun.sh
 ```
 
-Then open http://localhost:3000 (the backend listens on port 8000). **File › New** offers three sample
-workbooks (Sales, Budget, Grades) that show tables, charts, conditional formats and validation.
+Then open http://localhost:3000 (the backend listens on port 8000): the workbook list. **New workbook**
+offers a blank one and three samples (Sales, Budget, Grades) that show tables, charts, conditional formats
+and validation; **Upload .xlsx** opens a file as a new workbook. Open the same workbook's address in a
+second browser (or a private window) to see two people editing it.
 
 To rebuild the environment from scratch: `./proj_reinstall.sh` (see `--help`).
 
@@ -113,11 +121,62 @@ poetry run python -m gridcore.cli commands                                      
 poetry run python -m gridcore.cli functions lookup
 ```
 
+## Working together
+
+Every workbook has an address, `/book/<id>`; everyone who opens it edits the same workbook. The first visit
+to a new address creates the workbook, so a link is all it takes to share one (**Share** in the title bar
+copies it). The workbook list at `/` shows every workbook, who is editing which right now, and lets you
+search, filter (by creator, date, "being edited now"), create, upload, download and delete them.
+
+What people on a workbook share, and what is their own:
+
+| Shared, live | Each person's own |
+|---|---|
+| Cells, formulas and formats (every change reaches everyone at once and lights up briefly in its author's colour), rows, columns, merges, rules, tables, charts, sheets and their names, the workbook's title, the call | The sheet on screen, the selection, zoom, *Show Formulas*, the clipboard, Find and the Format Painter, undo and redo |
+
+- **Who is where**: avatars and "N here" in the title bar (click an avatar to jump to that person); on the
+  grid, each person's selection in their colour with their name, a dashed box with ✎ while they type.
+- **Conflicts**: two people may change the same cell; the last change wins, as in Google Sheets.
+- **Undo is per person**: it takes back your own changes, not the ones others made since. When nobody has
+  changed the workbook after you, undo restores the workbook exactly as it was; otherwise it puts back what
+  you changed and nobody touched since, and keeps (and tells you about) what others changed meanwhile.
+  Matching goes by address, so after someone moves cells (inserts or deletes rows or columns, sorts, moves
+  cells, or adds, removes or reorders sheets — adding one at the end is fine), your earlier changes can't be
+  undone any more, and Undo says why.
+- **Saving**: workbooks are saved on the server as `.xlsx` a moment after each change ("All changes saved").
+  They live in `REFLEX_GRID_HOME` (default `~/Library/Application Support/reflex_grid` on macOS,
+  `~/.local/share/reflex_grid` on Linux), as `books/<id>.xlsx` plus `books/<id>.json` (title, creator,
+  times).
+
+### Sign-in and calls
+
+With [reflex_ddns_auth](https://github.com/milochen0418/reflex_ddns_auth) (a Poetry path dependency,
+`../reflex_ddns_auth`, as in CoDoc in MD), people signed in with the re-ddns SSO appear with their name and
+picture, and "Mine" filters the workbook list; everyone else is a guest ("Guest 1234").
+
+**Call everyone** (in the title bar) works as in CoDoc in MD: it rings the people on the workbook, who
+can accept or decline for 45 seconds; while the call is on, everyone on the workbook — also people who
+open it later — sees **Join call · N**. The call runs in a call app opened in a dialog through the DDNS
+Intent `call.join` (e.g. [LiveKit audio chat](https://github.com/milochen0418/reflex_ddns_livekit_audio_chat));
+on re-ddns the app is found through the intent registry. If several apps provide `call.join`, whoever starts
+the call chooses one, and everyone joins that one. Settings (all optional):
+
+- `DDNS_INTENT_PROVIDER_CALL_JOIN`: the app(s) that handle `call.join` when there is no registry, e.g.
+  `livekit` for local development; `DDNS_INTENT_URL_LIVEKIT`: where that app runs (e.g. `http://localhost:3200`).
+- `REFLEX_GRID_CALL_APP`: always use this app, skipping the registry.
+
+### On re-ddns
+
+`backend-paths.txt` sends `/_reflex_grid/` (a closing tab's goodbye) to the backend. To keep workbooks
+across container restarts, give the app a volume for its data, e.g.
+`"volumes": ["smart-app-grid-data:/root/.local/share/reflex_grid"]` in the App Store catalog entry.
+
 ## Tests
 
 ```bash
-poetry run pytest -q                              # engine, formulas, functions, number formats, xlsx
+poetry run pytest -q                              # engine, collaboration, formulas, functions, number formats, xlsx
 poetry run ./run_test_suite.sh smoke_home         # Playwright end-to-end suites (see testcases/README.md)
+poetry run ./run_test_suite.sh collab_live        # three people editing one workbook
 ```
 
 ## Project structure
@@ -131,11 +190,18 @@ gridcore/                 the spreadsheet engine (no UI dependencies)
   model/                  workbook, sheets, copy-on-write cell store, styles, features
   calc/                   evaluator, dependency graph, recalculation, dynamic arrays
   xlsx/                   XLSX and CSV readers/writers
-  engine/                 sessions, commands (cmd_*.py), undo/redo, clipboard, fill, viewport payloads
+  engine/                 sessions, commands (cmd_*.py), undo/redo, clipboard, fill, viewport payloads,
+                          several people on one workbook (collab.py)
 reflex_grid/              the Reflex app
-  state.py                bridges UI events to the engine session of each browser tab
+  state.py                bridges a tab's UI events to the shared workbook it shows
+  books.py                the shared workbooks: stored as .xlsx, opened once, saved as they change
+  room.py                 BookRoom, the SharedState that tells everyone on a workbook about changes and people
   sessions.py             per-tab engine sessions (kept outside Reflex state)
-  components/             ribbon, dialogs, chrome, and the grid (sheet_view.jsx, sheet_charts.jsx)
+  workbooks.py            the workbook list
+  call.py                 calls on a workbook (DDNS Intent call.join)
+  api.py                  the backend's own route (a closing tab's goodbye)
+  components/             workbook list, ribbon, dialogs, chrome, calls, and the grid's Reflex wrapper
+assets/grid/              the grid itself, a React component (sheet_view.jsx, sheet_charts.jsx)
 tests/                    unit tests
 testcases/                Playwright E2E suites
 docs/architecture.md      design notes
@@ -145,6 +211,7 @@ docs/architecture.md      design notes
 
 - [Reflex](https://reflex.dev/) for the web framework; [Radix Themes](https://www.radix-ui.com/themes) and
   [Lucide](https://lucide.dev/) icons as bundled by Reflex.
+- The workbook list, presence and calls follow [CoDoc in MD](https://github.com/milochen0418/codoc_in_md).
 
 ReflexGrid is not affiliated with Microsoft. "Excel" is a trademark of Microsoft Corporation, used here only to
 describe file compatibility.

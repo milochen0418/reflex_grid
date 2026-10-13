@@ -228,6 +228,7 @@ def shift_lines(ctx, si: int, axis: str, at: int, count: int, insert: bool) -> N
     if sm.print.print_area is not None:
         sm.print.print_area = mr(sm.print.print_area)
     ctx.structural = True
+    ctx.moved = True
 
 
 def shift_cells(ctx, si: int, rng: RangeRef, axis: str, insert: bool) -> None:
@@ -307,6 +308,7 @@ def shift_cells(ctx, si: int, rng: RangeRef, axis: str, insert: bool) -> None:
                 nd[n] = x
         setattr(sm, name, nd)
     ctx.structural = True
+    ctx.moved = True
 
 
 def move_block(ctx, si: int, src: RangeRef, dst_row: int, dst_col: int, dst_sheet: Optional[int] = None) -> None:
@@ -347,3 +349,4 @@ def move_block(ctx, si: int, src: RangeRef, dst_row: int, dst_col: int, dst_shee
             for rc, x in moved.items():
                 dd[(rc[0] + dr, rc[1] + dc)] = x
     ctx.structural = True
+    ctx.moved = True

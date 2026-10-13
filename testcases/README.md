@@ -9,7 +9,9 @@ Each suite lives under:
 - `testcases/<suite_name>/run_test.py`
 - `testcases/<suite_name>/output/` (artifacts, ignored by git)
 
-Shared helpers (opening the app, clicking cells, reading cell text) are in `testcases/_lib/grid.py`.
+Shared helpers (opening a workbook, clicking cells, reading cell text, several people on one workbook) are
+in `testcases/_lib/grid.py`. Each suite works on new workbooks of its own (a fresh `/book/<id>` address),
+and the runner keeps them in the suite's `output/data` (`REFLEX_GRID_HOME`), not with your workbooks.
 
 The `run_test.py` script should:
 - Exit `0` on success
@@ -20,11 +22,14 @@ The `run_test.py` script should:
 
 | Suite | What it checks |
 |---|---|
-| `smoke_home` | The page loads: ribbon, formula bar, grid headers, sheet tabs, status bar; no console errors |
+| `smoke_home` | A workbook loads: ribbon, formula bar, grid headers, sheet tabs, status bar, title bar (title, save status, who is here); no console errors |
 | `editing_formulas` | Typing values and formulas, recalculation, formula bar, autocomplete, AutoSum, fill handle, undo/redo, copy/paste |
 | `formatting_ribbon` | Bold, fill colour, number formats, merge, borders, Format Cells dialog, column resize |
 | `sheets_data` | Sheet tabs (add/rename/switch), sort, filter dialog, tables, conditional formatting, charts from samples |
 | `xlsx_roundtrip` | Upload an .xlsx built with openpyxl, check what renders, download it again and re-read it with openpyxl |
+| `collab_live` | Three people on one workbook: presence, each other's selections and typing, edits and formulas reaching everyone, change highlights, per-person sheets, per-person undo, the shared title, jumping to someone, leaving and closing a tab |
+| `workbook_manager` | The workbook list: who is editing, a new workbook and its title, search and filters, uploading, downloading, deleting a workbook someone has open |
+| `collab_call` | Calling everyone on a workbook: who is rung, declining, accepting, joining later; with the call app running, the call itself (needs a `call.join` provider, see below) |
 
 ## Running
 
@@ -39,6 +44,14 @@ Optional env vars:
 - `HEADLESS=0` to watch the browser
 - `PW_SLOWMO_MS=100` to slow actions down so you can see interactions
 - `PW_TIMEOUT_MS=60000` to increase Playwright timeouts
+
+`collab_call` needs a `call.join` provider named for the server; the call app itself only has to run for the
+check of the call itself (e.g. reflex_ddns_livekit_audio_chat on 3200/8200):
+
+```bash
+DDNS_INTENT_PROVIDER_CALL_JOIN=livekit DDNS_INTENT_URL_LIVEKIT=http://localhost:3200 \
+poetry run ./run_test_suite.sh collab_call
+```
 
 Example (headed + slow motion):
 

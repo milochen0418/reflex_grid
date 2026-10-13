@@ -11,9 +11,10 @@ from _lib.grid import Grid, run  # noqa: E402
 
 
 def open_sample(g: Grid, name: str) -> None:
+    """File › New › <sample>: a new shared workbook, opened in this tab."""
     g.page.click("#tab-file")
     g.page.click(f"#sample-{name.lower()}")
-    g.page.locator("#doc-title", has_text=f"{name}.xlsx").wait_for()
+    g.wait_title(name)
     g.wait_idle(0.8)
 
 

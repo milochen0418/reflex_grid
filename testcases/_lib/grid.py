@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import traceback
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -37,6 +38,10 @@ def split_a1(a1: str):
 MOD = "Meta" if sys.platform == "darwin" else "Control"
 
 
+def new_book_id() -> str:
+    return "t" + uuid.uuid4().hex[:10]
+
+
 class Grid:
     """A thin driver for the sheet view."""
 
@@ -49,11 +54,27 @@ class Grid:
 
     # -------------------------------------------------------------- app
 
-    def open(self, base_url: str) -> None:
-        self.page.goto(base_url, wait_until="networkidle")
+    def open(self, base_url: str, book: Optional[str] = None) -> None:
+        """Opens the workbook ``book`` (an id), else a new blank one of its own (a fresh address
+        creates the workbook)."""
+        self.book = book or new_book_id()
+        self.page.goto(f"{base_url}/book/{self.book}", wait_until="networkidle")
         self.page.locator(".rg-view").wait_for(state="visible")
         self.page.locator(".rg-colhead").first.wait_for(state="visible")
         self.wait_idle()
+
+    def title(self) -> str:
+        return self.page.locator("#doc-title").input_value()
+
+    def wait_title(self, expected: str, timeout: float = 20.0) -> None:
+        """Waits for the workbook title (e.g. after opening a sample or a file, which opens a
+        new workbook)."""
+        self.page.wait_for_function(
+            "t => { const el = document.querySelector('#doc-title'); return el && el.value === t; }",
+            arg=expected,
+            timeout=timeout * 1000,
+        )
+        self.page.locator(".rg-colhead").first.wait_for(state="visible")
 
     def wait_idle(self, t: float = 0.35) -> None:
         time.sleep(t)
@@ -204,6 +225,64 @@ def run(name: str, body: Callable[[Grid], None]) -> int:
             errors = [e for e in g.console_errors if "Download the React DevTools" not in e]
             if errors:
                 raise AssertionError("console errors: " + " | ".join(errors[:5]))
+    except Exception:
+        traceback.print_exc()
+        print(f"[{name}] FAIL")
+        return 1
+    print(f"[{name}] PASS")
+    return 0
+
+
+# A fake microphone, for suites that make calls.
+MEDIA_ARGS = ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+
+
+@contextmanager
+def people(default_out: str, count: int = 2, media: bool = False):
+    """``count`` people, each in a browser context of their own (separate sessions, as on
+    separate computers), on the same new workbook. ``media`` gives them a fake microphone."""
+    base_url = os.getenv("BASE_URL", "http://127.0.0.1:3000").rstrip("/")
+    out = Path(os.getenv("OUTPUT_DIR", default_out))
+    out.mkdir(parents=True, exist_ok=True)
+    headless = env_bool("HEADLESS", True)
+    slow = int(os.getenv("PW_SLOWMO_MS", "0"))
+    timeout_ms = int(os.getenv("PW_TIMEOUT_MS", "30000"))
+    book = new_book_id()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless, slow_mo=slow, args=MEDIA_ARGS if media else [])
+        perms = ["clipboard-read", "clipboard-write"] + (["microphone"] if media else [])
+        grids: List[Grid] = []
+        try:
+            for _ in range(count):
+                context = browser.new_context(viewport={"width": 1280, "height": 800}, permissions=perms, accept_downloads=True)
+                page = context.new_page()
+                page.set_default_timeout(timeout_ms)
+                g = Grid(page, out)
+                g.base_url = base_url
+                g.open(base_url, book)
+                grids.append(g)
+            yield grids
+        except Exception:
+            for i, g in enumerate(grids):
+                try:
+                    g.shot(f"failure_{i}")
+                except Exception:
+                    pass
+            raise
+        finally:
+            browser.close()
+
+
+def run_people(name: str, body: Callable[[List[Grid]], None], count: int = 2, ignore: Optional[Callable[[str], bool]] = None, media: bool = False) -> int:
+    """Runs a suite body with ``count`` people on one workbook; prints PASS/FAIL. ``ignore``
+    tells console errors the suite expects."""
+    try:
+        with people(f"testcases/{name}/output", count, media) as grids:
+            body(grids)
+            for i, g in enumerate(grids):
+                errors = [e for e in g.console_errors if "Download the React DevTools" not in e and not (ignore and ignore(e))]
+                if errors:
+                    raise AssertionError(f"console errors (person {i}): " + " | ".join(errors[:5]))
     except Exception:
         traceback.print_exc()
         print(f"[{name}] FAIL")

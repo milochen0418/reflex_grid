@@ -1,10 +1,13 @@
-"""Window chrome: title bar with quick access, the File backstage, sheet tabs and status bar."""
+"""Window chrome: the title bar (title, quick access, who is here, call, share, account), the
+File backstage, sheet tabs, status bar, and what shows when a workbook is gone."""
 
 from __future__ import annotations
 
 import reflex as rx
 
-from ..state import GridState
+from ..room import BookRoom
+from ..state import AuthState, GridState
+from .call_views import call_button
 
 ACCENT = "#156082"
 
@@ -18,43 +21,157 @@ def app_icon(size: int = 20) -> rx.Component:
     )
 
 
+def peer_avatar(p) -> rx.Component:
+    """Someone on the workbook, ringed in their selection colour; a click goes to where they are."""
+    face = rx.cond(
+        p["avatar"] != "",
+        rx.image(src=p["avatar"], width="24px", height="24px", border_radius="9999px", object_fit="cover", alt=p["name"]),
+        rx.center(rx.text(p["initials"], size="1", weight="bold", color="#FFFFFF"), width="24px", height="24px", border_radius="9999px", background=p["color"]),
+    )
+    return rx.tooltip(
+        rx.box(
+            face,
+            border="2px solid",
+            border_color=p["color"],
+            border_radius="9999px",
+            background="#FFFFFF",
+            margin_left="-6px",
+            cursor="pointer",
+            on_click=GridState.follow(p["id"]),
+            class_name="rg-person",
+            data_name=p["name"],
+        ),
+        content=p["name"],
+    )
+
+
+def presence() -> rx.Component:
+    return rx.hstack(
+        rx.hstack(rx.foreach(BookRoom.people, peer_avatar), spacing="0", padding_left="6px", align="center"),
+        rx.text(BookRoom.people_count.to(str) + " here", size="1", color="#CFE3EC", white_space="nowrap", id="people-count"),
+        spacing="2",
+        align="center",
+        id="presence",
+    )
+
+
+def save_status() -> rx.Component:
+    return rx.text(
+        rx.cond(
+            BookRoom.save_error != "",
+            "Couldn't save",
+            rx.cond(BookRoom.saved, "All changes saved", "Saving…"),
+        ),
+        title=BookRoom.save_error,
+        size="1",
+        color=rx.cond(BookRoom.save_error != "", "#FECACA", "#CFE3EC"),
+        white_space="nowrap",
+        id="save-status",
+    )
+
+
+def book_title() -> rx.Component:
+    """The workbook's title, renamed in place (for everyone on it): Enter or leaving the field
+    renames."""
+    return rx.el.form(
+        rx.el.input(
+            name="title",
+            default_value=BookRoom.title,
+            key=BookRoom.title,
+            on_blur=GridState.rename_book,
+            id="doc-title",
+            title="Rename workbook",
+            spell_check=False,
+            auto_complete="off",
+            class_name="rg-title-input",
+        ),
+        on_submit=GridState.rename_from_form,
+        reset_on_submit=False,
+        style={"display": "flex"},
+    )
+
+
+def identity() -> rx.Component:
+    guest = rx.hstack(
+        rx.text(GridState.me["name"], size="1", color="#FFFFFF", white_space="nowrap", id="me-name"),
+        *([rx.link("Sign in", href=AuthState.login_url, size="1", color="#F2C12E", white_space="nowrap")] if AuthState is not None else []),
+        spacing="2",
+        align="center",
+    )
+    if AuthState is None:
+        return guest
+    signed_in = rx.hstack(
+        rx.text(AuthState.user_name, size="1", color="#FFFFFF", white_space="nowrap", max_width="140px", overflow="hidden", text_overflow="ellipsis", id="me-name"),
+        rx.link("Sign out", href=AuthState.logout_url, size="1", color="#CFE3EC", white_space="nowrap"),
+        spacing="2",
+        align="center",
+    )
+    return rx.cond(AuthState.is_logged_in, signed_in, guest)
+
+
 def title_bar() -> rx.Component:
     def qa(icon: str, label: str, on_click, id: str) -> rx.Component:
         return rx.tooltip(rx.icon_button(rx.icon(icon, size=15), variant="ghost", size="1", on_click=on_click, color="#FFFFFF", id=id), content=label)
 
     return rx.hstack(
-        app_icon(),
+        rx.tooltip(rx.link(app_icon(), href="/", id="home-link", display="flex"), content="All workbooks"),
         rx.text("ReflexGrid", weight="bold", size="2", color="#FFFFFF"),
         rx.divider(orientation="vertical", size="1", color_scheme="gray", height="16px"),
-        qa("save", "Save (download .xlsx) — Ctrl+S", GridState.cmd("ui.save", {}), "qa-save"),
-        qa("undo_2", "Undo (Ctrl+Z)", GridState.cmd("edit.undo", {}), "qa-undo"),
+        qa("save", "Download a copy (.xlsx) — Ctrl+S", GridState.cmd("ui.save", {}), "qa-save"),
+        qa("undo_2", "Undo your last change (Ctrl+Z)", GridState.cmd("edit.undo", {}), "qa-undo"),
         qa("redo_2", "Redo (Ctrl+Y)", GridState.cmd("edit.redo", {}), "qa-redo"),
+        book_title(),
+        save_status(),
         rx.spacer(),
-        rx.text(GridState.doc_title, size="2", color="#FFFFFF", id="doc-title"),
-        rx.spacer(),
-        rx.text("Excel-compatible (.xlsx)", size="1", color="#CFE3EC"),
+        presence(),
+        call_button(),
+        rx.tooltip(
+            rx.icon_button(
+                rx.icon("link", size=15),
+                variant="ghost",
+                size="1",
+                color="#FFFFFF",
+                id="share-link",
+                on_click=[
+                    rx.call_script("navigator.clipboard && navigator.clipboard.writeText(window.location.href)"),
+                    rx.toast.success("Link copied: anyone with it can edit this workbook with you.", position="bottom-center"),
+                ],
+            ),
+            content="Copy the link to share this workbook",
+        ),
+        rx.divider(orientation="vertical", size="1", color_scheme="gray", height="16px"),
+        identity(),
         align="center",
         spacing="2",
         padding_x="10px",
-        height="34px",
+        height="38px",
         background=ACCENT,
         width="100%",
         flex_shrink="0",
+        id="title-bar",
     )
 
 
 def backstage() -> rx.Component:
     def item(icon: str, label: str, on_click, id: str = "") -> rx.Component:
-        return rx.button(rx.hstack(rx.icon(icon, size=18), rx.text(label, size="3"), spacing="3", align="center"), variant="ghost", color_scheme="gray", width="100%", justify="start", on_click=on_click, id=id or None, padding_y="20px")
+        return rx.button(rx.hstack(rx.icon(icon, size=18), rx.text(label, size="3"), spacing="3", align="center"), variant="ghost", color_scheme="gray", color="#FFFFFF", width="100%", justify="start", on_click=on_click, id=id or None, padding_y="20px")
 
     def sample(name: str, desc: str) -> rx.Component:
         return rx.card(
-            rx.vstack(rx.text(name, weight="bold", size="2"), rx.text(desc, size="1", color="#6B7280"), spacing="1"),
+            rx.vstack(rx.text(name, weight="bold", size="2", color="#111827"), rx.text(desc, size="1", color="#6B7280"), spacing="1"),
             on_click=GridState.new_workbook(name),
             cursor="pointer",
             width="190px",
             id=f"sample-{name.lower()}",
             _hover={"border_color": ACCENT},
+        )
+
+    def recent(b) -> rx.Component:
+        return rx.link(
+            rx.hstack(rx.icon("sheet", size=16), rx.text(b["title"], size="2"), rx.text(b["when"], size="1", color="#6B7280"), spacing="2", align="center"),
+            href="/book/" + b["id"].to(str),
+            class_name="rg-recent",
+            color="#1F2937",
         )
 
     return rx.cond(
@@ -70,7 +187,7 @@ def backstage() -> rx.Component:
                 item("printer", "Print", GridState.print_sheet, "bs-print"),
                 item("globe", "Save as Web Page", GridState.save_html, "bs-html"),
                 item("info", "Properties", GridState.open_dialog("properties", {})),
-                item("x", "Close", GridState.close_workbook),
+                item("layout_grid", "All Workbooks", GridState.close_workbook, "bs-close"),
                 spacing="1",
                 width="220px",
                 padding="12px",
@@ -79,26 +196,25 @@ def backstage() -> rx.Component:
                 class_name="rg-backstage-nav",
             ),
             rx.vstack(
-                rx.heading("New", size="5"),
+                rx.heading("New", size="5", color="#111827"),
+                rx.text("A new workbook is shared: send its link and edit it together.", size="1", color="#6B7280"),
                 rx.hstack(
-                    rx.card(rx.vstack(rx.text("Blank workbook", weight="bold", size="2"), rx.text("Start from an empty sheet.", size="1", color="#6B7280"), spacing="1"), on_click=GridState.new_workbook(""), cursor="pointer", width="190px", id="sample-blank"),
+                    rx.card(rx.vstack(rx.text("Blank workbook", weight="bold", size="2", color="#111827"), rx.text("Start from an empty sheet.", size="1", color="#6B7280"), spacing="1"), on_click=GridState.new_workbook(""), cursor="pointer", width="190px", id="sample-blank"),
                     sample("Sales", "A table with a calculated column, data bars and a chart."),
                     sample("Budget", "Monthly budget with totals, cell styles and a colour scale."),
                     sample("Grades", "Scores with IFS, XLOOKUP, validation and icon sets."),
                     spacing="3",
                     wrap="wrap",
                 ),
-                rx.heading("Open workbooks", size="4", margin_top="16px"),
-                rx.vstack(
-                    rx.foreach(
-                        GridState.open_docs,
-                        lambda d: rx.button(rx.hstack(rx.icon("sheet", size=16), rx.text(d["name"]), spacing="2"), variant="soft", color_scheme="gray", on_click=GridState.switch_window(d["index"])),
-                    ),
-                    spacing="2",
-                    align="start",
+                rx.heading("Other workbooks", size="4", margin_top="16px", color="#111827"),
+                rx.cond(
+                    GridState.recent.length() > 0,
+                    rx.vstack(rx.foreach(GridState.recent, recent), spacing="2", align="start"),
+                    rx.text("No other workbooks yet.", size="2", color="#6B7280"),
                 ),
+                rx.link("All workbooks →", href="/", size="2", id="bs-all"),
                 rx.text(
-                    "ReflexGrid reads and writes Excel workbooks (.xlsx): formulas, values, styles, merged cells, tables, conditional formats, validation, notes, links, charts, pictures and print settings.",
+                    "ReflexGrid reads and writes Excel workbooks (.xlsx): formulas, values, styles, merged cells, tables, conditional formats, validation, notes, links, charts, pictures and print settings. Shared workbooks are saved on the server as .xlsx as you edit.",
                     size="1",
                     color="#6B7280",
                     margin_top="24px",
@@ -115,6 +231,28 @@ def backstage() -> rx.Component:
             z_index="50",
             spacing="0",
             id="backstage",
+        ),
+    )
+
+
+def book_gone() -> rx.Component:
+    """The workbook was deleted (or its address isn't one)."""
+    return rx.cond(
+        GridState.book_gone | BookRoom.deleted,
+        rx.center(
+            rx.vstack(
+                rx.icon("file_x", size=40, color="#9CA3AF"),
+                rx.heading("This workbook isn't here any more", size="5", color="#111827"),
+                rx.text("Someone deleted it from the workbook list.", size="2", color="#6B7280"),
+                rx.link(rx.button("All workbooks", size="2"), href="/"),
+                align="center",
+                spacing="3",
+            ),
+            position="absolute",
+            inset="0",
+            background="rgba(255,255,255,0.94)",
+            z_index="70",
+            id="book-gone",
         ),
     )
 
@@ -183,7 +321,7 @@ def status_bar() -> rx.Component:
         rx.icon_button(rx.icon("minus", size=12), variant="ghost", size="1", color_scheme="gray", on_click=GridState.zoom_step(-10), id="zoom-out"),
         rx.box(rx.slider(value=[GridState.zoom], min=10, max=400, step=10, on_value_commit=GridState.zoom_to, size="1"), width="110px", flex_shrink="0"),
         rx.icon_button(rx.icon("plus", size=12), variant="ghost", size="1", color_scheme="gray", on_click=GridState.zoom_step(10), id="zoom-in"),
-        rx.text(GridState.zoom.to(str) + "%", size="1", width="38px", id="zoom-text"),
+        rx.text(GridState.zoom.to(str) + "%", size="1", width="38px", color="#3C4043", id="zoom-text"),
         spacing="2",
         align="center",
         padding_x="10px",

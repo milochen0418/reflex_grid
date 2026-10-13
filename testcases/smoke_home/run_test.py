@@ -1,4 +1,5 @@
-"""The page loads with the ribbon, formula bar, grid, sheet tabs and status bar."""
+"""A new workbook loads with the ribbon, formula bar, grid, sheet tabs, status bar and the title
+bar (title, save status, who is here)."""
 
 import sys
 from pathlib import Path
@@ -20,7 +21,9 @@ def body(g: Grid) -> None:
     assert page.locator(".rg-rowhead").first.inner_text() == "1"
     assert page.locator(".rg-sheet-tab").first.inner_text().strip() == "Sheet1"
     assert page.locator("#status-mode").inner_text() == "Ready"
-    assert page.locator("#doc-title").inner_text().startswith("Book")
+    assert g.title() == "Untitled workbook", g.title()
+    assert page.locator("#people-count").inner_text() == "1 here"
+    assert page.locator("#save-status").is_visible()
     g.shot("home")
 
 

@@ -42,7 +42,7 @@ def body(g: Grid) -> None:
     page.click("#bs-open")
     page.locator("#dlg-open").wait_for(state="visible")
     page.locator('#dlg-open input[type="file"]').set_input_files(str(src))
-    page.locator("#doc-title", has_text="source.xlsx").wait_for(timeout=20000)
+    g.wait_title("source")
     g.wait_idle(1.0)
     # openpyxl writes no cached values: everything is calculated on open.
     g.wait_text("D2", "4.5")

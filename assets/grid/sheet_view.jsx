@@ -2,6 +2,8 @@
 // fills and borders; DOM for text, selection, editor and objects). Talks to the Python engine
 // through one event channel: onEvent({type, seq, ...}).
 import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from "react";
+import { getBackendURL, getToken } from "$/utils/state";
+import env from "$/env.json";
 import { ChartSvg, Sparkline, CfIcon } from "./sheet_charts.jsx";
 
 const MAXR = 1048576;
@@ -267,7 +269,7 @@ function toggleAbs(ref) {
 // ---------------------------------------------------------------- component
 
 export function SheetView(props) {
-  const { geometry, data, objects, ui, functions, names, onEvent, focusKey, editRequest } = props;
+  const { geometry, data, objects, ui, functions, names, onEvent, focusKey, editRequest, peers, rev, changes, me } = props;
   const g = geometry || {};
   const z = (g.zoom || 100) / 100;
   const rows = useMemo(() => new Lines(g.rows, g.defaultRowHeight || 20, MAXR), [g.rows, g.defaultRowHeight]);
@@ -276,6 +278,8 @@ export function SheetView(props) {
   const fc = (g.freeze && g.freeze[1]) || 0;
   const headings = g.headings !== false;
   const sheetIndex = ui && ui.sheet !== undefined ? ui.sheet : 0;
+  // Sheets are followed by name: someone else adding or removing a sheet moves the index.
+  const sheetName = ui && ui.sheetName !== undefined ? ui.sheetName : ui && ui.sheets && ui.sheets[sheetIndex] ? ui.sheets[sheetIndex].name : "";
 
   const scrollerRef = useRef(null);
   const viewRef = useRef(null);
@@ -300,7 +304,10 @@ export function SheetView(props) {
   const pointRef = useRef(null); // formula point mode {start, end, anchor, cur}
   const seqRef = useRef(0);
   const lastWindowRef = useRef(null);
-  const sheetRef = useRef(sheetIndex);
+  const sheetRef = useRef(sheetName);
+  const sheetIdxRef = useRef(sheetIndex);
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent;
   const composingRef = useRef(false);
   const extentRef = useRef({ r: 100, c: 26 });
   const autoScrollRef = useRef(null);
@@ -542,9 +549,13 @@ export function SheetView(props) {
 
   useEffect(() => {
     if (!ui || !ui.selection) return;
-    const sheetChanged = sheetRef.current !== ui.sheet;
+    // Someone renaming this sheet keeps its place and drops its old name: not another sheet.
+    const prev = sheetRef.current;
+    const renamed = prev !== sheetName && sheetIdxRef.current === ui.sheet && !(ui.sheets || []).some((x) => x.name === prev);
+    const sheetChanged = prev !== sheetName && !renamed;
+    sheetRef.current = sheetName;
+    sheetIdxRef.current = ui.sheet;
     if (sheetChanged) {
-      sheetRef.current = ui.sheet;
       const el = scrollerRef.current;
       if (el) {
         el.scrollTop = 0;
@@ -554,7 +565,9 @@ export function SheetView(props) {
       setObjSel(null);
       if (edRef.current) setEd(null);
     }
-    if ((ui.seq || 0) >= seqRef.current || sheetChanged) {
+    // Passive redraws (someone else's change, a ping, a scroll) keep this tab's selection: it
+    // may have moved since it last told the server.
+    if (((ui.seq || 0) >= seqRef.current && !ui.passive) || sheetChanged) {
       const s = ui.selection;
       const cur = selRef.current;
       const same = cur.active[0] === s.active[0] && cur.active[1] === s.active[1] && JSON.stringify(cur.ranges) === JSON.stringify(s.ranges);
@@ -562,16 +575,16 @@ export function SheetView(props) {
         setSel({ active: s.active, anchor: s.anchor || s.active, ranges: s.ranges });
         ensureVisible(s.active[0], s.active[1]);
       }
-      setPending((p) => {
-        const n = {};
-        let changed = false;
-        for (const k in p) {
-          if (p[k].seq > (ui.seq || 0)) n[k] = p[k];
-          else changed = true;
-        }
-        return changed ? n : p;
-      });
     }
+    setPending((p) => {
+      const n = {};
+      let changed = false;
+      for (const k in p) {
+        if (p[k].seq > (ui.seq || 0)) n[k] = p[k];
+        else changed = true;
+      }
+      return changed ? n : p;
+    });
     // A failed commit reopens the editor with what was typed.
     const err = ui.lastError;
     if (err && err.seq === seqRef.current && err.kind === "commit" && !edRef.current) {
@@ -586,6 +599,99 @@ export function SheetView(props) {
   useEffect(() => {
     if (kbdRef.current && !edRef.current) kbdRef.current.focus({ preventScroll: true });
   }, [focusKey]);
+
+  // ------------------------------------------------------------ other people on the book
+
+  // The book changed after what this tab drew: ask for its window again, one request at a time.
+  const syncRef = useRef(0);
+  useEffect(() => {
+    if (!ui || rev === undefined || rev === null || !onEventRef.current) return;
+    const drawn = ui.bookRev || 0;
+    if (rev <= drawn || syncRef.current > drawn) return;
+    syncRef.current = rev;
+    onEventRef.current({ type: "sync", seq: seqRef.current });
+  }, [rev, ui]);
+
+  // Still here: keeps this tab among the people on the book (and its drawing fresh).
+  useEffect(() => {
+    const t = setInterval(() => onEventRef.current && onEventRef.current({ type: "ping", seq: seqRef.current }), 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Closing or reloading the tab: the others stop seeing it at once (otherwise it would take
+  // the server a few missed pings to notice).
+  // A beacon, because a websocket message doesn't get out of a page that is going away. It goes
+  // to the backend the way Reflex's own events do (behind a proxy, on the page's host).
+  const peerRef = useRef(me);
+  peerRef.current = me;
+  useEffect(() => {
+    const bye = () => {
+      const peer = peerRef.current;
+      if (!peer || !navigator.sendBeacon) return;
+      try {
+        const url = new URL("/_reflex_grid/bye", getBackendURL(env.PING));
+        navigator.sendBeacon(url.toString(), JSON.stringify({ token: getToken(), peer }));
+      } catch (_) {}
+    };
+    window.addEventListener("pagehide", bye);
+    return () => window.removeEventListener("pagehide", bye);
+  }, []);
+
+  // Tell the others which cell this tab is typing in.
+  const editingSent = useRef("");
+  useEffect(() => {
+    const cur = ed ? `${ed.r},${ed.c}` : "";
+    if (editingSent.current === cur || !onEventRef.current) return;
+    editingSent.current = cur;
+    onEventRef.current({ type: "presence", seq: seqRef.current, editing: ed ? [ed.r, ed.c] : null });
+  }, [ed]);
+
+  // Everyone else on this sheet, drawn with their selection in their colour.
+  const others = useMemo(() => (peers || []).filter((q) => q && q.id !== me && q.sheet === sheetName && q.active), [peers, me, sheetName]);
+
+  // A name tag shows for a moment after someone moves (and while they type), so it doesn't sit
+  // on the cells above theirs; otherwise a small flag marks their cell.
+  const TAG_MS = 3000;
+  const peerMoved = useRef({});
+  const [, setTagTick] = useState(0);
+  useEffect(() => {
+    const now = Date.now();
+    const seen = peerMoved.current;
+    let moved = false;
+    for (const q of peers || []) {
+      if (!q || !q.active) continue;
+      const sig = `${q.sheet}|${q.active[0]},${q.active[1]}|${q.editing ? 1 : 0}`;
+      if (!seen[q.id] || seen[q.id].sig !== sig) {
+        seen[q.id] = { sig, at: now };
+        moved = true;
+      }
+    }
+    if (!moved) return;
+    const t = setTimeout(() => setTagTick((n) => n + 1), TAG_MS + 50);
+    return () => clearTimeout(t);
+  }, [peers]);
+
+  // Cells someone else just changed light up in their colour for a moment.
+  const [flashes, setFlashes] = useState([]);
+  const seenChangeRef = useRef(null);
+  useEffect(() => {
+    if (!ui || ui.bookRev === undefined) return;
+    const list = changes || [];
+    const top = list.length ? list[list.length - 1].rev : 0;
+    if (seenChangeRef.current === null) {
+      // What happened before this tab drew the book isn't news.
+      seenChangeRef.current = Math.max(top, ui.bookRev || 0);
+      return;
+    }
+    const fresh = list.filter((c) => c.rev > seenChangeRef.current && c.author !== me);
+    seenChangeRef.current = Math.max(seenChangeRef.current, top);
+    const now = Date.now();
+    const add = [];
+    for (const c of fresh) for (const area of c.areas || []) add.push({ id: `${c.rev}:${add.length}`, sheet: area[0], g: area[1], color: c.color || "#5F6368", until: now + 1600 });
+    if (!add.length) return;
+    setFlashes((f) => [...f.filter((x) => x.until > now), ...add].slice(-40));
+    setTimeout(() => setFlashes((f) => f.filter((x) => x.until > Date.now())), 1700);
+  }, [changes, me, ui]);
 
   // Keys pressed while nothing has focus (after a dialog closed, a click on the page background)
   // belong to the grid, as in Excel.
@@ -2034,6 +2140,61 @@ export function SheetView(props) {
     return out;
   };
 
+  const peerLayer = (p) => {
+    const out = [];
+    for (const f of flashes) {
+      if (f.sheet !== sheetName) continue;
+      const cg = clipToPane(f.g, p);
+      if (!cg) continue;
+      const rc = rectOf(cg);
+      out.push(<div key={`fl${f.id}`} className="rg-flash" style={{ position: "absolute", left: rc.x - p.x, top: rc.y - p.y, width: rc.w - 1, height: rc.h - 1, background: f.color, pointerEvents: "none" }} />);
+    }
+    // Ranges first, then each person's active cell; people on the same cell share one row of tags.
+    for (const q of others) {
+      (q.ranges || []).forEach((g0, i) => {
+        if (g0[0] === g0[2] && g0[1] === g0[3]) return;
+        const cg = clipToPane(g0, p);
+        if (!cg) return;
+        const rc = rectOf(cg);
+        out.push(<div key={`pr${q.id}:${i}`} className="rg-peer-range" style={{ position: "absolute", left: rc.x - p.x - 1, top: rc.y - p.y - 1, width: rc.w + 1, height: rc.h + 1, border: `1px solid ${q.color}`, background: q.color + "1F", boxSizing: "border-box", pointerEvents: "none" }} />);
+      });
+    }
+    const groups = new Map();
+    for (const q of others) {
+      const am = mergeAt(q.active[0], q.active[1]);
+      const ag = am || [q.active[0], q.active[1], q.active[0], q.active[1]];
+      const k = ag.join(",");
+      if (!groups.has(k)) groups.set(k, { ag, people: [] });
+      groups.get(k).people.push(q);
+    }
+    const now = Date.now();
+    for (const [k, grp] of groups) {
+      if (!clipToPane(grp.ag, p)) continue;
+      const rc = rectOf(grp.ag);
+      const tags = [];
+      grp.people.forEach((q, i) => {
+        const editing = !!q.editing;
+        const inset = Math.min(i * 2, Math.floor(Math.min(rc.w, rc.h) / 2) - 2);
+        out.push(<div key={`pa${q.id}`} className="rg-peer" data-peer={q.name} data-peer-cell={a1(q.active[0], q.active[1])} data-editing={editing ? "1" : "0"} style={{ position: "absolute", left: rc.x - p.x - 1 + inset, top: rc.y - p.y - 1 + inset, width: rc.w + 1 - 2 * inset, height: rc.h + 1 - 2 * inset, border: `2px ${editing ? "dashed" : "solid"} ${q.color}`, boxSizing: "border-box", pointerEvents: "none" }} />);
+        const moved = peerMoved.current[q.id];
+        if (editing || !moved || now - moved.at < TAG_MS) tags.push(q);
+        else out.push(<div key={`pf${q.id}`} className="rg-peer-flag" title={q.name} style={{ position: "absolute", left: rc.x - p.x + rc.w - 7 - i * 7, top: rc.y - p.y - 1, width: 6, height: 6, background: q.color, pointerEvents: "none" }} />);
+      });
+      if (!tags.length) continue;
+      const above = rc.y - p.y - 17 >= 0;
+      out.push(
+        <div key={`pt${k}`} style={{ position: "absolute", left: rc.x - p.x - 1, top: above ? rc.y - p.y - 17 : rc.y - p.y + rc.h, display: "flex", gap: 2, pointerEvents: "none", zIndex: 4 }}>
+          {tags.map((q) => (
+            <div key={q.id} className="rg-peer-tag" data-peer={q.name} style={{ background: q.color, color: "#FFFFFF", font: "600 11px 'Segoe UI', system-ui, sans-serif", lineHeight: "16px", height: 16, padding: "0 5px", borderRadius: above ? "3px 3px 3px 0" : "0 3px 3px 3px", whiteSpace: "nowrap" }}>
+              {q.name}{q.editing ? " ✎" : ""}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return out;
+  };
+
   const selectionLayer = (p) => {
     const out = [];
     const s = sel;
@@ -2322,7 +2483,7 @@ export function SheetView(props) {
   const visibleNotes = ((data && data.notes) || []).filter((n) => n.visible || (hoverNote && hoverNote.r === n.r && hoverNote.c === n.c));
 
   return (
-    <div className="rg-sheetview" style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0, fontFamily: "'Segoe UI', system-ui, -apple-system, Arial, sans-serif" }}>
+    <div className="rg-sheetview" style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0, fontFamily: "'Segoe UI', system-ui, -apple-system, Arial, sans-serif", color: "#1F2937", colorScheme: "light" }}>
       {/* Name box + formula bar */}
       <div className="rg-fbar" style={{ display: "flex", alignItems: "stretch", gap: 0, borderBottom: "1px solid #D5D9DE", background: "#FFFFFF", minHeight: 28 }}>
         <div style={{ position: "relative", width: 110, borderRight: "1px solid #D5D9DE", display: "flex" }}>
@@ -2346,7 +2507,7 @@ export function SheetView(props) {
             }}
             list="rg-names"
             spellCheck={false}
-            style={{ flex: 1, minWidth: 0, border: 0, outline: "none", padding: "0 6px", font: "13px 'Segoe UI', system-ui, sans-serif", background: "transparent" }}
+            style={{ flex: 1, minWidth: 0, border: 0, outline: "none", padding: "0 6px", font: "13px 'Segoe UI', system-ui, sans-serif", background: "transparent", color: "#1F2937" }}
           />
           <datalist id="rg-names">{(names || []).map((n) => <option key={n} value={n} />)}</datalist>
         </div>
@@ -2377,7 +2538,7 @@ export function SheetView(props) {
           }}
           onKeyDown={onKeyDown}
           spellCheck={false}
-          style={{ flex: 1, minWidth: 0, border: 0, outline: "none", resize: "none", padding: "5px 8px", font: "13px Consolas, 'Cascadia Mono', Menlo, monospace", lineHeight: "18px", background: "#FFFFFF" }}
+          style={{ flex: 1, minWidth: 0, border: 0, outline: "none", resize: "none", padding: "5px 8px", font: "13px Consolas, 'Cascadia Mono', Menlo, monospace", lineHeight: "18px", background: "#FFFFFF", color: "#111827" }}
         />
       </div>
       {/* Grid */}
@@ -2412,6 +2573,7 @@ export function SheetView(props) {
                 p.w > 0 && p.h > 0 ? (
                   <div key={p.key} className={`rg-pane rg-pane-${p.key}`} style={{ position: "absolute", left: p.x, top: p.y, width: p.w, height: p.h, overflow: "hidden", pointerEvents: "none" }}>
                     {cellsLayer(p)}
+                    {peerLayer(p)}
                     {selectionLayer(p)}
                     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>{decorLayer(p)}</div>
                   </div>

@@ -217,6 +217,7 @@ def sort_range(ctx, si: int, rng: RangeRef, keys: List[Dict[str, Any]], header: 
                 if line == old_line:
                     d[(new_line, rc[1]) if not by_cols else (rc[0], new_line)] = x
     ctx.structural = True
+    ctx.moved = True
 
 
 def _sort(s: Session, p: Dict[str, Any], desc: bool):
@@ -743,6 +744,7 @@ def remove_duplicates(s: Session, p: Dict[str, Any]):
                 if t.range == owner.range:
                     t.range = RangeRef(t.range.r0, t.range.c0, t.range.r1 - removed, t.range.c1)
         ctx.structural = True
+        ctx.moved = True
 
     edit(s, f)
     return {"removed": removed, "remaining": len(keep)}

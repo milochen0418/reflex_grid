@@ -28,6 +28,12 @@ export OUTPUT_DIR
 REFLEX_LOG="$OUTPUT_DIR/reflex.log"
 TEST_LOG="$OUTPUT_DIR/test.log"
 
+# The workbooks a suite creates go to its own output folder (fresh each run), not to yours.
+if [[ -z "${REFLEX_GRID_HOME:-}" ]]; then
+  export REFLEX_GRID_HOME="$OUTPUT_DIR/data"
+  rm -rf "$REFLEX_GRID_HOME"
+fi
+
 run_in_poetry_env() {
   if [[ -n "${POETRY_ACTIVE:-}" ]]; then
     "$@"
