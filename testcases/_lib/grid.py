@@ -101,6 +101,12 @@ class Grid:
         self.wait_idle(0.15)
 
     def _exact_center(self, a1: str):
+        x, y, w, h = self.cell_rect(a1)
+        return x + w / 2, y + h / 2
+
+    def cell_rect(self, a1: str):
+        """(x, y, width, height) of a visible cell on the page, from its row and column headers
+        (an empty cell has no element of its own)."""
         r, c = split_a1(a1)
         label = self._col_label(c)
         heads = self.page.locator(".rg-colhead")
@@ -119,7 +125,7 @@ class Grid:
                 break
         if cb is None or rb is None:
             raise AssertionError(f"cell {a1} is not visible")
-        return cb["x"] + cb["width"] / 2, rb["y"] + rb["height"] / 2
+        return cb["x"], rb["y"], cb["width"], rb["height"]
 
     def drag(self, a: str, b: str) -> None:
         x0, y0 = self._exact_center(a)

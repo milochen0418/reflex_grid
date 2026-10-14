@@ -212,9 +212,10 @@ class GridState(rx.State):
 
     @rx.var
     def dlg_list(self) -> List[Dict[str, Any]]:
-        """The list a dialog shows (filter values, names, rules, find results, columns), indexed."""
+        """The list a dialog shows (filter values, names, rules, find results, columns, a comment
+        thread), indexed."""
         d = self.dlg or {}
-        key = {"filter": "values", "nameManager": "names", "cfManage": "rules", "find": "results", "replace": "results", "removeDuplicates": "cols"}.get(self.dialog)
+        key = {"filter": "values", "nameManager": "names", "cfManage": "rules", "find": "results", "replace": "results", "removeDuplicates": "cols", "note": "thread"}.get(self.dialog)
         if key is None:
             return []
         items = [{**x, "i": i} for i, x in enumerate(d.get(key, []) or [])]
@@ -1064,8 +1065,14 @@ class GridState(rx.State):
             link = ui.get("link")
             dlg = {"target": link or "", "text": "", "tooltip": ""}
         elif name == "note":
-            note = ui.get("note")
-            dlg = {"text": (note or {}).get("text", ""), "threaded": bool(params.get("threaded", False))}
+            from gridcore.engine.cmd_insert import _one_kind
+
+            # A note opens to be edited; a comment thread shows what was said, with a box for a reply.
+            threaded = bool(params.get("threaded", False))
+            _one_kind(s, d.wb.active_sheet, sel.active, threaded)
+            cm = sh.comments.get(sel.active)
+            thread = [{"author": cm.author, "text": cm.text}] + [{"author": a, "text": t} for a, t in cm.replies] if threaded and cm is not None else []
+            dlg = {"text": cm.text if cm is not None and not threaded else "", "threaded": threaded, "thread": thread, "resolved": bool(cm is not None and cm.resolved), "exists": cm is not None}
         elif name in ("rowHeight", "columnWidth", "defaultWidth"):
             if name == "rowHeight":
                 v = sh.row_height(sel.active[0])
@@ -1401,10 +1408,15 @@ class GridState(rx.State):
             if action == "delete":
                 run("review.deleteComment")
                 return None, False
-            if d.get("threaded"):
-                run("review.newComment", text=d.get("text", ""))
-            else:
+            if action == "resolve":
+                run("review.resolveComment")
+                return None, False
+            if not d.get("threaded"):
                 run("review.newNote", text=d.get("text", ""))
+            elif not d.get("thread"):
+                run("review.newComment", text=d.get("text", ""))
+            elif str(d.get("text", "")).strip():
+                run("review.replyComment", text=d.get("text", ""))
             return None, False
         if name == "rowHeight":
             run("home.rowHeight", height=_num(d.get("value"), -1))

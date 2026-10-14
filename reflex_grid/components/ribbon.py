@@ -390,10 +390,15 @@ def home_tab() -> rx.Component:
 
 CHART_KINDS = [
     ("Clustered Column", "columnClustered"), ("Stacked Column", "columnStacked"), ("100% Stacked Column", "columnStacked100"),
-    ("Clustered Bar", "barClustered"), ("Stacked Bar", "barStacked"), ("Line", "line"), ("Line with Markers", "lineMarkers"),
-    ("Pie", "pie"), ("Doughnut", "doughnut"), ("Area", "area"), ("Stacked Area", "areaStacked"), ("Scatter", "scatter"),
-    ("Scatter with Lines", "scatterLines"), ("Radar", "radar"),
+    ("Clustered Bar", "barClustered"), ("Stacked Bar", "barStacked"), ("100% Stacked Bar", "barStacked100"),
+    ("Line", "line"), ("Stacked Line", "lineStacked"), ("Line with Markers", "lineMarkers"), ("Area", "area"), ("Stacked Area", "areaStacked"),
+    ("Pie", "pie"), ("Doughnut", "doughnut"), ("Scatter", "scatter"), ("Scatter with Lines", "scatterLines"), ("Radar", "radar"),
 ]
+
+
+def chart_menu(icon: str, label: str, *kinds: str, id: Optional[str] = None) -> rx.Component:
+    """An Insert › Charts dropdown: the chart kinds whose names start with one of ``kinds``."""
+    return menu(icon, label, [(l, c("insert.chart", kind=k)) for l, k in CHART_KINDS if k.startswith(kinds)], big=True, id=id)
 
 
 def insert_tab() -> rx.Component:
@@ -402,14 +407,14 @@ def insert_tab() -> rx.Component:
         group("Illustrations", rbtn("image", "Pictures", dlg("insertPicture"), big=True)),
         group(
             "Charts",
-            menu("chart_column", "Column", [(l, c("insert.chart", kind=k)) for l, k in CHART_KINDS[:5]], big=True, id="rb-chart-col"),
-            menu("chart_line", "Line", [(l, c("insert.chart", kind=k)) for l, k in CHART_KINDS[5:7] + CHART_KINDS[9:11]], big=True),
-            menu("chart_pie", "Pie", [(l, c("insert.chart", kind=k)) for l, k in CHART_KINDS[7:9]], big=True),
-            menu("chart_scatter", "Scatter", [(l, c("insert.chart", kind=k)) for l, k in CHART_KINDS[11:]], big=True),
+            chart_menu("chart_column", "Column", "column", "bar", id="rb-chart-col"),
+            chart_menu("chart_line", "Line", "line", "area"),
+            chart_menu("chart_pie", "Pie", "pie", "doughnut"),
+            chart_menu("chart_scatter", "Scatter", "scatter", "radar"),
             rbtn("chart_bar", "All Charts", dlg("insertChart"), "Insert Chart…", big=True),
         ),
         group("Sparklines", menu("activity", "Sparklines", [
-            ("Line (in next column)", GridState.open_dialog("sparkline", {"kind": "line"})),
+            (label, GridState.open_dialog("sparkline", {"kind": kind})) for label, kind in (("Line", "line"), ("Column", "column"), ("Win/Loss", "stacked"))
         ], big=True)),
         group("Links", rbtn("link", "Link", dlg("hyperlink"), "Insert Link (Ctrl+K)", big=True)),
         group("Comments", rbtn("message_square", "Comment", dlg("note", threaded=True), big=True), rbtn("sticky_note", "Note", dlg("note"), big=True)),

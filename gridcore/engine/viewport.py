@@ -272,6 +272,8 @@ def viewport(wb, si: int, window: RangeRef, show_formulas: Optional[bool] = None
     for rc, cm in sh.comments.items():
         if any(a.contains(rc) for a in areas):
             notes.append({"r": rc[0], "c": rc[1], "author": cm.author, "text": cm.text, "threaded": cm.threaded, "visible": cm.visible, "resolved": cm.resolved, "replies": [[x, y] for x, y in cm.replies]})
+    # Where each link goes and its ScreenTip, shown when the pointer rests on it.
+    links = [{"r": rc[0], "c": rc[1], "target": h.target, "tooltip": h.tooltip} for rc, h in sh.hyperlinks.items() if any(a.contains(rc) for a in areas)]
     buttons = []
     af = sh.autofilter
     if af is not None:
@@ -302,6 +304,7 @@ def viewport(wb, si: int, window: RangeRef, show_formulas: Optional[bool] = None
         "merges": merges,
         "spills": spills,
         "notes": notes,
+        "links": links,
         "buttons": buttons,
         "sparklines": sparks,
         "tables": [{"name": t.name, "range": [t.range.r0, t.range.c0, t.range.r1, t.range.c1]} for t in tables],

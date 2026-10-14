@@ -605,11 +605,45 @@ def hyperlink() -> rx.Component:
 
 
 def note() -> rx.Component:
+    """A note, or a comment thread: what was said, and a box for a reply."""
+    replying = GridState.dlg_list.length() > 0
+
+    def message(m) -> rx.Component:
+        return rx.box(
+            rx.text(m["author"].to(str), size="1", weight="bold", color="#374151"),
+            rx.text(m["text"].to(str), size="2", white_space="pre-wrap", color="#111827"),
+            padding="6px 8px",
+            background="#F3F4F6",
+            border_radius="6px",
+            width="100%",
+            class_name="rg-thread-msg",
+        )
+
     return shell(
         "note",
         rx.cond(D["threaded"], "Comment", "Note"),
-        area_field("Text", "text", rows=5),
-        footer=ok_cancel(extra=[rx.button("Delete", variant="soft", color_scheme="red", on_click=GridState.dialog_ok("delete"))]),
+        rx.cond(
+            replying,
+            rx.vstack(
+                rx.cond(D["resolved"].to(bool), rx.badge("Resolved", color_scheme="green", size="1", id="dlg-resolved")),
+                rx.scroll_area(rx.vstack(rx.foreach(GridState.dlg_list, message), spacing="2", width="100%"), type="auto", scrollbars="vertical", style={"maxHeight": "220px"}),
+                spacing="2",
+                width="100%",
+            ),
+        ),
+        rx.vstack(
+            rx.text(rx.cond(replying, "Reply", "Text"), size="2"),
+            rx.text_area(value=D["text"].to(str), on_change=lambda v: GridState.set_dlg("text", v), rows="5", width="100%", id="dlg-text"),
+            width="100%",
+            spacing="1",
+        ),
+        footer=ok_cancel(
+            ok=rx.cond(replying, "Reply", rx.cond(D["threaded"], "Post", "OK")),
+            extra=[
+                rx.cond(D["exists"].to(bool), rx.button(rx.cond(D["threaded"], "Delete Thread", "Delete"), variant="soft", color_scheme="red", on_click=GridState.dialog_ok("delete"), id="dlg-delete")),
+                rx.cond(replying, rx.button(rx.cond(D["resolved"].to(bool), "Reopen", "Resolve"), variant="soft", color_scheme="gray", on_click=GridState.dialog_ok("resolve"), id="dlg-resolve")),
+            ],
+        ),
     )
 
 

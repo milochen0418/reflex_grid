@@ -704,9 +704,19 @@ def _note_cell(s: Session, p: Dict[str, Any]):
     return param_sheet(s, p), param_cell(s, p)
 
 
+def _one_kind(s: Session, si: int, at, threaded: bool) -> None:
+    """A cell holds a note or a comment thread, not both (as in Excel): adding one where the other
+    is would lose it."""
+    old = s.doc().wb.sheet(si).comments.get(at)
+    if old is not None and old.threaded != threaded:
+        have, want = ("a comment", "note") if old.threaded else ("a note", "comment")
+        raise EngineError(f"This cell already has {have}, and a cell holds a note or a comment, not both. Delete it first to add a {want}.")
+
+
 @command("review.newNote", "New Note", menu=("Review", "Notes"), shortcut="Shift+F2", params="{cell?, text, author?}")
 def new_note(s, p):
     si, at = _note_cell(s, p)
+    _one_kind(s, si, at, False)
     text = str(p.get("text", ""))
     author = p_str(p, "author") or s.prefs.get("userName", "ReflexGrid User")
 
@@ -775,7 +785,10 @@ def show_all_notes(s, p):
 @command("review.newComment", "New Comment", menu=("Review", "Comments"), params="{cell?, text, author?}")
 def new_comment(s, p):
     si, at = _note_cell(s, p)
+    _one_kind(s, si, at, True)
     text = str(need(p, "text", "review.newComment"))
+    if not text.strip():
+        raise EngineError("Type a comment first.")
     author = p_str(p, "author") or s.prefs.get("userName", "ReflexGrid User")
 
     def f(ctx):

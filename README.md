@@ -49,7 +49,7 @@ dynamic arrays, an "every action is a command" API, and a sandboxed VBA interpre
 | Conditional formatting | Highlight rules, top/bottom, above/below average, duplicates, text, dates occurring, formulas, data bars, colour scales, icon sets; rules manager |
 | Data | Sort (multi-key, by colour, case-sensitive), AutoFilter (values, conditions, top 10, average, colours), tables (styles, banding, total row, calculated columns, auto-expansion), remove duplicates, data validation (lists, numbers, dates, text length, custom; input and error messages), text to columns |
 | Formulas | Defined names (workbook/sheet scope), Name Manager, create from selection, AutoSum, Insert Function, trace precedents/dependents, error checking, show formulas, manual/automatic/iterative calculation |
-| Insert | Charts (column, bar, line, area, pie, doughnut, scatter, radar; stacked/100%), pictures, links, notes and threaded comments, sparklines |
+| Insert | Charts (column, bar, line, area, pie, doughnut, scatter, radar; stacked/100%), pictures, links (ScreenTip on hover, Ctrl/Cmd+click to follow), notes and threaded comments (reply, resolve; shown when the pointer is on the cell), sparklines (line, column, win/loss) |
 | Sheets | Add, delete, rename, move/copy, duplicate, tab colour, hide/unhide, protect (with password) and workbook structure protection |
 | View | Freeze panes, gridlines, headings, zoom 10–400 %, right-to-left |
 | What-if | Goal Seek |

@@ -11,6 +11,7 @@ import pytest
 from gridcore.core.addr import RangeRef
 from gridcore.engine import EngineError, Session, objects, viewport
 from gridcore.engine.cf import CfCache
+from gridcore.model.features import CHART_KINDS
 
 
 def new():
@@ -299,6 +300,52 @@ def test_validation_cf_links_notes_charts_roundtrip():
     assert ws["F1"].hyperlink.target == "https://example.com"
     assert ws["F2"].comment.text.startswith("Remember")
     assert len(ws._charts) == 1
+
+
+@pytest.mark.parametrize("kind", CHART_KINDS)
+def test_every_chart_kind_roundtrips(kind):
+    s = new()
+    s.run("range.setValues", range="A1", values=[["", "Q1", "Q2"], ["East", 3, 4], ["West", 5, 6]])
+    s.run("selection.set", range="A1:C3")
+    s.run("insert.chart", kind=kind)
+    assert objects(roundtrip(s).doc().wb, 0)["charts"][0]["kind"] == kind
+    ws = openpyxl_book(s).active
+    assert len(ws._charts) == 1
+    if kind.startswith("scatter"):
+        # A scatter chart without lines is one whose series lines have no fill, as Excel writes it.
+        assert bool(ws._charts[0].series[0].spPr.ln.noFill) == (kind == "scatter")
+
+
+def test_a_cell_holds_a_note_or_a_comment_thread():
+    s = new()
+    s.run("review.newComment", cell="B2", text="Is this final?", author="Amy")
+    s.run("review.replyComment", cell="B2", text="Yes.", author="Bo")
+    s.run("review.resolveComment", cell="B2")
+    c = s.doc().sheet.comments[(1, 1)]
+    assert c.threaded and c.resolved and c.text == "Is this final?" and c.replies == (("Bo", "Yes."),)
+    s.run("review.newNote", cell="C2", text="Checked")
+    # Neither replaces the other.
+    with pytest.raises(EngineError, match="already has a comment"):
+        s.run("review.newNote", cell="B2", text="A note")
+    with pytest.raises(EngineError, match="already has a note"):
+        s.run("review.newComment", cell="C2", text="Why?")
+    assert s.doc().sheet.comments[(1, 1)].replies == (("Bo", "Yes."),) and s.doc().sheet.comments[(1, 2)].text == "Checked"
+    # Comments and replies have text.
+    with pytest.raises(EngineError, match="Type a comment"):
+        s.run("review.replyComment", cell="B2", text="  ")
+    with pytest.raises(EngineError, match="Type a comment"):
+        s.run("review.newComment", cell="D2", text="")
+    s.run("review.deleteComment", cell="C2")
+    s.run("review.newComment", cell="C2", text="Why?")
+    assert s.doc().sheet.comments[(1, 2)].threaded
+
+
+def test_viewport_sends_links_with_their_screentips():
+    s = new()
+    s.run("insert.hyperlink", cell="A1", target="https://example.com", text="site", tooltip="Our site")
+    s.run("insert.hyperlink", cell="A2", target="Sheet1!K40")
+    links = viewport(s.doc().wb, 0, RangeRef(0, 0, 30, 10))["links"]
+    assert sorted((x["r"], x["c"], x["target"], x["tooltip"]) for x in links) == [(0, 0, "https://example.com", "Our site"), (1, 0, "Sheet1!K40", None)]
 
 
 def test_dynamic_arrays_written_as_excel_does():

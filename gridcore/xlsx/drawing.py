@@ -178,7 +178,10 @@ def _group_kind(g: ET.Element) -> Optional[str]:
     if tag in ("areaChart", "area3DChart"):
         return "areaStacked" if stacked or pct else "area"
     if tag == "scatterChart":
-        return "scatter" if child_val(g, "scatterStyle") == "marker" else "scatterLines"
+        # Excel writes "lineMarker" for every scatter chart: one without lines has series lines with no fill.
+        sers = list(kids(g, "ser"))
+        no_lines = bool(sers) and all(path(s, "spPr", "ln", "noFill") is not None for s in sers)
+        return "scatter" if child_val(g, "scatterStyle") == "marker" or no_lines else "scatterLines"
     if tag == "radarChart":
         return "radar"
     return None
@@ -429,7 +432,7 @@ def write_chart(wb, sheet_index: int, ch: Chart) -> str:
         group_end = '<c:axId val="111"/><c:axId val="222"/></c:areaChart>'
         axes = "cat"
     elif k.startswith("scatter"):
-        s.append(f'<c:scatterChart><c:scatterStyle val="{"lineMarker"}"/><c:varyColors val="0"/>')
+        s.append('<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>')
         group_end = '<c:axId val="111"/><c:axId val="222"/></c:scatterChart>'
         axes = "val"
     else:  # radar
@@ -447,12 +450,15 @@ def write_chart(wb, sheet_index: int, ch: Chart) -> str:
                 s.append(f"<c:tx><c:strRef><c:f>{esc(text_to_file(ser.name))}</c:f>{_cache(names[:1], False)}</c:strRef></c:tx>")
         if k in ("pie", "doughnut"):
             s.append("")
+        elif k == "scatter":
+            # Markers only: the series line has no fill, as Excel writes it.
+            fill = f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+            s.append('<c:spPr><a:ln w="19050" cap="rnd"><a:noFill/><a:round/></a:ln></c:spPr>')
+            s.append(f'<c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr>{fill}<a:ln w="9525">{fill}</a:ln></c:spPr></c:marker>')
         elif k.startswith("line") or k.startswith("scatter") or k == "radar":
             s.append(f'<c:spPr><a:ln w="28575" cap="rnd"><a:solidFill><a:srgbClr val="{color}"/></a:solidFill><a:round/></a:ln></c:spPr>')
             if k in ("line", "linestacked"):
                 s.append('<c:marker><c:symbol val="none"/></c:marker>')
-            elif k == "scatter":
-                s.append('<c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>')
         else:
             s.append(f'<c:spPr><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></c:spPr>')
         if ch.data_labels:

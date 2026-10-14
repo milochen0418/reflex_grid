@@ -14,6 +14,7 @@ const GRID = "#DADCE0";
 const HEAD_BG = "#F3F4F6";
 const HEAD_SEL = "#D7E3EA";
 const REF_COLORS = ["#2F6FDB", "#D9480F", "#7A3FB8", "#1E8E4E", "#C2255C", "#B07A00", "#0B7285", "#5C940D"];
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 
 // ---------------------------------------------------------------- helpers
 
@@ -298,7 +299,7 @@ export function SheetView(props) {
   const dragRef = useRef(null);
   const [objSel, setObjSel] = useState(null);
   const [objDrag, setObjDrag] = useState(null);
-  const [hoverNote, setHoverNote] = useState(null);
+  const [hover, setHover] = useState(null); // [r, c] of the cell under the pointer, when it has a note, comment or link
   const [listOpen, setListOpen] = useState(false);
   const [ac, setAc] = useState(null); // function autocomplete {items, index, start}
   const pointRef = useRef(null); // formula point mode {start, end, anchor, cur}
@@ -375,6 +376,11 @@ export function SheetView(props) {
   const noteMap = useMemo(() => {
     const m = new Map();
     if (data && data.notes && data.sheet === sheetIndex) for (const n of data.notes) m.set(key(n.r, n.c), n);
+    return m;
+  }, [data, sheetIndex]);
+  const linkMap = useMemo(() => {
+    const m = new Map();
+    if (data && data.links && data.sheet === sheetIndex) for (const l of data.links) m.set(key(l.r, l.c), l);
     return m;
   }, [data, sheetIndex]);
   const sparkMap = useMemo(() => {
@@ -1727,6 +1733,8 @@ export function SheetView(props) {
       }
       const kind = r < 0 && c >= 0 ? "col" : c < 0 && r >= 0 ? "row" : "cell";
       const b = viewRef.current.getBoundingClientRect();
+      // The keyboard goes to the grid, as after a left click (Escape closes the menu).
+      kbdRef.current && kbdRef.current.focus({ preventScroll: true });
       setMenu({ x: ev.clientX - b.left, y: ev.clientY - b.top, kind, r, c });
     },
     [localPoint, hit, setSel, selectCell, syncSel, fr, fc, mainR0, mainC0]
@@ -1756,8 +1764,11 @@ export function SheetView(props) {
       { label: "Sort Z to A", id: "data.sortDescending" },
       { label: "Filter", id: "data.filter" },
       { divider: true },
-      note ? { label: "Edit Note", dialog: "note" } : { label: "New Note", dialog: "note" },
-      note ? { label: "Delete Note", id: "review.deleteComment" } : null,
+      ...(note && note.threaded
+        ? [{ label: "Reply to Comment", dialog: "note", params: { threaded: true } }, { label: "Delete Comment", id: "review.deleteComment" }]
+        : note
+          ? [{ label: "Edit Note", dialog: "note" }, { label: "Delete Note", id: "review.deleteComment" }]
+          : [{ label: "New Comment", dialog: "note", params: { threaded: true } }, { label: "New Note", dialog: "note" }]),
       { label: "Format Cells…", dialog: "formatCells", sc: "Ctrl+1" },
       ui && ui.dropdown ? { label: "Pick From Drop-down List", id: "ui.pickList" } : null,
       { label: "Define Name…", dialog: "defineName" },
@@ -1769,7 +1780,7 @@ export function SheetView(props) {
     (it) => {
       setMenu(null);
       kbdRef.current && kbdRef.current.focus({ preventScroll: true });
-      if (it.dialog) return dialog(it.dialog);
+      if (it.dialog) return dialog(it.dialog, it.params);
       if (it.id === "ui.copy" || it.id === "ui.cut") {
         const text = selectionTsv();
         if (text !== null && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
@@ -2084,7 +2095,7 @@ export function SheetView(props) {
           {hasIcon && <span style={{ marginRight: "auto", display: "flex", alignItems: "center" }}><CfIcon set={x.icon[0]} index={x.icon[1]} size={Math.min(16 * z, rc.h - 2)} /></span>}
           {spark ? null : inner}
           {spark && (
-            <div style={{ position: "absolute", inset: 0 }}>
+            <div className="rg-spark" data-spark={a1(r, c)} style={{ position: "absolute", inset: 0 }}>
               <Sparkline spark={spark} width={rc.w - 1} height={rc.h - 1} />
             </div>
           )}
@@ -2095,7 +2106,7 @@ export function SheetView(props) {
     for (const s of (data && data.sparklines) || []) {
       if (s.r < p.r0 || s.r > p.r1 || s.c < p.c0 || s.c > p.c1 || cellMap.get(key(s.r, s.c))) continue;
       out.push(
-        <div key={`sp:${p.key}:${s.r}:${s.c}`} style={{ position: "absolute", left: cx(s.c) - p.x, top: ry(s.r) - p.y, width: cw(s.c) - 1, height: rh(s.r) - 1, pointerEvents: "none" }}>
+        <div key={`sp:${p.key}:${s.r}:${s.c}`} className="rg-spark" data-spark={a1(s.r, s.c)} style={{ position: "absolute", left: cx(s.c) - p.x, top: ry(s.r) - p.y, width: cw(s.c) - 1, height: rh(s.r) - 1, pointerEvents: "none" }}>
           <Sparkline spark={s} width={cw(s.c) - 1} height={rh(s.r) - 1} />
         </div>
       );
@@ -2114,9 +2125,8 @@ export function SheetView(props) {
       out.push(
         <div
           key={`n:${p.key}:${n.r}:${n.c}`}
-          onMouseEnter={() => setHoverNote(n)}
-          onMouseLeave={() => setHoverNote(null)}
-          style={{ position: "absolute", left: rc.x + rc.w - p.x - 8, top: rc.y - p.y, width: 8, height: 8, cursor: "default", pointerEvents: "auto" }}
+          className={n.threaded ? "rg-comment-mark" : "rg-note-mark"}
+          style={{ position: "absolute", left: rc.x + rc.w - p.x - 8, top: rc.y - p.y, width: 8, height: 8 }}
         >
           <div style={{ width: 0, height: 0, borderTop: `6px solid ${color}`, borderLeft: "6px solid transparent", marginLeft: 1 }} />
         </div>
@@ -2495,7 +2505,9 @@ export function SheetView(props) {
 
   const dropdownBtn = ui && ui.dropdown && !ed && ui.sheet === sheetIndex && ui.selection && sel.active[0] === ui.selection.active[0] && sel.active[1] === ui.selection.active[1];
   const inputMsg = ui && ui.inputMessage && !ed && ui.selection && sel.active[0] === ui.selection.active[0] && sel.active[1] === ui.selection.active[1] ? ui.inputMessage : null;
-  const visibleNotes = ((data && data.notes) || []).filter((n) => n.visible || (hoverNote && hoverNote.r === n.r && hoverNote.c === n.c));
+  const hovered = menu ? null : hover; // a context menu hides what the pointer shows
+  const visibleNotes = ((data && data.notes) || []).filter((n) => n.visible || (hovered && hovered[0] === n.r && hovered[1] === n.c));
+  const hoverLink = hovered ? linkMap.get(key(hovered[0], hovered[1])) : null;
 
   return (
     <div className="rg-sheetview" style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0, fontFamily: "'Segoe UI', system-ui, -apple-system, Arial, sans-serif", color: "#1F2937", colorScheme: "light" }}>
@@ -2580,7 +2592,17 @@ export function SheetView(props) {
                   else if (((Math.abs(x - selRect.x) <= 3 || Math.abs(x - hx) <= 3) && y >= selRect.y && y <= hy) || ((Math.abs(y - selRect.y) <= 3 || Math.abs(y - hy) <= 3) && x >= selRect.x && x <= hx)) cursor = "move";
                 }
                 if (el.style.cursor !== cursor) el.style.cursor = cursor;
+                // A cell's note, comment or link shows while the pointer is on the cell, as in Excel.
+                let cell = null;
+                if (!hb && x >= RW && y >= HH && !(ev.target.closest && ev.target.closest("[data-object]"))) {
+                  let [r, c] = hit(x, y);
+                  const m = mergeAt(r, c);
+                  if (m) [r, c] = [m[0], m[1]];
+                  if (noteMap.has(key(r, c)) || linkMap.has(key(r, c))) cell = [r, c];
+                }
+                setHover((h) => (h === cell || (h && cell && h[0] === cell[0] && h[1] === cell[1]) ? h : cell));
               }}
+              onMouseLeave={() => setHover(null)}
               style={{ position: "sticky", top: 0, left: 0, width: view.w, height: view.h, overflow: "hidden", userSelect: "none" }}
             >
               <canvas ref={canvasRef} style={{ position: "absolute", left: 0, top: 0 }} />
@@ -2612,6 +2634,15 @@ export function SheetView(props) {
                   </div>
                 );
               })}
+              {hoverLink && (() => {
+                const rc = rectOf(mergeAt(hoverLink.r, hoverLink.c) || [hoverLink.r, hoverLink.c, hoverLink.r, hoverLink.c]);
+                return (
+                  <div className="rg-link-tip" style={{ position: "absolute", left: rc.x, top: rc.y + rc.h + 4, maxWidth: 320, background: "#FFFFFF", border: "1px solid #A0A0A0", boxShadow: "1px 1px 4px rgba(0,0,0,0.2)", padding: "4px 6px", font: "12px 'Segoe UI', system-ui, sans-serif", color: "#1F2937", whiteSpace: "pre-wrap", overflowWrap: "anywhere", zIndex: 8, pointerEvents: "none" }}>
+                    <div>{hoverLink.tooltip || hoverLink.target}</div>
+                    <div style={{ color: "#6B7280", marginTop: 2 }}>{IS_MAC ? "⌘+click" : "Ctrl+click"} to follow the link.</div>
+                  </div>
+                );
+              })()}
               {inputMsg && (
                 <div className="rg-input-msg" style={{ position: "absolute", left: activeRect.x + 12, top: activeRect.y + activeRect.h + 6, maxWidth: 240, background: "#FFFFE1", border: "1px solid #A0A0A0", padding: "4px 6px", font: "12px 'Segoe UI', system-ui, sans-serif", zIndex: 7, pointerEvents: "none" }}>
                   {inputMsg.title && <div style={{ fontWeight: 600 }}>{inputMsg.title}</div>}
