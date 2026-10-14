@@ -42,6 +42,8 @@ from .runtime import (
     let_default,
     let_index,
     let_member,
+    _unref,
+    _unref_named,
     run_terminations,
     set_member,
     slot_value,
@@ -143,6 +145,8 @@ class ProjectRuntime:
         self.data: Dict[str, Any] = {}
         # Document modules: "workbook" (ThisWorkbook) or "worksheet".
         self.doc_kinds: Dict[str, str] = {}
+        # UserForms: each form module's design (gridcore.model.forms.FormDesign), by name.
+        self.form_designs: Dict[str, Any] = {}
 
     # ------------------------------------------------------------ lookups
 
@@ -237,15 +241,35 @@ class ProjectRuntime:
     # ------------------------------------------------------------ classes
 
     def new_instance(self, ex: Execution, cls: ModuleRuntime) -> Instance:
-        if cls.kind == "form":
-            raise NotSupported("UserForms")
         if cls.name.lower() in self.errors:
             raise self.errors[cls.name.lower()]
+        if cls.kind == "form":
+            # `New UserForm1`: a form of its own, loaded now (UserForm_Initialize runs).
+            inst = self.make_form(ex, cls)
+            ex.host.form_registry(ex).add(inst.form)
+            inst.form.start(ex)
+            return inst
         inst = Instance(cls, self)
         init = cls.proc("Class_Initialize", "sub")
         if init is not None:
             call_procedure(ex, init, [], None, inst)
         return inst
+
+    def make_form(self, ex: Execution, cls: ModuleRuntime) -> Instance:
+        """A UserForm's instance with its controls as designed (not started yet)."""
+        from ..model.forms import FormDesign
+        from .msforms import UserForm
+
+        if cls.name.lower() in self.errors:
+            raise self.errors[cls.name.lower()]
+        inst = Instance(cls, self)
+        inst.form = UserForm(self, inst, self.form_designs.get(cls.name.lower()) or FormDesign(cls.name))
+        return inst
+
+    def form_default(self, ex: Execution, cls: ModuleRuntime) -> Instance:
+        """``UserForm1`` used by name: the form's default instance, loaded on first use (and
+        again after it was unloaded), as in VBA."""
+        return ex.host.form_registry(ex).default(ex, cls)
 
     def instance_get(self, ex: Execution, inst: Instance, name: str, args: list, named: Optional[dict]) -> Any:
         cls = inst.cls
@@ -271,6 +295,8 @@ class ProjectRuntime:
             if type(inst.fields[i]) is AutoNewSlot:
                 v = inst.fields[i].get()
             return index_value(ex, v, args, named) if args else v
+        if inst.form is not None:
+            return inst.form.member(ex).vba_get(ex, name, [_unref(a) for a in args], _unref_named(named))
         raise VbaError(438, f"Object doesn't support this property or method: {name}")
 
     def instance_let(self, ex: Execution, inst: Instance, name: str, args: list, named: Optional[dict], value: Any, is_set: bool) -> None:
@@ -305,6 +331,10 @@ class ProjectRuntime:
             else:
                 s.let(copy_value(value))
             return
+        if inst.form is not None:
+            form = inst.form.member(ex)
+            a, nm = [_unref(x) for x in args], _unref_named(named)
+            return form.vba_set(ex, name, a, nm, value) if is_set else form.vba_let(ex, name, a, nm, value)
         raise VbaError(438, f"Object doesn't support this property or method: {name}")
 
     def instance_enum(self, ex: Execution, inst: Instance) -> Iterator[Any]:
@@ -380,6 +410,8 @@ def compile_project(modules: Sequence[Tuple[str, str, str, Sequence[Tuple[str, s
         name, kind, code, member_attrs = item[:4]
         if len(item) > 4 and item[4]:
             rt.doc_kinds[name.lower()] = item[4]
+        if len(item) > 5 and item[5] is not None:
+            rt.form_designs[name.lower()] = item[5]
         m = ModuleRuntime(name, kind)
         rt.modules[name.lower()] = m
         rt.order.append(m)
@@ -411,8 +443,10 @@ def compile_project(modules: Sequence[Tuple[str, str, str, Sequence[Tuple[str, s
             e.module = e.module or m.name
             rt.errors[m.name.lower()] = e
     for m in rt.order:
-        if m.kind in ("class", "form"):
+        if m.kind == "class":
             m.terminate = m.proc("Class_Terminate", "sub")
+        elif m.kind == "form":
+            m.terminate = m.proc("UserForm_Terminate", "sub")
     return rt
 
 
@@ -873,6 +907,8 @@ class ProcCompiler:
         # unqualified Range in a sheet module is that sheet's.
         if m.kind == "document" and low in _DOCUMENT_MEMBERS.get(self.rt.doc_kinds.get(m.name.lower(), "worksheet"), ()):
             return B("memberofme", name)
+        if m.kind == "form" and (low in _FORM_MEMBERS or self._form_control(low)):
+            return B("memberofme", name)
         mod = self.rt.module(low)
         if mod is not None:
             return B("module", mod)
@@ -924,6 +960,10 @@ class ProcCompiler:
             self.error(f"Sub or Function not defined: {name}", line)
         self.error(f"Variable not defined: {name}", line)
         return B("const", EMPTY)
+
+    def _form_control(self, low: str) -> bool:
+        design = self.rt.form_designs.get(self.m.name.lower())
+        return design is not None and design.find(low) is not None
 
     def _proc_type(self, m: ModuleRuntime, low: str) -> str:
         d = m.procs.get(low, {})
@@ -1531,6 +1571,22 @@ class ProcCompiler:
             from .stdlib import randomize
 
             randomize(rt, f(fr) if f is not None else None)
+
+        self.simple(act, s.line)
+
+    def s_LoadUnload(self, s: A.LoadUnload) -> None:
+        """``Load UserForm1`` loads the form (referring to it does: UserForm_Initialize runs);
+        ``Unload Me`` asks the form (QueryClose) and unloads it."""
+        f, _ = self.expr(s.expr)
+        unload = s.unload
+
+        def act(fr: Frame) -> None:
+            obj = f(fr)
+            form = obj.form if type(obj) is Instance else None
+            if form is None:
+                raise VbaError(361, "Can't load or unload this object")
+            if unload:
+                form.query_unload(fr.ex, 1)
 
         self.simple(act, s.line)
 
@@ -2166,11 +2222,7 @@ class ProcCompiler:
             if mod.kind == "document":
                 return (lambda fr: fr.ex.host.document(fr.ex, mod)), "Object"
             if mod.kind == "form":
-
-                def form(fr: Frame) -> Any:
-                    raise NotSupported("UserForms")
-
-                return form, "Object"
+                return (lambda fr: fr.ex.rt.form_default(fr.ex, mod)), "Object"
             self.error(f"Expected: variable or procedure, not module ({e.name})", e.line)
         if k == "declare":
             return self.call(e, [], e.line, want_value=True), "Variant"
@@ -2383,6 +2435,10 @@ class ProcCompiler:
                     return fr.ex.host.global_get(fr.ex, name, a, nm)
 
                 return call_h
+            if k == "memberofme" and args and self.m.kind == "form" and low in _FORM_SHADOWED:
+                from .stdlib import lookup
+
+                return self.call_builtin(lookup(callee.name + ("$" if callee.suffix == "$" else "")) or lookup(callee.name), args, line)
             if k == "memberofme":
                 name = b.a
                 argfs, named = self.args(args, refs=False)
@@ -2411,11 +2467,16 @@ class ProcCompiler:
                 mod = b.a
                 return lambda fr: fr.ex.host.document(fr.ex, mod)
             if k == "module" and b.a.kind == "form":
+                mod = b.a
+                if not args:
+                    return lambda fr: fr.ex.rt.form_default(fr.ex, mod)
+                argfs, named = self.args(args, refs=False)
 
-                def form(fr: Frame) -> Any:
-                    raise NotSupported("UserForms")
+                def form_default_member(fr: Frame) -> Any:
+                    inst = fr.ex.rt.form_default(fr.ex, mod)
+                    return get_default(fr.ex, inst, [f(fr) for f in argfs], {n: f(fr) for n, f in named.items()} if named else None)
 
-                return form
+                return form_default_member
             self.error(f"Sub or Function not defined: {callee.name}", line)
         if isinstance(callee, A.Member):
             name = callee.name
@@ -2576,6 +2637,19 @@ _TYPE_SIZES = {"Byte": 1, "Boolean": 2, "Integer": 2, "Long": 4, "LongLong": 8, 
 
 _PLAIN = frozenset({int, float, str, bool, V.Integer, V.Byte, V.LongLong, V.Single, V.Date, V.Currency})
 
+# A UserForm's own members, reachable without "Me." in its module (its controls are too).
+_FORM_MEMBERS = frozenset({
+    "activecontrol", "backcolor", "bordercolor", "borderstyle", "canpaste", "canredo", "canundo", "caption",
+    "controls", "copy", "cut", "cycle", "drawbuffer", "enabled", "font", "forecolor", "height", "helpcontextid",
+    "hide", "insideheight", "insidewidth", "keepscrollbarsvisible", "left", "mouseicon", "mousepointer", "move",
+    "paste", "picture", "picturealignment", "picturesizemode", "picturetiling", "printform", "redoaction", "repaint",
+    "scroll", "scrollbars", "scrollheight", "scrollleft", "scrolltop", "scrollwidth", "setdefaulttaborder", "show",
+    "specialeffect", "startupposition", "tag", "top", "undoaction", "verticalscrollbarside", "visible",
+    "whatsthisbutton", "whatsthishelp", "width", "zoom",
+})
+# Form members that are also VBA functions: called with arguments, the function.
+_FORM_SHADOWED = frozenset({"left"})
+
 _DOCUMENT_MEMBERS = {
     "worksheet": (
         "range", "cells", "rows", "columns", "name", "usedrange", "activate", "select", "calculate", "protect", "unprotect",
@@ -2659,7 +2733,7 @@ def _is_type(v: Any, want: str) -> bool:
     if want == "object":
         return True
     if type(v) is Instance:
-        if v.cls.name.lower() == want:
+        if v.cls.name.lower() == want or (v.form is not None and want == "userform"):
             return True
         return any(i.rsplit(".", 1)[-1].lower() == want for i in v.cls.implements)
     names = getattr(v, "TYPE_NAMES", None)

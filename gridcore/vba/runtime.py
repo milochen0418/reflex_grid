@@ -129,11 +129,12 @@ class WithEventsSlot(Slot):
     @v.setter
     def v(self, value: Any) -> None:
         old = self._v
-        if type(old) is Instance and self.owner is not None:
+        # Class instances and form controls raise events to the variables holding them.
+        if isinstance(getattr(old, "listeners", None), list) and self.owner is not None:
             low = self.name.lower()
             old.listeners = [(o, n) for o, n in old.listeners if not (o is self.owner and n.lower() == low)]
         self._v = value
-        if type(value) is Instance and self.owner is not None:
+        if isinstance(getattr(value, "listeners", None), list) and self.owner is not None:
             value.listeners.append((self.owner, self.name))
 
 
@@ -411,11 +412,13 @@ class Instance:
     """An object made from a class module (``New Class1``). When the last reference to it goes,
     its ``Class_Terminate`` runs (at the next statement, see :func:`run_terminations`)."""
 
-    __slots__ = ("cls", "fields", "rt", "__weakref__", "listeners", "terminated", "gen")
+    __slots__ = ("cls", "fields", "rt", "__weakref__", "listeners", "terminated", "gen", "form")
 
     def __init__(self, cls: ModuleRuntime, rt: "ProjectRuntime"):
         self.cls = cls
         self.rt = rt
+        # A UserForm's instance: the form and its controls (gridcore.vba.msforms.UserForm).
+        self.form: Any = None
         self.fields: List[Slot] = [f() for f in cls.field_inits]
         self.listeners: List[Tuple[Any, str]] = []
         self.terminated = cls.terminate is None
@@ -604,6 +607,33 @@ class Host:
 
     def status(self, ex: "Execution", text: str) -> None:
         pass
+
+    def form_registry(self, ex: "Execution") -> Any:
+        """The UserForms loaded for whoever runs the code (:class:`.msforms.FormRegistry`)."""
+        from .msforms import FormRegistry
+
+        reg = self.__dict__.get("_forms")
+        if reg is None:
+            reg = self.__dict__["_forms"] = FormRegistry()
+        return reg.bind(ex.rt)
+
+    def form_cell(self, ex: "Execution", ref: str) -> Any:
+        """A control's ControlSource, read (a cell, by its reference text)."""
+        return EMPTY
+
+    def form_set_cell(self, ex: "Execution", ref: str, value: Any) -> None:
+        """A control's value written to its ControlSource."""
+
+    def form_range(self, ex: "Execution", ref: str) -> List[List[Any]]:
+        """A list's RowSource: the cells' values, row by row."""
+        return []
+
+    def clipboard_text(self, ex: "Execution") -> Optional[str]:
+        """What ``DataObject.GetFromClipboard`` finds (None: nothing)."""
+        return self.__dict__.get("_clipboard")
+
+    def set_clipboard_text(self, ex: "Execution", text: str) -> None:
+        self.__dict__["_clipboard"] = text
 
 
 class Execution:
@@ -894,6 +924,8 @@ def get_default(ex: Execution, obj: Any, args: list, named: Optional[dict]) -> A
     if t is Instance:
         name = obj.cls.default_member
         if name is None:
+            if obj.form is not None:
+                return obj.form.vba_default_get(ex, [_unref(a) for a in args], _unref_named(named))
             raise VbaError(438, f"{obj.cls.name} has no default member")
         return ex.rt.instance_get(ex, obj, name, args, named)
     if obj is NOTHING:
@@ -908,6 +940,8 @@ def let_default(ex: Execution, obj: Any, args: list, named: Optional[dict], valu
     if t is Instance:
         name = obj.cls.default_member
         if name is None:
+            if obj.form is not None:
+                return obj.form.vba_default_let(ex, [_unref(a) for a in args], _unref_named(named), value)
             raise VbaError(438, f"{obj.cls.name} has no default member")
         return ex.rt.instance_let(ex, obj, name, args, named, value, False)
     if obj is NOTHING:

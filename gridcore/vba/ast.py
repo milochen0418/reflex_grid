@@ -445,6 +445,17 @@ class ErrorStmt(Stmt):
         self.line = line
 
 
+class LoadUnload(Stmt):
+    """``Load UserForm1`` / ``Unload Me``."""
+
+    __slots__ = ("expr", "unload")
+
+    def __init__(self, expr: Expr, unload: bool, line: int = 0):
+        self.expr = expr
+        self.unload = unload
+        self.line = line
+
+
 class Randomize(Stmt):
     __slots__ = ("expr",)
 

@@ -1234,6 +1234,15 @@ def f_doevents(ex, args, ctx):
     return Integer(0)
 
 
+@bi("UserForms", "?index")
+def f_userforms(ex, args, ctx):
+    from .msforms import LoadedForms
+
+    forms = LoadedForms(ex.host.form_registry(ex))
+    i = _arg(args, 0)
+    return forms if i is MISSING else forms.g_item(ex, i)
+
+
 @bi("CallByName", "Object", "ProcName", "CallType", "*Args")
 def f_callbyname(ex, args, ctx):
     from .runtime import get_member, let_member, set_member

@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 STANDARD = "standard"   # Modules
 CLASS = "class"         # Class Modules
 DOCUMENT = "document"   # Microsoft Excel Objects: ThisWorkbook and one per sheet
-FORM = "form"           # Forms (the designer is kept, the form itself doesn't run)
+FORM = "form"           # UserForms: code, and the form's design kept byte for byte
 
 KINDS = (STANDARD, CLASS, DOCUMENT, FORM)
 
@@ -75,6 +75,9 @@ class VbaModule:
     help_context: int = 0
     read_only: bool = False
     private: bool = False
+    # A UserForm's design: the streams of its designer storage, by path inside it ("f", "o",
+    # "\x03VBFrame", "i06/f"…), kept byte for byte ([MS-OFORMS]).
+    designer: Tuple[Tuple[str, bytes], ...] = ()
 
     @property
     def stream_name(self) -> str:
@@ -150,13 +153,18 @@ def default_attributes(name: str, kind: str, base: str = "") -> Tuple[str, ...]:
         lines.append(f'Attribute VB_Base = "{base or WORKSHEET_BASE}"')
     elif kind == CLASS:
         lines.append(f'Attribute VB_Base = "{base or CLASS_BASE}"')
+    elif kind == FORM:
+        # A designer's base names two GUIDs of its own (its class and type library).
+        import uuid
+
+        lines.append(f'Attribute VB_Base = "{base or "0{%s}{%s}" % (str(uuid.uuid4()).upper(), str(uuid.uuid4()).upper())}"')
     lines += [
         "Attribute VB_GlobalNameSpace = False",
         "Attribute VB_Creatable = False",
         f"Attribute VB_PredeclaredId = {'True' if kind in (DOCUMENT, FORM) else 'False'}",
         f"Attribute VB_Exposed = {'True' if kind == DOCUMENT else 'False'}",
     ]
-    if kind in (DOCUMENT, CLASS):
+    if kind in (DOCUMENT, CLASS, FORM):
         lines += ["Attribute VB_TemplateDerived = False", f"Attribute VB_Customizable = {'True' if kind == DOCUMENT else 'False'}"]
     return tuple(lines)
 

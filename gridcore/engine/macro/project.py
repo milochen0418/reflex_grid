@@ -12,6 +12,7 @@ import threading
 import weakref
 from typing import Any, Dict, List, Optional, Tuple
 
+from ...model.forms import FormDesign
 from ...model.vba import CLASS, DOCUMENT, FORM, STANDARD, WORKBOOK_BASE, VbaProject
 from ...vba.compiler import ProjectRuntime, compile_project
 from ...vba.errors import VbaSyntaxError
@@ -29,14 +30,29 @@ _lock = threading.Lock()
 _cache: Dict[int, Tuple["weakref.ref", ProjectRuntime]] = {}
 
 
-def module_inputs(p: VbaProject) -> List[Tuple[str, str, str, Tuple[Tuple[str, str], ...], str]]:
+def module_inputs(p: VbaProject) -> List[Tuple[str, str, str, Tuple[Tuple[str, str], ...], str, Any]]:
     out = []
     for m in p.modules:
         doc_kind = ""
         if m.kind == DOCUMENT:
             doc_kind = "workbook" if any(WORKBOOK_BASE[2:10] in a for a in m.attributes) else "worksheet"
-        out.append((m.name, m.kind, m.code, tuple(m.member_attributes), doc_kind))
+        design = form_design(p, m) if m.kind == FORM else None
+        out.append((m.name, m.kind, m.code, tuple(m.member_attributes), doc_kind, design))
     return out
+
+
+def form_design(p: VbaProject, m) -> FormDesign:
+    """A form module's design, read from its designer storage ([MS-OFORMS]). A design that
+    can't be read gives an empty form whose ``warnings`` say why (the code still runs)."""
+    from ...xlsx.oforms import FormError, design_streams, read_design
+    from ...xlsx.ovba import codec
+
+    if not m.designer:
+        return FormDesign(m.name, caption=m.name, warnings=("The form's design is missing from the workbook.",))
+    try:
+        return read_design(m.name, design_streams(m.designer), codec(p.code_page))
+    except (FormError, ValueError, KeyError, IndexError) as e:
+        return FormDesign(m.name, caption=m.name, warnings=(f"The form's design can't be read: {e}",))
 
 
 def compile_vba(p: VbaProject) -> ProjectRuntime:

@@ -535,7 +535,7 @@ class DebugObject(HostObject):
 DEBUG = DebugObject()
 
 
-LIBRARY_CLASSES = {"collection", "dictionary", "regexp", "arraylist"}
+LIBRARY_CLASSES = {"collection", "dictionary", "regexp", "arraylist", "dataobject"}
 
 
 def new_library_object(ex: Optional[Execution], name: str) -> Any:
@@ -548,6 +548,10 @@ def new_library_object(ex: Optional[Execution], name: str) -> Any:
         return RegExp()
     if n == "arraylist":
         return ArrayList()
+    if n == "dataobject":
+        from .msforms import DataObject
+
+        return DataObject()
     return None
 
 
@@ -578,6 +582,10 @@ def create_object(ex: Execution, progid: str) -> Any:
         return RegExp()
     if p in ("system.collections.arraylist",):
         return ArrayList()
+    if p in ("new:{1c3b4210-f441-11ce-b9ea-00aa006b1a69}", "forms.dataobject", "forms.dataobject.1"):
+        from .msforms import DataObject
+
+        return DataObject()
     if p in ("excel.application", "excel.application.16"):
         return ex.host.global_get(ex, "Application", [], None)
     for prefix, what in _UNAVAILABLE:

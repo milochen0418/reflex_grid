@@ -11,6 +11,7 @@ a tab that drew an older revision than the room's asks for its window again (``s
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import random
 import re
@@ -46,6 +47,21 @@ CATEGORIES = sorted({f["category"] for f in FUNCTIONS})
 PEER_IDLE = 30
 # Events that only redraw this tab: the server's answer never moves its selection.
 _PASSIVE = frozenset({"viewport", "sync", "ping", "presence", "objectSelect"})
+
+
+# The event the VBA editor opens when a control is double-clicked in the form view, and the
+# arguments each event procedure takes.
+_DEFAULT_EVENTS = {
+    "TextBox": "Change", "ComboBox": "Change", "ScrollBar": "Change", "SpinButton": "Change",
+    "MultiPage": "Change", "TabStrip": "Change",
+}
+_EVENT_ARGS = {
+    "BeforeUpdate": "ByVal Cancel As MSForms.ReturnBoolean",
+    "Exit": "ByVal Cancel As MSForms.ReturnBoolean",
+    "DblClick": "ByVal Cancel As MSForms.ReturnBoolean",
+    "KeyPress": "ByVal KeyAscii As MSForms.ReturnInteger",
+    "QueryClose": "Cancel As Integer, CloseMode As Integer",
+}
 
 
 def _rng(g) -> str:
@@ -128,6 +144,23 @@ class GridState(rx.State):
     macro_input: str = ""
     macro_busy: bool = False
     macro_label: str = ""
+    # UserForms: the person's forms on screen (the engine's snapshots), the modal one a macro
+    # waits on, and the editor's form view (the design of the form module on screen).
+    vba_forms: List[Dict[str, Any]] = []
+    vba_form_pictures: Dict[str, str] = {}
+    vba_form_waiting: int = 0
+    vba_form_view: bool = False
+    # The form designer: the form module's design (a snapshot), the control selected ("" is the
+    # form), the toolbox tool in hand, the Properties window's rows, whether it can be edited.
+    vba_form_snapshot: Dict[str, Any] = {}
+    vba_form_selected: str = ""
+    vba_form_tool: str = ""
+    vba_form_props: List[Dict[str, Any]] = []
+    vba_form_editable: bool = False
+    vba_form_warnings: List[str] = []
+    vba_goto_line: int = 0
+    vba_goto_key: int = 0
+    vba_reopen: bool = False
     _peer: str = ""
     _guest: str = ""
 
@@ -231,6 +264,12 @@ class GridState(rx.State):
     @rx.var
     def dlg_sheets(self) -> List[str]:
         return list((self.dlg or {}).get("sheets", []) or [])
+
+    @rx.var
+    def vba_forms_blocked(self) -> bool:
+        """A MsgBox, an InputBox or a busy macro is in front of the forms."""
+        kind = (self.macro_prompt or {}).get("kind")
+        return bool(self.macro_busy or (kind and kind != "form"))
 
     # ------------------------------------------------------------ plumbing
 
@@ -1539,6 +1578,7 @@ class GridState(rx.State):
         self._vba_show(s, pick, line)
 
     def _vba_show(self, s: Session, module: str, line: int = 0) -> None:
+        other = module.lower() != (self.vba_module or "").lower()
         self.vba_module = module
         self.vba_error_line = line
         self.vba_dirty = False
@@ -1550,11 +1590,35 @@ class GridState(rx.State):
             if not line:
                 d = next((x for x in self.vba_diag if x["module"].lower() == module.lower()), None)
                 self.vba_error_line = int(d["line"]) if d else 0
+        if self.vba_kind == "form":
+            # A form opens on its design, as in the VBA editor (unless an error is to be shown).
+            if other:
+                self.vba_form_view = not line
+            if other:
+                self.vba_form_selected, self.vba_form_tool = "", ""
+            try:
+                self._vba_form_design(s)
+            except EngineError:
+                self.vba_form_snapshot = {}
+        else:
+            self.vba_form_view = False
+            self.vba_form_snapshot, self.vba_form_props, self.vba_form_warnings = {}, [], []
         self.vba_key += 1
 
     def _vba_apply(self, s: Session) -> None:
-        """Puts the editor's code into the workbook (when it changed)."""
-        if not self.vba_dirty or not self.vba_module or self.vba_locked:
+        """Puts the editor's code into the workbook (when it changed). Code typed while there is
+        no module (a workbook without macros) becomes a new module."""
+        if not self.vba_dirty or self.vba_locked:
+            return
+        if not self.vba_module:
+            if not (self.vba_code or "").strip():
+                return
+            taken = {m["name"].lower() for m in self.vba_modules}
+            n = 1
+            while f"module{n}" in taken:
+                n += 1
+            r = s.execute("macro.setModule", {"name": f"Module{n}", "code": self.vba_code})
+            self._vba_load(s, r["name"])
             return
         r = s.execute("macro.setModule", {"name": self.vba_module, "code": self.vba_code, "version": self.vba_version})
         self.vba_version = r["version"]
@@ -1571,8 +1635,17 @@ class GridState(rx.State):
             return None
         status = r.get("status")
         self.macro_label = r.get("label") or self.macro_label
+        if isinstance(r.get("forms"), list):
+            self._forms_shown(r["forms"])
+        self.vba_form_waiting = 0
         if status == "prompt":
             p = dict(r.get("prompt") or {})
+            if p.get("kind") == "form":
+                # A modal UserForm: it is the dialog; what the person does on it answers.
+                self.macro_prompt = {}
+                self.vba_form_waiting = int(p.get("formId") or 0)
+                self.macro_busy = False
+                return None
             self.macro_prompt = p
             self.macro_input = str(p.get("default") or "")
             self.macro_busy = False
@@ -1608,14 +1681,49 @@ class GridState(rx.State):
             self.vba_status = f"{self.macro_label}: done." if self.macro_label else ""
         return None
 
+    def _forms_shown(self, forms: List[Dict[str, Any]]) -> None:
+        """The forms now on the person's screen. The VBA editor makes way for them (it would
+        keep the keyboard to itself) and comes back when they are gone. Pictures go apart, by
+        key, so that a form's events don't send them again."""
+        pics: Dict[str, str] = {}
+
+        def strip(c: Dict[str, Any]) -> None:
+            pic = c.get("picture")
+            if isinstance(pic, str) and pic.startswith("data:"):
+                key = "p" + hashlib.sha1(pic.encode("ascii", "replace")).hexdigest()[:16]
+                pics[key] = pic
+                c["picture"] = key
+            for ch in c.get("children") or c.get("controls") or []:
+                strip(ch)
+
+        for f in forms:
+            strip(f)
+        if set(pics) != set(self.vba_form_pictures):
+            self.vba_form_pictures = pics
+        self.vba_forms = forms
+        if forms and self.vba_open:
+            self.vba_open = False
+            self.vba_reopen = True
+        elif not forms and self.vba_reopen:
+            self.vba_reopen = False
+            self.vba_open = True
+
     def _macro_pending(self, s: Session):
         """A run that an edit started (an event macro) and that waits for this tab."""
         run = getattr(s, "macro_run", None)
-        if run is None or not run.paused or self.macro_prompt or self.macro_busy:
+        if run is None or not run.paused or self.macro_prompt or self.macro_busy or self.vba_form_waiting:
             return None
         self.macro_label = run.label
         if run.state == "prompt":
-            self.macro_prompt = dict(run.prompt or {})
+            prompt = dict(run.prompt or {})
+            if prompt.get("kind") == "form":
+                try:
+                    self._forms_shown(s.execute("macro.forms", {})["forms"])
+                except EngineError:
+                    pass
+                self.vba_form_waiting = int(prompt.get("formId") or 0)
+                return None
+            self.macro_prompt = prompt
             self.macro_input = str((run.prompt or {}).get("default") or "")
             return None
         self.macro_busy = True
@@ -1822,8 +1930,11 @@ class GridState(rx.State):
 
     @rx.event
     async def vba_run(self, code: str, proc: str):
-        """F5 or Run: the Sub the cursor is in (a macro), else the Macros dialog."""
+        """F5 or Run: the Sub the cursor is in (a macro), else the Macros dialog; in a form's
+        module, the form."""
         self.vba_changed(code)
+        if self.vba_kind == "form":
+            return await self.vba_show_form(self.vba_module)
         target = None
         for m in self.vba_macros:
             if m["module"].lower() == self.vba_module.lower() and m["proc"].lower() == (proc or "").lower():
@@ -1840,27 +1951,185 @@ class GridState(rx.State):
         return await self._macro_step("macro.run", {"name": target}, apply_code=True)
 
     @rx.event
+    async def vba_show_form(self, name: str):
+        self.macro_label = name
+        return await self._macro_step("macro.showForm", {"name": name}, apply_code=True)
+
+    @rx.event
+    async def form_event(self, e: Dict[str, Any]):
+        """Something the person did on a form (or, in the editor's form view, a double-click)."""
+        if not isinstance(e, dict):
+            return None
+        ev = e.get("event") if isinstance(e.get("event"), dict) else {}
+        if ev.get("event") == "design":
+            return await self.vba_form_handler(str(ev.get("control") or ""))
+        try:
+            fid = int(e.get("form") or 0)
+        except (TypeError, ValueError):
+            return None
+        return await self._macro_step("macro.formEvent", {"form": fid, "event": ev})
+
+    @rx.event
+    async def vba_form_view_set(self, on: bool):
+        """The editor's View Object / View Code for a form module."""
+
+        def f(s):
+            self._vba_form_design(s)
+
+        self.vba_form_view = bool(on)
+        if on:
+            return await self._vba_edit(f)
+        return None
+
+    def _vba_form_design(self, s: Session) -> None:
+        if self.vba_kind != "form" or not self.vba_module:
+            self.vba_form_snapshot, self.vba_form_props, self.vba_form_warnings = {}, [], []
+            return
+        self._vba_form_shown(s.execute("macro.formDesign", {"name": self.vba_module, "control": self.vba_form_selected}))
+
+    def _vba_form_shown(self, r: Dict[str, Any]) -> None:
+        self.vba_form_snapshot = r.get("form") or {}
+        self.vba_form_selected = str(r.get("control") or "")
+        self.vba_form_props = list(r.get("props") or [])
+        self.vba_form_editable = bool(r.get("editable"))
+        self.vba_form_warnings = list(r.get("warnings") or [])
+
+    async def _vba_form_edit(self, ops: List[Dict[str, Any]], control: Optional[str] = None):
+        name = self.vba_module
+
+        def f(s):
+            r = s.execute("macro.editForm", {"name": name, "ops": ops, "control": self.vba_form_selected if control is None else control})
+            self._vba_form_shown(r)
+            self.vba_status = ""
+
+        return await self._vba_edit(f)
+
+    @rx.event
+    async def form_designer_event(self, e: Dict[str, Any]):
+        """What the person did in the form designer: select, move or resize, add from the toolbox,
+        remove, bring up a page, or double-click for code."""
+        if not isinstance(e, dict) or self.vba_kind != "form":
+            return None
+        kind = e.get("event")
+        control = str(e.get("control") or "")
+        if kind == "select":
+            self.vba_form_selected = control
+
+            def f(s):
+                self._vba_form_design(s)
+
+            return await self._vba_edit(f, apply_first=False)
+        if kind == "code":
+            return await self.vba_form_handler(control)
+        if not self.vba_form_editable:
+            return None
+        if kind == "geometry":
+            op = {"op": "geometry", "control": control}
+            for k in ("left", "top", "width", "height"):
+                if k in e:
+                    op[k] = e[k]
+            return await self._vba_form_edit([op], control)
+        if kind == "page":
+            return await self._vba_form_edit([{"op": "set", "control": control, "key": "position", "value": e.get("value")}], control)
+        if kind == "add":
+            self.vba_form_tool = ""
+            op = {"op": "add", "kind": str(e.get("kind") or ""), "parent": str(e.get("parent") or "")}
+            for k in ("left", "top", "width", "height"):
+                if e.get(k) is not None:
+                    op[k] = e[k]
+            return await self._vba_form_edit([op])
+        if kind == "delete" and control:
+            return await self._vba_form_edit([{"op": "delete", "control": control}], "")
+        return None
+
+    @rx.event
+    async def vba_form_set(self, key: str, value: Any):
+        """A property changed in the Properties window (of the selected control, or the form)."""
+        if not self.vba_form_editable:
+            return None
+        current = next((r for r in self.vba_form_props if r.get("key") == key), None)
+        if current is not None and str(current.get("value")) == str(value):
+            return None
+        return await self._vba_form_edit([{"op": "set", "control": self.vba_form_selected, "key": key, "value": value}])
+
+    @rx.event
+    async def vba_form_submit(self, form: Dict[str, Any]):
+        return await self.vba_form_set(str(form.get("key") or ""), form.get("value"))
+
+    @rx.event
+    def vba_form_tool_set(self, kind: str):
+        self.vba_form_tool = "" if kind == self.vba_form_tool else kind
+
+    @rx.event
+    async def vba_form_handler(self, control: str):
+        """Double-clicking a control in the form view opens its event procedure, written when the
+        module doesn't have it yet (the VBA editor's own behaviour)."""
+
+        def find(cs):
+            for c in cs or []:
+                if c.get("name") == control:
+                    return c.get("kind", "")
+                k = find(c.get("children"))
+                if k:
+                    return k
+            return ""
+
+        kind = find((self.vba_form_snapshot or {}).get("controls"))
+        name = control or "UserForm"
+        event = _DEFAULT_EVENTS.get(kind, "Click") if control else "Click"
+        code = self.vba_code or ""
+        lines = code.split("\n")
+        want = re.compile(rf"^\s*(Private\s+|Public\s+)?Sub\s+{re.escape(name)}_{event}\s*\(", re.I)
+        at = next((i for i, ln in enumerate(lines) if want.match(ln)), -1)
+        if at < 0:
+            body = code.rstrip("\n")
+            stub = f"Private Sub {name}_{event}({_EVENT_ARGS.get(event, '')})"
+            code = (body + "\n\n" if body else "") + stub + "\n    \nEnd Sub\n"
+            self.vba_code = code
+            self.vba_dirty = True
+            self.vba_key += 1
+            at = code.split("\n").index(stub)
+        self.vba_form_view = False
+        self.vba_goto_line = at + 2
+        self.vba_goto_key += 1
+        return None
+
+    @rx.event
     async def vba_export(self):
         name = self.vba_module
 
         def f(s):
             r = s.execute("macro.exportModule", {"name": name})
-            return rx.download(data=r["text"].encode("cp1252", "replace"), filename=r["fileName"], mime_type="text/plain")
+            files = [rx.download(data=r["text"].encode("cp1252", "replace"), filename=r["fileName"], mime_type="text/plain")]
+            if r.get("frx"):
+                files.append(rx.download(data=base64.b64decode(r["frx"]), filename=r["frxName"], mime_type="application/octet-stream"))
+            return files
 
         return await self._vba_edit(f)
 
     @rx.event
     async def vba_import(self, files: List[rx.UploadFile]):
-        for up in files[:5]:
-            raw = await up.read()
-            name = os.path.basename(up.name or up.filename or "Module1.bas")
+        got: Dict[str, bytes] = {}
+        for up in files[:10]:
+            got[os.path.basename(up.name or up.filename or "Module1.bas")] = await up.read()
+        frx = {n.lower()[:-4]: data for n, data in got.items() if n.lower().endswith(".frx")}
+        for name, raw in got.items():
+            if name.lower().endswith(".frx"):
+                continue
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 text = raw.decode("cp1252", "replace")
+            params: Dict[str, Any] = {"fileName": name, "text": text}
+            if name.lower().endswith(".frm"):
+                blob = frx.get(name.lower()[:-4])
+                if blob is None:
+                    self.vba_status = f"{name} is a UserForm: choose it together with its .frx file."
+                    continue
+                params["frx"] = base64.b64encode(blob).decode("ascii")
 
-            def f(s, text=text, name=name):
-                r = s.execute("macro.importModule", {"fileName": name, "text": text})
+            def f(s, params=params, name=name):
+                r = s.execute("macro.importModule", params)
                 self._vba_load(s, r["name"])
                 self.vba_status = f"Imported {name} as {r['name']}."
 

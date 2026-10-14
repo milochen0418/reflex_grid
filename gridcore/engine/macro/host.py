@@ -318,6 +318,23 @@ class XlHost(Host):
     def write_values(self, si: int, cells: List[Tuple[Tuple[int, int], Any]], kind: str = "value") -> None:
         raise VbaError(1004, "A worksheet function can't change cells or the workbook")
 
+    # ------------------------------------------------------------ UserForms
+
+    def form_cell(self, ex: Execution, ref: str) -> Any:
+        """A control's ControlSource (``Sheet1!B2``, a name): the first cell's value."""
+        return self.app.g_range(ex, ref).g_item(ex, 1, 1).g_value(ex)
+
+    def form_set_cell(self, ex: Execution, ref: str, value: Any) -> None:
+        self.require_writable()
+        self.app.g_range(ex, ref).g_item(ex, 1, 1).l_value(ex, value)
+
+    def form_range(self, ex: Execution, ref: str) -> List[List[Any]]:
+        """A list's RowSource: its cells' values, row by row."""
+        v = self.app.g_range(ex, ref).g_value(ex)
+        if type(v) is VArray:
+            return [list(r) for r in v.rows()]
+        return [[v]]
+
     def command(self, cid: str, params: Optional[Dict[str, Any]] = None, sheet: Optional[int] = None) -> Any:
         raise VbaError(1004, "A worksheet function can't change cells or the workbook")
 
@@ -362,6 +379,22 @@ class MacroHost(XlHost):
 
     def user_name(self) -> str:  # type: ignore[override]
         return self.user
+
+    def form_registry(self, ex: Execution) -> Any:
+        """This person's forms: they belong to the session, so a modeless form stays open (and
+        its events run) after the macro that showed it."""
+        from ...vba.msforms import FormRegistry
+
+        reg = self.s.vba_forms
+        if reg is None:
+            reg = self.s.vba_forms = FormRegistry()
+        return reg.bind(ex.rt)
+
+    def clipboard_text(self, ex: Execution) -> Optional[str]:  # type: ignore[override]
+        return getattr(self.s, "vba_clipboard", None)
+
+    def set_clipboard_text(self, ex: Execution, text: str) -> None:  # type: ignore[override]
+        self.s.vba_clipboard = text
 
     def selection(self):
         if self.pending is not None:
@@ -705,6 +738,9 @@ class UdfHost(XlHost):
     def output(self, ex: Execution, text: str) -> None:
         ex.output.append(text)
         del ex.output[:-200]
+
+    def form_registry(self, ex: Execution) -> Any:
+        raise VbaError(1004, "A worksheet function can't load or show UserForms")
 
 
 def _home_selection(sheet):

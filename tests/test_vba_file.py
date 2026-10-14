@@ -299,3 +299,16 @@ def test_unreadable_project_is_kept():
     assert any("VBA project can't be read" in w for w in warnings)
     again = zipfile.ZipFile(io.BytesIO(write_xlsx(back)))
     assert again.read("xl/vbaProject.bin") == junk
+
+
+def test_rebuilt_project_text_has_one_id():
+    # A project read from a file, then edited: the PROJECT stream is rebuilt with its ID once.
+    from gridcore.xlsx.ovba import read_project, write_project
+    from gridcore.model.vba import new_project
+    from dataclasses import replace
+
+    p = new_project(["Sheet1"]).with_module(VbaModule("Module1", STANDARD, "Sub A()\nEnd Sub\n", default_attributes("Module1", STANDARD)))
+    q = read_project(write_project(p))
+    r = replace(q.with_module(replace(q.module("Module1"), code="Sub B()\nEnd Sub\n")), modified=True)
+    text = read_cfb(write_project(r)).stream("PROJECT").decode("cp1252")
+    assert [ln for ln in text.split("\r\n") if ln.startswith("ID=")] == [text.split("\r\n")[0]]

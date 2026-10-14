@@ -161,6 +161,10 @@ class Session:
         self.macro_run = None
         self.interactive_macros = False
         self.undo_group: Optional[str] = None
+        # The UserForms this person's macros loaded (gridcore.vba.msforms.FormRegistry), and
+        # the text macros put on the clipboard (MSForms.DataObject).
+        self.vba_forms = None
+        self.vba_clipboard: Optional[str] = None
 
     # ------------------------------------------------------------ documents
 

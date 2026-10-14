@@ -1,6 +1,7 @@
 // ReflexGrid's VBA code editor: a textarea over a highlighted copy of its text, with line numbers.
 // Keys: Tab / Shift+Tab indent, Enter keeps the indent, Ctrl/Cmd+S applies the code, F5 runs the
-// Sub the cursor is in. The code goes to the server on onChange (debounced) and onSave.
+// Sub the cursor is in. The code goes to the server on onChange (debounced) and onSave. A new
+// gotoKey puts the caret at the end of line gotoLine (an event procedure the form view opened).
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
 const KEYWORDS = new Set(
@@ -94,7 +95,7 @@ function procedureAt(text, line) {
 }
 
 export function VbaEditor(props) {
-  const { value, docKey, errorLine, readOnly, onChange, onSave, onRun, fontSize } = props;
+  const { value, docKey, errorLine, readOnly, onChange, onSave, onRun, fontSize, gotoLine, gotoKey } = props;
   const [text, setText] = useState(value || "");
   const area = useRef(null);
   const pre = useRef(null);
@@ -166,6 +167,24 @@ export function VbaEditor(props) {
     if (top < a.scrollTop || top > a.scrollTop + a.clientHeight - lh) a.scrollTop = Math.max(0, top - a.clientHeight / 3);
     syncScroll();
   }, [errorLine, docKey]);
+
+  useEffect(() => {
+    if (!gotoLine) return;
+    requestAnimationFrame(() => {
+      const a = area.current;
+      if (!a) return;
+      const lines = a.value.split("\n");
+      let at = 0;
+      for (let i = 0; i < gotoLine - 1 && i < lines.length; i++) at += lines[i].length + 1;
+      at += (lines[gotoLine - 1] || "").length;
+      a.focus();
+      a.setSelectionRange(at, at);
+      const lh = (fontSize || 13) * 1.5;
+      const top = (gotoLine - 1) * lh;
+      if (top < a.scrollTop || top > a.scrollTop + a.clientHeight - lh) a.scrollTop = Math.max(0, top - a.clientHeight / 3);
+      syncScroll();
+    });
+  }, [gotoKey]);
 
   const replaceRange = (a, start, end, insert, selStart, selEnd) => {
     const t = a.value.slice(0, start) + insert + a.value.slice(end);

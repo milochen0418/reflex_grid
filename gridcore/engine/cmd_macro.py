@@ -1,5 +1,6 @@
 """Macro commands: the VBA project (modules, code, import/export), running macros and answering
-their dialogs, event macros on or off, and the Immediate window.
+their dialogs, UserForms (showing them, what the person does on them, their designs), event macros
+on or off, and the Immediate window.
 
 A workbook's project is ``Workbook.vba`` (:mod:`gridcore.model.vba`); changing code is an
 ordinary undoable edit, so everyone on a shared workbook gets it and undo takes it back. Runs
@@ -9,6 +10,7 @@ until ``macro.answer`` (or ``macro.stop``) resumes it.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import re
 from dataclasses import replace
@@ -29,7 +31,7 @@ from ..model.vba import (
     split_source,
     valid_module_name,
 )
-from .session import EngineError, Session, command, edit, p_bool, p_str
+from .session import EngineError, Session, command, edit, p_bool, p_int, p_str
 
 MAX_MODULE = 2 * 1024 * 1024
 
@@ -190,8 +192,6 @@ def macro_set_module(s: Session, p: Dict[str, Any]):
             if err:
                 raise EngineError(err)
             return proj.with_module(VbaModule(name, STANDARD, text, default_attributes(name, STANDARD)))
-        if m.kind == FORM:
-            raise EngineError("UserForms can't be edited in ReflexGrid.")
         return proj.with_module(replace(m, code=text))
 
     proj = _change_project(s, f)
@@ -201,11 +201,11 @@ def macro_set_module(s: Session, p: Dict[str, Any]):
     return {"name": m.name if m else name, "version": _version(m), "diagnostics": diagnostics(proj)}
 
 
-@command("macro.addModule", "Insert Module", menu=("Developer", "Code"), params="{kind?: standard|class, name?, code?}")
+@command("macro.addModule", "Insert Module", menu=("Developer", "Code"), params="{kind?: standard|class|form, name?, code?}")
 def macro_add_module(s: Session, p: Dict[str, Any]):
     kind = p_str(p, "kind", STANDARD) or STANDARD
-    if kind not in (STANDARD, CLASS):
-        raise EngineError("Only standard and class modules can be added.")
+    if kind not in (STANDARD, CLASS, FORM):
+        raise EngineError("Only modules, class modules and UserForms can be added.")
     if s.doc().wb.vba is not None:
         _editable(s)
     made: List[str] = []
@@ -219,7 +219,15 @@ def macro_add_module(s: Session, p: Dict[str, Any]):
             raise EngineError(f"A module named {name} already exists.")
         made.append(name)
         code = normalize_code(p_str(p, "code", "") or "")
-        return proj.with_module(VbaModule(name, kind, code, default_attributes(name, kind)))
+        designer: tuple = ()
+        if kind == FORM:
+            # A new form, as the VBA editor makes one (its inside 228 x 150.75 points).
+            from ..model.forms import FormDesign
+            from ..xlsx.oforms import write_design
+            from ..xlsx.ovba import codec
+
+            designer = tuple(write_design(FormDesign(name, caption=name, width=228, height=150.75), codec(proj.code_page)))
+        return proj.with_module(VbaModule(name, kind, code, default_attributes(name, kind), designer=designer))
 
     _change_project(s, f)
     return {"name": made[0], "kind": kind}
@@ -269,7 +277,7 @@ def parse_module_file(file_name: str, text: str):
     """(name, kind, code, attributes, member attributes) of an exported module (.bas or .cls)."""
     ext = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
     if ext == "frm":
-        raise EngineError("UserForms (.frm) can't be imported: ReflexGrid doesn't show forms.")
+        raise EngineError("A UserForm (.frm) comes with its .frx file; import both together.")
     body = text.replace("\r\n", "\n").replace("\r", "\n")
     if body.startswith("﻿"):
         body = body[1:]
@@ -299,7 +307,87 @@ def parse_module_file(file_name: str, text: str):
     return name, kind, code, predeclared, members
 
 
-@command("macro.importModule", "Import File", menu=("Developer", "Code"), params="{fileName: Module1.bas | Class1.cls, text}")
+def parse_form_file(file_name: str, text: str):
+    """(name, the form's header lines for its VBFrame, code, member attributes) of an exported
+    UserForm (.frm): ``VERSION 5.00``, a ``Begin {…} Name`` … ``End`` block of the form's
+    properties, its attributes and its code (the controls are in the .frx)."""
+    body = text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+    lines = body.split("\n")
+    if len(lines) < 3 or not lines[0].strip().upper().startswith("VERSION") or not lines[1].strip().upper().startswith("BEGIN"):
+        raise EngineError(f"{file_name} isn't a UserForm exported from the VBA editor.")
+    frame = [lines[1]]
+    depth = 0
+    i = 2
+    while i < len(lines):
+        line = lines[i]
+        word = line.strip().split(" ", 1)[0].upper() if line.strip() else ""
+        i += 1
+        if word in ("END", "ENDPROPERTY"):
+            if depth == 0:
+                frame.append(line)
+                break
+            depth -= 1
+        elif word in ("BEGIN", "BEGINPROPERTY"):
+            depth += 1
+        elif word == "OLEOBJECTBLOB":
+            continue
+        frame.append(line)
+    else:
+        raise EngineError(f"{file_name}: the form's properties don't end.")
+    code, attrs, members = split_source("\n".join(lines[i:]))
+    name = ""
+    for a in attrs:
+        m = re.match(r'^\s*Attribute\s+VB_Name\s*=\s*"([^"]*)"', a, re.I)
+        if m:
+            name = m.group(1)
+    if not name:
+        name = lines[1].split()[-1] if len(lines[1].split()) >= 3 else "UserForm1"
+    return name, frame, code, members
+
+
+def _import_form(s: Session, file_name: str, text: str, frx_b64: Any) -> Dict[str, Any]:
+    from ..xlsx.oforms import VBFRAME, FormError, design_streams, frx_items, read_design
+    from ..xlsx.ovba import codec
+
+    if not isinstance(frx_b64, str) or not frx_b64:
+        raise EngineError("A UserForm (.frm) comes with its .frx file; import both together.")
+    try:
+        frx = base64.b64decode(frx_b64)
+    except (ValueError, TypeError):
+        raise EngineError("The .frx file couldn't be read.")
+    name, frame, code, members = parse_form_file(file_name, text)
+    err = valid_module_name(name)
+    if err:
+        raise EngineError(f"{name}: {err}")
+    try:
+        items = [it for it in frx_items(frx) if it[0] != VBFRAME]
+    except FormError as e:
+        raise EngineError(f"The .frx file can't be read: {e}")
+    made: List[str] = []
+
+    def f(proj: VbaProject) -> VbaProject:
+        n = name
+        k = 1
+        while proj.module(n) is not None:
+            n = f"{name}{k}"
+            k += 1
+        head = list(frame)
+        if n != name:
+            head[0] = re.sub(r"\S+\s*$", n + " ", head[0])
+        vbframe = "\r\n".join(["VERSION 5.00"] + head + [""]).encode(codec(proj.code_page), "replace")
+        designer = tuple(sorted(items + [(VBFRAME, vbframe)]))
+        try:
+            read_design(n, design_streams(designer), codec(proj.code_page))
+        except FormError as e:
+            raise EngineError(f"The form in {file_name} can't be read: {e}")
+        made.append(n)
+        return proj.with_module(VbaModule(n, FORM, code, default_attributes(n, FORM), members, designer=designer))
+
+    _change_project(s, f)
+    return {"name": made[0], "kind": FORM}
+
+
+@command("macro.importModule", "Import File", menu=("Developer", "Code"), params="{fileName: Module1.bas | Class1.cls | UserForm1.frm, text, frx?: base64 of the form's .frx}")
 def macro_import_module(s: Session, p: Dict[str, Any]):
     if s.doc().wb.vba is not None:
         _editable(s)
@@ -309,6 +397,8 @@ def macro_import_module(s: Session, p: Dict[str, Any]):
         raise EngineError("macro.importModule: missing `text`")
     if len(text) > MAX_MODULE:
         raise EngineError("That file is too large.")
+    if file_name.lower().endswith(".frm"):
+        return _import_form(s, file_name, text, p.get("frx"))
     name, kind, code, predeclared, members = parse_module_file(file_name, text)
     err = valid_module_name(name)
     if err:
@@ -331,13 +421,15 @@ def macro_import_module(s: Session, p: Dict[str, Any]):
     return {"name": made[0], "kind": kind}
 
 
-@command("macro.exportModule", "Export File", menu=("Developer", "Code"), params="{name} → {fileName, text}", undoable=False, journal=False)
+@command("macro.exportModule", "Export File", menu=("Developer", "Code"), params="{name} → {fileName, text, frxName?, frx?: base64 (a UserForm's .frx)}", undoable=False, journal=False)
 def macro_export_module(s: Session, p: Dict[str, Any]):
-    _editable(s)
+    proj = _editable(s)
     name = p_str(p, "name") or ""
     m = _reconciled(s.doc().wb).module(name)
     if m is None:
         raise EngineError(f"There is no module named {name}.")
+    if m.kind == FORM:
+        return _export_form(proj, m)
     if m.kind == STANDARD:
         head = [f'Attribute VB_Name = "{m.name}"']
         ext = "bas"
@@ -350,6 +442,31 @@ def macro_export_module(s: Session, p: Dict[str, Any]):
     body = replace(m, attributes=()).source().rstrip("\n")
     # Exported files have Windows line ends, as the VBA editor writes them.
     return {"fileName": f"{m.name}.{ext}", "text": "\r\n".join(head + ([body] if body else [])).replace("\r\n", "\n").replace("\n", "\r\n") + "\r\n"}
+
+
+def _export_form(proj: VbaProject, m: VbaModule) -> Dict[str, Any]:
+    """A UserForm as the VBA editor exports it: the .frm (its properties, attributes and code)
+    and the .frx (its controls)."""
+    from ..xlsx.oforms import VBFRAME, write_frx
+    from ..xlsx.ovba import codec
+    from .macro.project import form_design
+
+    if not m.designer:
+        raise EngineError(f"{m.name}'s design is missing from the workbook; only its code can be copied.")
+    frame = dict(m.designer).get(VBFRAME, b"").decode(codec(proj.code_page), "replace").replace("\r\n", "\n").split("\n")
+    head = [ln for ln in frame if ln.strip() and not ln.strip().upper().startswith(("VERSION", "TYPEINFOVER"))]
+    if not head or not head[0].strip().upper().startswith("BEGIN"):
+        head = [f"Begin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {m.name} ", "End"]
+    blob = f'   OleObjectBlob   =   "{m.name}.frx":0000'
+    props = head[1:-1]
+    at = next((i for i, ln in enumerate(props) if ln.strip().split(" ", 1)[0].lower() > "oleobjectblob"), len(props))
+    head = [head[0]] + props[:at] + [blob] + props[at:] + [head[-1]]
+    attrs = [f'Attribute VB_Name = "{m.name}"', "Attribute VB_GlobalNameSpace = False", "Attribute VB_Creatable = False",
+             "Attribute VB_PredeclaredId = True", "Attribute VB_Exposed = False"]
+    body = replace(m, attributes=()).source().rstrip("\n")
+    text = "\r\n".join(["VERSION 5.00"] + head + attrs + ([body.replace("\n", "\r\n")] if body else [])) + "\r\n"
+    frx = write_frx(m.designer, form_design(proj, m))
+    return {"fileName": f"{m.name}.frm", "text": text, "frxName": f"{m.name}.frx", "frx": base64.b64encode(frx).decode("ascii")}
 
 
 @command("macro.removeAll", "Remove Macros", menu=("Developer", "Code"), params="{} (the workbook becomes a macro-free .xlsx)")
@@ -394,9 +511,45 @@ def _start(s: Session, job, label: str, p: Dict[str, Any]):
     answers = p.get("answers")
     run = MacroRun(s, job, label, answers if isinstance(answers, list) else None, interactive=bool(s.interactive_macros), time_limit=float(p.get("timeLimit") or 60.0), user_name=s.prefs.get("userName", ""))
     s.undo_group = f"macro-{run.id}"
-    r = run.step()
+    return _stepped(s, run, run.step())
+
+
+def _stepped(s: Session, run, r) -> Dict[str, Any]:
+    """A run's step as the UI gets it: with the forms now on the person's screen."""
     s.macro_run = run if run.paused else None
-    return {**r, "run": run.id}
+    if not run.paused:
+        _close_stranded_forms(s)
+    return {**r, "run": run.id, "forms": _forms(s)}
+
+
+def _registry(s: Session):
+    """This person's forms, if they belong to the workbook's code as it is now."""
+    reg = s.vba_forms
+    if reg is None or reg.rt is None or not s.docs:
+        return None
+    proj = s.doc().wb.vba
+    if proj is None or proj.unreadable:
+        return None
+    from .macro.project import runtime_for
+
+    return reg if reg.rt is runtime_for(proj) else None
+
+
+def _forms(s: Session) -> List[Dict[str, Any]]:
+    reg = _registry(s)
+    return [f.snapshot() for f in reg.shown()] if reg is not None else []
+
+
+def _close_stranded_forms(s: Session) -> None:
+    """Modal forms nobody waits for any more (the macro showing them stopped, or failed while
+    they were up) go away, as ending the macro in Excel unloads them."""
+    reg = _registry(s)
+    if reg is None:
+        return
+    for f in reg.shown():
+        if f.modal:
+            f.loaded = f.shown = f.modal = False
+            reg.forget(f)
 
 
 @command("macro.run", "Run Macro", menu=("View", "Macros"), params="{name: Hello | Module1.Hello, args?: [..], answers?: [MsgBox/InputBox answers in order]} → {status: done|error|stopped|prompt|busy, output, messages, error, prompt}")
@@ -470,17 +623,19 @@ def macro_answer(s: Session, p: Dict[str, Any]):
     if run.state != "prompt":
         raise EngineError("The macro isn't asking anything.")
     value = p.get("value")
-    if run.prompt and run.prompt.get("kind") == "msgbox":
+    kind = (run.prompt or {}).get("kind")
+    if kind == "msgbox":
         try:
             value = int(value)
         except (TypeError, ValueError):
             value = 1
+    elif kind == "form":
+        # What the person did on the form (see UserForm.dispatch); anything else closes it.
+        value = value if isinstance(value, dict) else None
     elif value is None:
         value = False if (run.prompt or {}).get("cancel_false") else ""
     s.undo_group = f"macro-{run.id}"
-    r = run.step(value)
-    s.macro_run = run if run.paused else None
-    return {**r, "run": run.id}
+    return _stepped(s, run, run.step(value))
 
 
 @command("macro.continue", "Continue Macro", params="{} (after a time slice)")
@@ -489,9 +644,7 @@ def macro_continue(s: Session, p: Dict[str, Any]):
     if run.state != "busy":
         raise EngineError("The macro is waiting for an answer.")
     s.undo_group = f"macro-{run.id}"
-    r = run.step()
-    s.macro_run = run if run.paused else None
-    return {**r, "run": run.id}
+    return _stepped(s, run, run.step())
 
 
 @command("macro.stop", "Stop Macro", shortcut="Ctrl+Break", params="{}")
@@ -501,6 +654,157 @@ def macro_stop(s: Session, p: Dict[str, Any]):
         return {"status": "idle"}
     run.cancel()
     s.undo_group = f"macro-{run.id}"
-    r = run.step(None)
+    r = _stepped(s, run, run.step(None))
     s.macro_run = None
-    return {**r, "run": run.id}
+    return r
+
+
+# ---------------------------------------------------------------- UserForms
+
+
+@command("macro.forms", "UserForms on Screen", params="{} → {forms: [the person's forms on screen], waiting: id of the modal form a macro waits on}", undoable=False, journal=False)
+def macro_forms(s: Session, p: Dict[str, Any]):
+    run = s.macro_run
+    waiting = (run.prompt or {}).get("formId") if run is not None and run.state == "prompt" and (run.prompt or {}).get("kind") == "form" else None
+    return {"forms": _forms(s), "waiting": waiting}
+
+
+@command("macro.showForm", "Run UserForm", menu=("Developer", "Code"), params="{name: UserForm1, modal?: bool (default: the form's ShowModal)} → like macro.run")
+def macro_show_form(s: Session, p: Dict[str, Any]):
+    proj = _project(s)
+    name = (p_str(p, "name") or "").strip()
+    m = proj.module(name)
+    if m is None or m.kind != FORM:
+        raise EngineError(f"There is no UserForm named {name}.")
+    modal = p.get("modal")
+    from ..vba.values import MISSING
+
+    def job(ex, host):
+        mod = ex.rt.module(m.name)
+        inst = ex.rt.form_default(ex, mod)
+        inst.form.member(ex).g_show(ex, MISSING if modal is None else (1 if p_bool(p, "modal", True) else 0))
+
+    return _start(s, job, m.name, p)
+
+
+@command("macro.formEvent", "UserForm Event", params="{form: id, event: {event: click|change|dblclick|focus|keypress|keydown|spin|scroll|enter|escape|close, control?, value?, values?: {control: value}, focus?}} → like macro.run")
+def macro_form_event(s: Session, p: Dict[str, Any]):
+    """What a person did on one of their forms: answers the macro waiting on it (a modal form),
+    or runs the form's event code (a modeless one) like a macro of its own."""
+    _project(s)
+    fid = p_int(p, "form", 0)
+    ev = p.get("event") if isinstance(p.get("event"), dict) else {}
+    run = s.macro_run
+    if run is not None and run.paused:
+        prompt = run.prompt or {}
+        if run.state == "prompt" and prompt.get("kind") == "form" and prompt.get("formId") == fid:
+            s.undo_group = f"macro-{run.id}"
+            return _stepped(s, run, run.step(ev))
+        raise EngineError(f"The macro {run.label} is waiting for an answer; answer it or stop it first.")
+    reg = _registry(s)
+    form = reg.get(fid) if reg is not None else None
+    if form is None or not form.shown:
+        return {"status": "done", "output": [], "messages": [], "error": None, "forms": _forms(s)}
+
+    def job(ex, host):
+        form.dispatch(ex, ev)
+
+    return _start(s, job, form.name, p)
+
+
+def _form_view(proj: VbaProject, m: VbaModule, control: str = "") -> Dict[str, Any]:
+    from ..model.forms import parse_ole_color, property_rows
+    from ..vba.msforms import css_color, design_snapshot
+    from .macro.project import form_design
+
+    d = form_design(proj, m)
+    if control and d.find(control) is None:
+        control = ""
+    rows = property_rows(d, control)
+    for row in rows:
+        row["css"] = css_color(parse_ole_color(row["value"])) if row["type"] == "color" else ""
+        row["value"] = "" if row["value"] is None else str(row["value"]) if row["type"] != "bool" else row["value"]
+    return {"name": m.name, "form": design_snapshot(d), "warnings": list(d.warnings), "control": control,
+            "props": rows, "editable": bool(m.designer) and not any("can't be read" in w for w in d.warnings)}
+
+
+@command("macro.formDesign", "UserForm Design", params="{name, control?} → {name, form: the form as designed, warnings, props: the Properties window of control (or of the form), editable}", undoable=False, journal=False)
+def macro_form_design(s: Session, p: Dict[str, Any]):
+    proj = _editable(s)
+    name = p_str(p, "name") or ""
+    m = proj.module(name)
+    if m is None or m.kind != FORM:
+        raise EngineError(f"There is no UserForm named {name}.")
+    return _form_view(proj, m, p_str(p, "control") or "")
+
+
+@command("macro.editForm", "Edit UserForm", menu=("Developer", "Code"), params="{name, ops: [{op: set, control?: '' for the form, key, value} | {op: add, kind, parent?, left, top, width?, height?} | {op: delete, control}], control?} → like macro.formDesign, and added")
+def macro_edit_form(s: Session, p: Dict[str, Any]):
+    """The form designer's changes: properties (as the Properties window gives them), controls
+    added from the toolbox, controls removed. The form's design changes in place: what the
+    changes don't touch stays as it was, so a form made in Excel keeps everything."""
+    from ..model.forms import property_change
+    from ..xlsx.oforms import FormError
+    from ..xlsx.oforms_edit import FormEditor
+    from ..xlsx.ovba import codec
+
+    _editable(s)
+    name = p_str(p, "name") or ""
+    ops = p.get("ops")
+    if not isinstance(ops, list) or not ops:
+        raise EngineError("macro.editForm: which changes (`ops`)?")
+    added: List[str] = []
+    focus = [p_str(p, "control") or ""]
+    proj = _editable(s)
+    m = proj.module(name)
+    if m is None or m.kind != FORM:
+        raise EngineError(f"There is no UserForm named {name}.")
+    if not m.designer:
+        raise EngineError(f"{m.name}'s design is missing from the workbook.")
+
+    def edited() -> tuple:
+        try:
+            ed = FormEditor(m.name, m.designer, codec(proj.code_page))
+            for op in ops[:200]:
+                kind = op.get("op") if isinstance(op, dict) else None
+                if kind == "set":
+                    control = str(op.get("control") or "")
+                    key = str(op.get("key") or "")
+                    if control:
+                        c = ed.design.find(control)
+                        if c is None:
+                            raise EngineError(f"There is no control named {control}.")
+                        changes = property_change(c, key, op.get("value"))
+                        ed.set(control, changes)
+                        if "name" in changes:
+                            focus[0] = changes["name"]
+                    else:
+                        ed.set_form(property_change(ed.design, key, op.get("value"), form=True))
+                elif kind == "geometry":
+                    control = str(op.get("control") or "")
+                    changes = {k: round(float(op[k]), 2) for k in ("left", "top", "width", "height") if k in op}
+                    if any(changes.get(k, 1) <= 0 for k in ("width", "height")):
+                        raise EngineError("A control's width and height must be more than 0.")
+                    if control:
+                        ed.set(control, changes)
+                    else:
+                        ed.set_form({k: v for k, v in changes.items() if k in ("width", "height")})
+                elif kind == "add":
+                    new = ed.add(str(op.get("kind") or ""), str(op.get("parent") or ""), float(op.get("left") or 6), float(op.get("top") or 6),
+                                 float(op["width"]) if op.get("width") else None, float(op["height"]) if op.get("height") else None)
+                    added.append(new)
+                    focus[0] = new
+                elif kind == "delete":
+                    ed.delete(str(op.get("control") or ""))
+                    focus[0] = ""
+                else:
+                    raise EngineError(f"macro.editForm: unknown change {kind!r}.")
+        except (FormError, ValueError, TypeError, KeyError) as e:
+            raise EngineError(str(e).strip("'\""))
+        return ed.items()
+
+    designer = edited()
+    if designer != tuple(sorted(m.designer)):
+        # One edit of the project (undo takes it back), only when the form did change.
+        proj = _change_project(s, lambda pr: pr.with_module(replace(pr.module(name), designer=designer)))
+    return {**_form_view(proj, proj.module(name), focus[0]), "added": added}

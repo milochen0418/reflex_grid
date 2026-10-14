@@ -1043,6 +1043,10 @@ class Parser:
         e = None if self.at_end() or self.at_kw("ELSE") else self.expr()
         return [A.Randomize(e, line)]
 
+    def st_load(self, line: int) -> List[A.Stmt]:
+        t = self.next()
+        return [A.LoadUnload(self.expr(), t.up == "UNLOAD", line)]
+
     def st_attribute(self, line: int) -> List[A.Stmt]:
         self.next()
         start = self.i
@@ -1064,8 +1068,6 @@ class Parser:
             what = f"File I/O ({t.text})"
         elif t.up in ("DATE", "TIME"):
             what = f"Setting the system {t.text.lower()}"
-        elif t.up in ("LOAD", "UNLOAD"):
-            what = "UserForms"
         self.rest_of_statement()
         return [A.Unsupported(what, line)]
 
@@ -1257,6 +1259,8 @@ _STATEMENTS: Dict[str, Callable[[Parser, int], List[A.Stmt]]] = {
     "RANDOMIZE": Parser.st_randomize,
     "BEEP": Parser.st_beep,
     "ATTRIBUTE": Parser.st_attribute,
+    "LOAD": Parser.st_load,
+    "UNLOAD": Parser.st_load,
 }
-for _w in ("OPEN", "CLOSE", "PRINT", "WRITE", "INPUT", "LINE", "GET", "PUT", "SEEK", "LOCK", "UNLOCK", "WIDTH", "KILL", "MKDIR", "RMDIR", "CHDIR", "CHDRIVE", "FILECOPY", "NAME", "SAVESETTING", "DELETESETTING", "SENDKEYS", "APPACTIVATE", "LOAD", "UNLOAD", "RESET", "DATE", "TIME", "SETATTR"):
+for _w in ("OPEN", "CLOSE", "PRINT", "WRITE", "INPUT", "LINE", "GET", "PUT", "SEEK", "LOCK", "UNLOCK", "WIDTH", "KILL", "MKDIR", "RMDIR", "CHDIR", "CHDRIVE", "FILECOPY", "NAME", "SAVESETTING", "DELETESETTING", "SENDKEYS", "APPACTIVATE", "RESET", "DATE", "TIME", "SETATTR"):
     _STATEMENTS[_w] = Parser.st_unsupported

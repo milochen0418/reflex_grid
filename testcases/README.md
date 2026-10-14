@@ -30,6 +30,7 @@ The `run_test.py` script should:
 | `collab_live` | Three people on one workbook: presence, each other's selections and typing, edits and formulas reaching everyone, change highlights, per-person sheets, per-person undo, the shared title, jumping to someone, leaving and closing a tab |
 | `workbook_manager` | The workbook list: who is editing, a new workbook and its title, search and filters, uploading, downloading, deleting a workbook someone has open |
 | `vba_macros` | Excel macros: the Developer tab and VBA editor, F5 with `MsgBox`/`InputBox` answers, a VBA function in a formula, one undo for a run, the Macros dialog, event macros behind the security bar, stopping a long macro, downloading `.xlsm` and opening it again |
+| `vba_userforms` | UserForms: an `.xlsm` with forms (built by the suite) opened in the browser; a modal form filled in (typing, a drop-down list, a check box, a `KeyPress` handler, a `MsgBox` over the form, OK writing the cells, Esc as Cancel), a modeless form beside the grid, the VBA editor's form view (double-click for an event procedure, Run Form), designing a new form (Toolbox, Properties window, moving a control, its code, running it), the forms kept in the downloaded `.xlsm`, and the editor staying light in a dark-mode browser |
 | `collab_call` | Calling everyone on a workbook: who is rung, declining, accepting, joining later; with the call app running, the call itself (needs a `call.join` provider, see below) |
 
 ## Running

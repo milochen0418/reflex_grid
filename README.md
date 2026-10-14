@@ -24,8 +24,9 @@ dynamic arrays, an "every action is a command" API, and a sandboxed VBA interpre
   formatting, data validation dropdowns, AutoFilter, sorting, tables, charts, notes, freeze panes, zoom,
   undo/redo, and the familiar keyboard shortcuts.
 - **Excel macros**: `.xlsm` workbooks keep their VBA project; edit it in the VBA editor, run macros (with their
-  `MsgBox` and `InputBox`), use VBA functions in formulas, and let `Worksheet_Change`-style event macros run —
-  on the server, in a sandbox, checked against Excel's own answers. See [docs/vba.md](docs/vba.md).
+  `MsgBox` and `InputBox`), use VBA functions in formulas, let `Worksheet_Change`-style event macros run, and use
+  the workbook's **UserForms** in the browser, modal or modeless, with their event code — on the server, in a
+  sandbox, checked against Excel's own answers. See [docs/vba.md](docs/vba.md).
 - **Scriptable**: every user-visible action is a command with a stable id (`cell.set`, `home.bold`,
   `data.sortAscending`…); the UI, the tests and your own scripts all use the same `Session.execute` API.
 - **Edit together, live**: a workbook list like [CoDoc in MD](https://github.com/milochen0418/codoc_in_md)'s
@@ -52,7 +53,7 @@ dynamic arrays, an "every action is a command" API, and a sandboxed VBA interpre
 | Sheets | Add, delete, rename, move/copy, duplicate, tab colour, hide/unhide, protect (with password) and workbook structure protection |
 | View | Freeze panes, gridlines, headings, zoom 10–400 %, right-to-left |
 | What-if | Goal Seek |
-| Macros (VBA) | Developer tab, VBA editor (modules, class modules, import/export `.bas`/`.cls`, compile errors, Immediate window), Macros dialog (Alt+F8), `MsgBox`/`InputBox` dialogs, Stop for long macros, VBA functions in formulas, event macros (off until enabled, like Excel's *Enable Content*), a macro run as one undo step; the Excel object model macros use (`Range`, `Cells`, `Worksheets`, `Application`, tables, filters, names, formats…); no file, shell, network or COM access ([details and limits](docs/vba.md)) |
+| Macros (VBA) | Developer tab, VBA editor (modules, class modules, UserForms with a form designer — Toolbox and Properties window —, import/export `.bas`/`.cls`/`.frm`+`.frx`, compile errors, Immediate window), Macros dialog (Alt+F8), `MsgBox`/`InputBox` dialogs, UserForms (shown from their design; `Initialize`/`Show`/`Hide`/`Unload`/`QueryClose`, control events, `ControlSource`/`RowSource`, modal and modeless), Stop for long macros, VBA functions in formulas, event macros (off until enabled, like Excel's *Enable Content*), a macro run as one undo step; the Excel object model macros use (`Range`, `Cells`, `Worksheets`, `Application`, tables, filters, names, formats…); no file, shell, network or COM access ([details and limits](docs/vba.md)) |
 | Files | Open `.xlsx`/`.xlsm`/`.csv`/`.tsv` (upload), download `.xlsx` (`.xlsm` with macros), export CSV, print (with the sheet's page setup), save as web page, document properties; workbooks are saved on the server as `.xlsx` (`.xlsm` with macros) while you edit |
 | Together | Workbook list (search, filters, who is editing now, new, upload, download, delete), shared links, presence (avatars, "N here"), everyone's selection and typing cell in their colour, changes highlighted for a moment, per-person sheets, zoom and undo, a shared title, calls |
 
@@ -181,6 +182,7 @@ poetry run pytest -q                              # engine, collaboration, formu
 poetry run ./run_test_suite.sh smoke_home         # Playwright end-to-end suites (see testcases/README.md)
 poetry run ./run_test_suite.sh collab_live        # three people editing one workbook
 poetry run ./run_test_suite.sh vba_macros         # the VBA editor, macro dialogs, event macros, .xlsm
+poetry run ./run_test_suite.sh vba_userforms      # UserForms: modal and modeless, the editor's form view
 poetry run python scripts/excel_vba_oracle_mac.py --objects   # macros compared with Microsoft Excel (Mac, opt-in)
 ```
 
@@ -194,8 +196,10 @@ gridcore/                 the spreadsheet engine (no UI dependencies)
   functions/              the worksheet function library (478 functions)
   model/                  workbook, sheets, copy-on-write cell store, styles, features
   calc/                   evaluator, dependency graph, recalculation, dynamic arrays
-  xlsx/                   XLSX and CSV readers/writers; vbaProject.bin (cfb.py, ovba.py)
-  vba/                    the VBA language: lexer, parser, compiler, runtime, VBA's library
+  xlsx/                   XLSX and CSV readers/writers; vbaProject.bin (cfb.py, ovba.py), UserForm designs
+                          (oforms.py)
+  vba/                    the VBA language: lexer, parser, compiler, runtime, VBA's library, the Forms
+                          object model (msforms.py)
   engine/                 sessions, commands (cmd_*.py), undo/redo, clipboard, fill, viewport payloads,
                           several people on one workbook (collab.py)
     macro/                Excel's object model for VBA, macro runs, event macros, VBA worksheet functions
@@ -207,10 +211,10 @@ reflex_grid/              the Reflex app
   workbooks.py            the workbook list
   call.py                 calls on a workbook (DDNS Intent call.join)
   api.py                  the backend's own route (a closing tab's goodbye)
-  components/             workbook list, ribbon, dialogs, chrome, calls, macros (vba.py), and the grid's
-                          Reflex wrapper
-assets/grid/              the grid itself, a React component (sheet_view.jsx, sheet_charts.jsx), and the
-                          VBA code editor (vba_editor.jsx)
+  components/             workbook list, ribbon, dialogs, chrome, calls, macros (vba.py), UserForms
+                          (userform.py), and the grid's Reflex wrapper
+assets/grid/              the grid itself, a React component (sheet_view.jsx, sheet_charts.jsx), the
+                          VBA code editor (vba_editor.jsx) and UserForms (userform.jsx)
 tests/                    unit tests
 testcases/                Playwright E2E suites
 docs/architecture.md      design notes

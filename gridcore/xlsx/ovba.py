@@ -21,7 +21,7 @@ import re
 import struct
 import uuid
 from dataclasses import replace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..model.vba import CLASS, DOCUMENT, FORM, STANDARD, VbaModule, VbaProject, VbaReference, split_source
 from .cfb import CfbError, Storage, read_cfb, write_cfb
@@ -480,7 +480,7 @@ def build_project_text(p: VbaProject) -> str:
     lines.append(props.pop("cmg", f'CMG="{cmg}"'))
     lines.append(props.pop("dpb", f'DPB="{dpb}"'))
     lines.append(props.pop("gc", f'GC="{gc}"'))
-    for k in ("cmg", "dpb", "gc"):
+    for k in ("cmg", "dpb", "gc", "id"):
         props.pop(k, None)
     lines.extend(props.values())
     lines.append("")
@@ -596,6 +596,12 @@ def read_project(data: bytes) -> VbaProject:
                     kind = CLASS
             if cur["type"] == 0x0021:
                 kind = STANDARD
+            designer: Tuple[Tuple[str, bytes], ...] = ()
+            if kind == FORM:
+                # The form's design: the storage named after it, beside VBA/.
+                st = root.storage(mname)
+                if st is not None:
+                    designer = designer_items(st)
             modules.append(
                 VbaModule(
                     mname,
@@ -608,6 +614,7 @@ def read_project(data: bytes) -> VbaProject:
                     int(cur["help"]),  # type: ignore[arg-type]
                     bool(cur["ro"]),
                     bool(cur["priv"]),
+                    designer,
                 )
             )
             cur = None
@@ -728,12 +735,50 @@ def write_project(p: VbaProject) -> bytes:
         vba.set_stream(m.stream_name, compress(_enc(text, p.code_page)))
     root.set_stream("PROJECT", _enc(build_project_text(p), p.code_page))
     root.set_stream("PROJECTwm", _projectwm(p))
-    # Designer storages (UserForm layouts) stay for the forms that still exist.
-    forms = {m.name.upper() for m in p.modules if m.kind == FORM}
+    # Designer storages (UserForm layouts): each form's own, as read or imported; storages of
+    # forms that are gone are dropped.
+    forms = {m.name.upper(): m for m in p.modules if m.kind == FORM}
     for name in list(root.storages):
-        if name.upper() != "VBA" and name.upper() not in forms:
+        if name.upper() != "VBA" and (name.upper() not in forms or forms[name.upper()].designer):
             root.remove(name)
+    for m in forms.values():
+        if m.designer:
+            put_designer(root.add_storage(m.name), m.designer)
     return write_cfb(root)
+
+
+def designer_items(st: Storage) -> Tuple[Tuple[str, bytes], ...]:
+    """A designer storage as ``(path, bytes)`` items: streams by path, and each storage (its
+    path ending in ``/``, the form's own as ``/``) with its CLSID, which says what a container
+    is (Frame, MultiPage, Page)."""
+    out: List[Tuple[str, bytes]] = [("/", st.clsid)]
+
+    def walk(node: Storage, prefix: str) -> None:
+        for name, data in node.streams.items():
+            out.append((prefix + name, data))
+        for name, sub in node.storages.items():
+            out.append((prefix + name + "/", sub.clsid))
+            walk(sub, prefix + name + "/")
+
+    walk(st, "")
+    return tuple(sorted(out))
+
+
+def put_designer(st: Storage, items: Sequence[Tuple[str, bytes]]) -> None:
+    """Fills a storage from :func:`designer_items`."""
+    for path, data in sorted(items, key=lambda x: x[0].count("/")):
+        if path == "/":
+            st.clsid = data
+            continue
+        parts = path.rstrip("/").split("/")
+        node = st
+        for part in parts[:-1]:
+            node = node.storage(part) or node.add_storage(part)
+        if path.endswith("/"):
+            sub = node.storage(parts[-1]) or node.add_storage(parts[-1])
+            sub.clsid = data
+        else:
+            node.set_stream(parts[-1], data)
 
 
 def describe(p: VbaProject) -> List[str]:

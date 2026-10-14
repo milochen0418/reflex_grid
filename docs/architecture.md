@@ -16,8 +16,8 @@ Each layer only imports the ones before it.
 | functions | `gridcore/functions` | The registry (arity, argument kinds, signature, description) and 478 functions with Excel's array lifting |
 | model | `gridcore/model` | `Workbook` → `Sheet` → copy-on-write `CellStore`; interned immutable `Style`s; tables, conditional formats, validation, notes, links, filters, charts, pictures, sparklines, print settings, protection, defined names |
 | calc | `gridcore/calc` | The evaluator (references stay lazy, special forms such as `IF`, `LET`, `LAMBDA`, `OFFSET`, `INDIRECT`) and `Calc`: a dependency graph indexed by cell, row block, tall and wide ranges; dirty closure + topological order; spills and `#SPILL!`; cycles (`#CIRC!` or iterative calculation) |
-| xlsx | `gridcore/xlsx` | Streaming XLSX reader and writer (ElementTree), styles/theme/drawing/chart/comment parts, CSV/TSV, VBA projects (`cfb.py` compound files, `ovba.py` the `vbaProject.bin` format) |
-| vba | `gridcore/vba` | The VBA language, independent of Excel: lexer, parser, compiler to closures, runtime (Variants, ByRef, arrays, classes, `On Error`), VBA's function library; a *host* supplies the application's objects (see [vba.md](vba.md)) |
+| xlsx | `gridcore/xlsx` | Streaming XLSX reader and writer (ElementTree), styles/theme/drawing/chart/comment parts, CSV/TSV, VBA projects (`cfb.py` compound files, `ovba.py` the `vbaProject.bin` format, `oforms.py` UserForm designs) |
+| vba | `gridcore/vba` | The VBA language, independent of Excel: lexer, parser, compiler to closures, runtime (Variants, ByRef, arrays, classes, `On Error`), VBA's function library, the Forms object model of UserForms (`msforms.py`); a *host* supplies the application's objects (see [vba.md](vba.md)) |
 | engine | `gridcore/engine` | `Session` (open documents, clipboard, journal), the command registry, undo/redo, structural edits, fill, conditional-format evaluation, the viewport payloads the UI draws, several people on one workbook (`collab.py`), and macros (`macro/`: Excel's object model as the VBA host, runs, event macros, VBA worksheet functions; `cmd_macro.py`) |
 
 ### Snapshots, undo and recalculation
@@ -136,5 +136,7 @@ A workbook's VBA project is part of its snapshot (`Workbook.vba`, an immutable `
 is an ordinary undoable, shared edit. A macro runs through the engine like a person: `Range.Value` writes are
 batched into one open edit, everything else is an engine command, and the whole run is one undo step (a
 `group` on the history entry, which `collab.py` merges into one transition while nobody else edits). A run
-that shows a `MsgBox` pauses on a worker thread outside `book.act`, so nobody waits on a dialog. Details,
-security and compatibility: [vba.md](vba.md).
+that shows a `MsgBox` pauses on a worker thread outside `book.act`, so nobody waits on a dialog. A modal
+UserForm pauses the same way, once per thing the person does on it. Forms belong to the person's session
+(`Session.vba_forms`), not to the workbook: everyone has their own, and the UI holds only their snapshots
+(small JSON, pictures apart). Details, security and compatibility: [vba.md](vba.md).

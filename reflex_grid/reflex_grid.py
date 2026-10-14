@@ -6,6 +6,7 @@ bar, ribbon, formula bar + grid, sheet tabs, status bar), shared by everyone who
 address. All spreadsheet logic lives in the ``gridcore`` engine; this module only arranges the UI."""
 
 import reflex as rx
+from reflex.style import set_color_mode
 
 from .api import api
 from .components.call_views import call_keepalive, incoming_call
@@ -14,14 +15,23 @@ from .components.dialogs import all_dialogs
 from .components.manager import manager_page
 from .components.ribbon import ribbon
 from .components.sheet_view import sheet_view
+from .components.userform import forms_layer
 from .components.vba import macro_bar, vba_dialogs
 from .room import BookRoom
 from .state import AuthState, GridState
 from .workbooks import ManagerState
 
 
+def light_only() -> rx.Component:
+    """Keeps the app light. Reflex remembers a colour mode in the browser ("system" or "dark", left
+    by an older version) and applies it over the theme's appearance; with the OS in dark mode the
+    dialogs then turned dark under our dark text. This puts it back to light (and remembers that)."""
+    return rx.box(display="none", on_mount=set_color_mode("light"))
+
+
 def index() -> rx.Component:
     return rx.box(
+        light_only(),
         rx.vstack(
             title_bar(),
             ribbon(),
@@ -56,6 +66,7 @@ def index() -> rx.Component:
         ),
         backstage(),
         all_dialogs(),
+        forms_layer(),
         vba_dialogs(),
         book_gone(),
         incoming_call(),
@@ -122,5 +133,9 @@ try:
 except ImportError:
     pass
 
-app.add_page(manager_page, route="/", title="ReflexGrid — Workbooks", description="Shared Excel-compatible workbooks, edited together live", on_load=[*_auth_on_load, GridState.leave_book, ManagerState.load])
+def workbook_list() -> rx.Component:
+    return rx.fragment(light_only(), manager_page())
+
+
+app.add_page(workbook_list, route="/", title="ReflexGrid — Workbooks", description="Shared Excel-compatible workbooks, edited together live", on_load=[*_auth_on_load, GridState.leave_book, ManagerState.load])
 app.add_page(index, route="/book/[book_id]", title="ReflexGrid", description="An Excel-compatible spreadsheet built with Reflex", on_load=[*_auth_on_load, GridState.on_load])

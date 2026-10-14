@@ -270,16 +270,108 @@ def main_objects(args) -> int:
     return 0 if bad == 0 else 1
 
 
+# ---------------------------------------------------------------- UserForms
+#
+# Forms ReflexGrid wrote (gridcore.xlsx.oforms) in a workbook Excel opens: Excel loads each one
+# (Load, not Show, which would wait for a person) and describes it and every control, and so
+# does ReflexGrid, from the same module.
+
+# ---------------------------------------------------------------- UserForms
+#
+# Forms ReflexGrid wrote (gridcore.xlsx.oforms) in a workbook Excel opens: Excel loads each one (Load,
+# not a modal Show, which would wait for a person) and describes it and every control; and the events
+# a form's code fires, in order. ReflexGrid runs the same modules (tests/vba_form_cases.py).
+
+
+def _save(args, key: str, values: List[str]) -> None:
+    """Puts Excel's answers into the JSON file the unit tests read."""
+    import json
+
+    path = Path(args.save)
+    data = json.loads(path.read_text("utf-8")) if path.exists() else {}
+    data[key] = values
+    path.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", "utf-8")
+    print(f"saved Excel's answers to {path} ({key})")
+
+
+def _forms_run(s) -> List[str]:
+    from tests.vba_form_cases import results
+
+    r = s.run("macro.run", name="RunAll", timeLimit=120)
+    if r["status"] != "done":
+        print("ReflexGrid:", r.get("error"))
+        return []
+    return results(s)
+
+
+def _compare(excel: List[str], mine: List[str], what: str) -> int:
+    bad = 0
+    for i in range(max(len(excel), len(mine))):
+        e = excel[i] if i < len(excel) else "(nothing)"
+        m = mine[i] if i < len(mine) else "(nothing)"
+        if e != m:
+            bad += 1
+            print(f"DIFF {what} {i + 1}\n   excel: {e}\n   ours:  {m}")
+    print(f"{len(mine) - bad} of {len(mine)} {what} match")
+    return 0 if bad == 0 else 1
+
+
+def main_forms(args) -> int:
+    from tests.vba_form_cases import forms_workbook
+
+    return _forms_oracle(args, forms_workbook(), "forms", "vba_forms.xlsm")
+
+
+def main_form_events(args) -> int:
+    from tests.vba_form_cases import events_workbook
+
+    return _forms_oracle(args, events_workbook(), "events", "vba_form_events.xlsm")
+
+
+def main_form_designer(args) -> int:
+    from tests.vba_form_cases import designer_workbook
+
+    return _forms_oracle(args, designer_workbook(), "designer", "vba_form_designer.xlsm")
+
+
+def _forms_oracle(args, s, key: str, file_name: str) -> int:
+    assert s.run("macro.list")["diagnostics"] == []
+    mine = _forms_run(s)
+    if args.ours_only:
+        print("\n".join(mine))
+        return 0
+    if not mine:
+        return 1
+    out = Path(args.keep or tempfile.mkdtemp(prefix="reflexgrid-vba-forms-"))
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / file_name
+    path.write_bytes(base64.b64decode(s.run("file.saveBytes")["data"]))
+    print(f"workbook: {path}")
+    excel = [x for x in excel_results(path, len(mine)) if x != ""]
+    if args.save and excel:
+        _save(args, key, excel)
+    return _compare(excel, mine, key)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep")
     ap.add_argument("--only", default="")
     ap.add_argument("--ours-only", action="store_true", help="print ReflexGrid's results without Excel")
     ap.add_argument("--objects", action="store_true", help="the Excel object model cases (tests/vba_object_cases.py)")
-    ap.add_argument("--save", help="with --objects: write Excel's results to this JSON file")
+    ap.add_argument("--save", help="with --objects, --forms or --form-events: write Excel's results to this JSON file")
+    ap.add_argument("--forms", action="store_true", help="UserForms ReflexGrid wrote, loaded and described by Excel")
+    ap.add_argument("--form-events", action="store_true", help="the events a form's code fires, and their order")
+    ap.add_argument("--form-designer", action="store_true", help="a form made with ReflexGrid's form designer, loaded and described by Excel")
     args = ap.parse_args()
     if args.objects:
         return main_objects(args)
+    if args.forms:
+        return main_forms(args)
+    if args.form_events:
+        return main_form_events(args)
+    if args.form_designer:
+        return main_form_designer(args)
     code, names = build_module()
     mine = ours(code)
     if args.ours_only:

@@ -103,9 +103,11 @@ the user's own.
   publish the book to its room (`GridState._publish`). Keep cells out of Reflex state: the room
   (`reflex_grid/room.py`, a `SharedState`) carries only small, broadcast things.
 - Engine edits that move cells to other addresses set `ctx.moved` (per-person undo depends on it).
-- The UI is light only, like Excel's: the theme is `rx.theme(appearance="light")` and the page declares
-  `color-scheme: light`, so an OS in dark mode doesn't turn its text light on our white surfaces. On
-  surfaces we colour ourselves (the title bar, the backstage menu, the grid), give text an explicit colour.
+- The UI is light only, like Excel's: the theme is `rx.theme(appearance="light")`, the page declares
+  `color-scheme: light`, and each page sets Reflex's colour mode back to light when it mounts (a browser
+  may remember "system" or "dark" from before, which Reflex would apply over the theme and turn dialogs
+  dark), so an OS in dark mode doesn't turn its text light on our white surfaces. On surfaces we colour
+  ourselves (the title bar, the backstage menu, the grid), give text an explicit colour.
 - Excel compatibility is a feature: anything written to `.xlsx` must open in Excel. When touching
   `gridcore/xlsx`, round-trip with openpyxl in a test.
 - No Microsoft assets (icons, fonts, templates).

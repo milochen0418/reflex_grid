@@ -13,6 +13,7 @@ import reflex as rx
 
 from ..state import GridState
 from .ribbon import ACCENT, group, rbtn
+from .userform import form_designer
 
 _JS = rx.asset("grid/vba_editor.jsx")
 MACROS = GridState.ui["macros"].to(dict)
@@ -27,6 +28,8 @@ class VbaEditor(rx.Component):
     error_line: rx.Var[int]
     read_only: rx.Var[bool]
     font_size: rx.Var[int]
+    goto_line: rx.Var[int]
+    goto_key: rx.Var[int]
     on_change: rx.EventHandler[lambda code: [code]]
     on_save: rx.EventHandler[lambda code: [code]]
     on_run: rx.EventHandler[lambda code, proc: [code, proc]]
@@ -105,6 +108,19 @@ def _module_item(m) -> rx.Component:
     )
 
 
+def _panel_head(title, extra=None) -> rx.Component:
+    return rx.hstack(
+        rx.text(title, size="1", weight="bold", color="#374151"),
+        extra if extra is not None else rx.fragment(),
+        spacing="1",
+        align="center",
+        width="100%",
+        padding="4px 8px",
+        background="#EEF1F4",
+        border_bottom="1px solid #DDE2E7",
+    )
+
+
 def _module_group(title: str, kind: str) -> rx.Component:
     items = GridState.vba_modules
     return rx.vstack(
@@ -115,33 +131,49 @@ def _module_group(title: str, kind: str) -> rx.Component:
     )
 
 
-def _toolbar() -> rx.Component:
-    def tb(icon: str, label: str, on_click, tip: str, id: str, disabled=False) -> rx.Component:
-        return rx.tooltip(
-            rx.button(rx.icon(icon, size=15), rx.text(label, size="1"), variant="ghost", color_scheme="gray", size="1", on_click=on_click, id=id, disabled=disabled, color="#1F2937"),
-            content=tip,
-            delay_duration=400,
-        )
+def _tb(icon: str, label: str, on_click, tip: str, id: str, disabled=False) -> rx.Component:
+    return rx.tooltip(
+        rx.button(rx.icon(icon, size=15), rx.text(label, size="1"), variant="ghost", color_scheme="gray", size="1", on_click=on_click, id=id, disabled=disabled, color="#1F2937", class_name="vba-tb"),
+        content=tip,
+        delay_duration=400,
+    )
 
+
+def _sep() -> rx.Component:
+    return rx.box(width="1px", height="18px", background="#CDD3DA", margin_x="4px")
+
+
+def _toolbar() -> rx.Component:
+    tb = _tb
+    is_form = GridState.vba_kind == "form"
     return rx.hstack(
-        tb("play", "Run", GridState.vba_run(GridState.vba_code, ""), "Run a macro (F5 runs the Sub the cursor is in)", "vba-run", GridState.vba_locked),
+        rx.cond(
+            is_form,
+            tb("play", "Run Form", GridState.vba_show_form(GridState.vba_module), "Show the form, as Excel does (F5)", "vba-run-form", GridState.vba_locked),
+            tb("play", "Run", GridState.vba_run(GridState.vba_code, ""), "Run a macro (F5 runs the Sub the cursor is in)", "vba-run", GridState.vba_locked),
+        ),
         tb("save", "Apply", GridState.vba_save(GridState.vba_code), "Apply the code to the workbook (Ctrl+S)", "vba-save", GridState.vba_locked),
         tb("list_checks", "Compile", GridState.vba_compile, "Check every module for compile errors", "vba-compile", GridState.vba_locked),
-        rx.separator(orientation="vertical", size="1"),
+        _sep(),
+        rx.text("Insert", size="1", color="#6B7280", padding_x="2px"),
         tb("file_code", "Module", GridState.vba_add("standard"), "Insert a module", "vba-add-module", GridState.vba_locked),
-        tb("braces", "Class", GridState.vba_add("class"), "Insert a class module", "vba-add-class", GridState.vba_locked),
+        tb("braces", "Class Module", GridState.vba_add("class"), "Insert a class module", "vba-add-class", GridState.vba_locked),
+        tb("app_window", "UserForm", GridState.vba_add("form"), "Insert a UserForm and design it", "vba-add-form", GridState.vba_locked),
+        _sep(),
         rx.upload(
             rx.button(rx.icon("file_up", size=15), rx.text("Import…", size="1"), variant="ghost", color_scheme="gray", size="1", id="vba-import", color="#1F2937"),
             id="vba_import",
-            accept={"text/plain": [".bas", ".cls", ".txt"]},
+            accept={"text/plain": [".bas", ".cls", ".txt", ".frm"], "application/octet-stream": [".frx"]},
             multiple=True,
             on_drop=GridState.vba_import(rx.upload_files(upload_id="vba_import")),
             border="0",
             padding="0",
+            display="flex",
+            align_items="center",
         ),
-        tb("file_down", "Export", GridState.vba_export, "Export the module as a .bas or .cls file", "vba-export", (GridState.vba_module == "") | GridState.vba_locked),
+        tb("file_down", "Export", GridState.vba_export, "Export the module as a .bas, .cls or .frm (with its .frx) file", "vba-export", (GridState.vba_module == "") | GridState.vba_locked),
         rx.popover.root(
-            rx.popover.trigger(rx.button(rx.icon("pencil", size=15), rx.text("Rename", size="1"), variant="ghost", color_scheme="gray", size="1", id="vba-rename", color="#1F2937", disabled=(GridState.vba_kind == "document") | GridState.vba_locked)),
+            rx.popover.trigger(rx.button(rx.icon("pencil", size=15), rx.text("Rename", size="1"), variant="ghost", color_scheme="gray", size="1", id="vba-rename", color="#1F2937", disabled=(GridState.vba_kind == "document") | is_form | GridState.vba_locked)),
             rx.popover.content(
                 rx.form(
                     rx.hstack(
@@ -157,13 +189,196 @@ def _toolbar() -> rx.Component:
         ),
         tb("trash_2", "Remove", GridState.vba_remove, "Remove the module", "vba-remove", (GridState.vba_kind == "document") | (GridState.vba_module == "") | GridState.vba_locked),
         rx.spacer(),
+        rx.cond(
+            is_form,
+            rx.segmented_control.root(
+                rx.segmented_control.item("Form", value="form"),
+                rx.segmented_control.item("Code", value="code"),
+                value=rx.cond(GridState.vba_form_view, "form", "code"),
+                on_change=lambda v: GridState.vba_form_view_set(v == "form"),
+                size="1",
+                id="vba-form-view",
+            ),
+        ),
         rx.cond(GridState.vba_dirty, rx.text("● not applied", size="1", color="#B45309", id="vba-dirty")),
         spacing="1",
         align="center",
         width="100%",
-        padding_x="4px",
-        border_bottom="1px solid #E3E6E9",
-        padding_bottom="4px",
+        padding="3px 6px",
+        background="#F3F5F7",
+        border="1px solid #DDE2E7",
+        border_radius="4px",
+        flex_wrap="wrap",
+    )
+
+
+# The toolbox: (control, icon, tip).
+_TOOLS = (
+    ("", "mouse_pointer_2", "Select Objects"),
+    ("Label", "type", "Label"),
+    ("TextBox", "text_cursor_input", "TextBox"),
+    ("ComboBox", "chevrons_up_down", "ComboBox"),
+    ("ListBox", "list", "ListBox"),
+    ("CheckBox", "square_check", "CheckBox"),
+    ("OptionButton", "circle_dot", "OptionButton"),
+    ("ToggleButton", "toggle_left", "ToggleButton"),
+    ("Frame", "square_dashed", "Frame"),
+    ("CommandButton", "rectangle_horizontal", "CommandButton"),
+    ("TabStrip", "panel_top", "TabStrip"),
+    ("MultiPage", "layers", "MultiPage"),
+    ("ScrollBar", "sliders_vertical", "ScrollBar"),
+    ("SpinButton", "arrow_up_down", "SpinButton"),
+    ("Image", "image", "Image"),
+)
+
+
+def _toolbox() -> rx.Component:
+    def tool(kind: str, icon: str, tip: str) -> rx.Component:
+        on = GridState.vba_form_tool == kind
+        return rx.tooltip(
+            rx.icon_button(
+                rx.icon(icon, size=16),
+                variant=rx.cond(on, "solid", "ghost"),
+                color_scheme=rx.cond(on, "cyan", "gray"),
+                color=rx.cond(on, "#FFFFFF", "#1F2937"),
+                size="1",
+                on_click=GridState.vba_form_tool_set(kind),
+                disabled=~GridState.vba_form_editable,
+                id="vba-tool-" + (kind or "pointer"),
+            ),
+            content=tip,
+            delay_duration=300,
+        )
+
+    return rx.hstack(
+        rx.text("Toolbox", size="1", weight="bold", color="#374151", padding_right="4px"),
+        *[tool(k, i, t) for k, i, t in _TOOLS],
+        rx.spacer(),
+        rx.text(
+            rx.cond(GridState.vba_form_tool != "", "Click on the form (or drag) to place a " + GridState.vba_form_tool + ".", "Click to select, drag to move, handles to resize, Delete to remove, double-click for code."),
+            size="1",
+            color="#6B7280",
+        ),
+        spacing="1",
+        align="center",
+        width="100%",
+        padding="3px 8px",
+        background="#F3F5F7",
+        border_bottom="1px solid #DDE2E7",
+        id="vba-toolbox",
+    )
+
+
+def _form_pane() -> rx.Component:
+    return rx.vstack(
+        _toolbox(),
+        rx.foreach(GridState.vba_form_warnings, lambda w: rx.text(w, size="1", color="#92400E", padding="2px 10px")),
+        rx.box(
+            form_designer(
+                form=GridState.vba_form_snapshot,
+                selected=GridState.vba_form_selected,
+                tool=GridState.vba_form_tool,
+                pictures={},
+                on_event=GridState.form_designer_event,
+            ),
+            flex="1",
+            min_height="0",
+            width="100%",
+            overflow="auto",
+            background="#E7EAEE",
+        ),
+        spacing="0",
+        width="100%",
+        height="100%",
+        border="1px solid #C9CED4",
+        border_radius="4px",
+        overflow="hidden",
+        id="vba-form-pane",
+    )
+
+
+def _prop_editor(row) -> rx.Component:
+    key = row["key"].to(str)
+    value = row["value"].to(str)
+    off = ~GridState.vba_form_editable
+    text_box = rx.form(
+        rx.hstack(
+            rx.cond(row["type"].to(str) == "color", rx.box(width="14px", height="14px", min_width="14px", border="1px solid #9CA3AF", background=row["css"].to(str))),
+            rx.input(
+                name="value",
+                default_value=value,
+                key=key + ":" + value,
+                on_blur=lambda v: GridState.vba_form_set(key, v),
+                size="1",
+                width="100%",
+                disabled=off,
+                color="#111827",
+                background="#FFFFFF",
+            ),
+            rx.el.input(type="hidden", name="key", value=key),
+            spacing="1",
+            align="center",
+            width="100%",
+        ),
+        on_submit=GridState.vba_form_submit,
+        reset_on_submit=False,
+        width="100%",
+    )
+    return rx.match(
+        row["type"].to(str),
+        ("bool", rx.select.root(
+            rx.select.trigger(width="100%", color="#111827"),
+            rx.select.content(rx.select.item("True", value="true"), rx.select.item("False", value="false")),
+            value=rx.cond(row["value"].to(bool), "true", "false"),
+            on_change=lambda v: GridState.vba_form_set(key, v),
+            size="1",
+            disabled=off,
+        )),
+        ("choice", rx.select.root(
+            rx.select.trigger(width="100%", color="#111827"),
+            rx.select.content(rx.foreach(row["choices"].to(List[Dict[str, str]]), lambda c: rx.select.item(c["label"], value=c["value"]))),
+            value=value,
+            on_change=lambda v: GridState.vba_form_set(key, v),
+            size="1",
+            disabled=off,
+        )),
+        ("readonly", rx.text(value, size="1", color="#111827")),
+        text_box,
+    )
+
+
+def _properties() -> rx.Component:
+    return rx.vstack(
+        _panel_head("Properties", rx.text(rx.cond(GridState.vba_form_selected != "", GridState.vba_form_selected, GridState.vba_module), size="1", color="#0B5CAD", weight="bold")),
+        rx.box(
+            rx.foreach(
+                GridState.vba_form_props,
+                lambda row: rx.hstack(
+                    rx.text(row["label"].to(str), size="1", color="#1F2937", width="44%", min_width="44%", white_space="nowrap", overflow="hidden", text_overflow="ellipsis"),
+                    rx.box(_prop_editor(row), width="56%"),
+                    spacing="1",
+                    align="center",
+                    width="100%",
+                    padding="1px 6px",
+                    border_bottom="1px solid #EEF1F4",
+                    class_name="vba-prop",
+                    id="vba-prop-" + row["key"].to(str),
+                ),
+            ),
+            width="100%",
+            flex="1",
+            min_height="0",
+            overflow_y="auto",
+            background="#FFFFFF",
+        ),
+        spacing="0",
+        width="270px",
+        min_width="270px",
+        height="100%",
+        border="1px solid #C9CED4",
+        border_radius="4px",
+        overflow="hidden",
+        id="vba-properties",
     )
 
 
@@ -243,35 +458,52 @@ def vba_editor_dialog() -> rx.Component:
                 _toolbar(),
                 rx.hstack(
                     rx.vstack(
-                        _module_group("Excel Objects", "document"),
-                        _module_group("Modules", "standard"),
-                        _module_group("Class Modules", "class"),
-                        _module_group("Forms (kept, not run)", "form"),
-                        spacing="1",
-                        width="200px",
-                        min_width="200px",
+                        _panel_head("Project", rx.text(MACROS["projectName"].to(str), size="1", color="#6B7280")),
+                        rx.vstack(
+                            _module_group("Excel Objects", "document"),
+                            _module_group("Modules", "standard"),
+                            _module_group("Class Modules", "class"),
+                            _module_group("Forms", "form"),
+                            spacing="1",
+                            width="100%",
+                            flex="1",
+                            min_height="0",
+                            overflow_y="auto",
+                            padding_bottom="6px",
+                        ),
+                        spacing="0",
+                        width="210px",
+                        min_width="210px",
                         height="100%",
-                        overflow_y="auto",
-                        border_right="1px solid #E3E6E9",
                         background="#FAFBFC",
+                        border="1px solid #C9CED4",
+                        border_radius="4px",
+                        overflow="hidden",
                         id="vba-modules",
                     ),
                     rx.box(
-                        vba_code_editor(
-                            value=GridState.vba_code,
-                            doc_key=GridState.vba_key,
-                            error_line=GridState.vba_error_line,
-                            read_only=GridState.vba_locked | (GridState.vba_kind == "form"),
-                            font_size=13,
-                            on_change=GridState.vba_changed,
-                            on_save=GridState.vba_save,
-                            on_run=GridState.vba_run,
+                        rx.cond(
+                            (GridState.vba_kind == "form") & GridState.vba_form_view,
+                            _form_pane(),
+                            vba_code_editor(
+                                value=GridState.vba_code,
+                                doc_key=GridState.vba_key,
+                                error_line=GridState.vba_error_line,
+                                read_only=GridState.vba_locked,
+                                font_size=13,
+                                goto_line=GridState.vba_goto_line,
+                                goto_key=GridState.vba_goto_key,
+                                on_change=GridState.vba_changed,
+                                on_save=GridState.vba_save,
+                                on_run=GridState.vba_run,
+                            ),
                         ),
                         flex="1",
                         min_width="0",
                         height="100%",
                     ),
-                    spacing="0",
+                    rx.cond((GridState.vba_kind == "form") & GridState.vba_form_view, _properties()),
+                    spacing="2",
                     width="100%",
                     flex="1",
                     min_height="0",
