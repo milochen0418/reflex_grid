@@ -29,6 +29,7 @@ The `run_test.py` script should:
 | `xlsx_roundtrip` | Upload an .xlsx built with openpyxl, check what renders, download it again and re-read it with openpyxl |
 | `collab_live` | Three people on one workbook: presence, each other's selections and typing, edits and formulas reaching everyone, change highlights, per-person sheets, per-person undo, the shared title, jumping to someone, leaving and closing a tab |
 | `workbook_manager` | The workbook list: who is editing, a new workbook and its title, search and filters, uploading, downloading, deleting a workbook someone has open |
+| `vba_macros` | Excel macros: the Developer tab and VBA editor, F5 with `MsgBox`/`InputBox` answers, a VBA function in a formula, one undo for a run, the Macros dialog, event macros behind the security bar, stopping a long macro, downloading `.xlsm` and opening it again |
 | `collab_call` | Calling everyone on a workbook: who is rung, declining, accepting, joining later; with the call app running, the call itself (needs a `call.join` provider, see below) |
 
 ## Running

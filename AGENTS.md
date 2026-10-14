@@ -8,6 +8,7 @@ Before making changes or running commands, **read all README.md files in this re
 
 - Repo overview, architecture & dev workflow: `README.md`
 - Engine design notes: `docs/architecture.md`
+- Excel macros (VBA): `docs/vba.md`
 - E2E test runner conventions: `testcases/README.md`
 
 If you already read them earlier in the session, **re-check** when unsure.
@@ -87,7 +88,8 @@ the user's own.
 ## 5) How the code is organised (keep it that way)
 
 - `gridcore/` is the spreadsheet engine and must not import Reflex. Layers depend only downward:
-  `core → numfmt → formula → functions → model → calc → xlsx → engine`.
+  `core → numfmt → formula → functions → model → calc → xlsx → vba → engine`. `gridcore/vba` (the VBA
+  language) knows nothing of Excel; `gridcore/engine/macro` is its Excel host (see `docs/vba.md`).
 - Every user-visible action is an engine **command** (`gridcore/engine/cmd_*.py`, registered with `@command`).
   The UI, tests and scripts all go through `Session.execute(id, params)`. Add a command (with a unit test)
   before wiring a button to it.

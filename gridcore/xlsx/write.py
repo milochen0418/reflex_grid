@@ -19,6 +19,9 @@ from .xml import XML_DECL, esc, esc_attr, num, t_el
 
 CT_WORKSHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
 CT_MAIN = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+CT_MAIN_MACRO = "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
+CT_VBA = "application/vnd.ms-office.vbaProject"
+REL_VBA = "http://schemas.microsoft.com/office/2006/relationships/vbaProject"
 
 METADATA = (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
@@ -60,6 +63,8 @@ class Out:
         self.table_id = 0
         self.dynamic_arrays = False
         self.needs_calc = False
+        # Each sheet's VBA code name (set when the workbook has a VBA project).
+        self.code_names: Optional[List[str]] = None
 
     def part(self, name: str, content_type: Optional[str], data: bytes) -> None:
         if content_type:
@@ -70,10 +75,18 @@ class Out:
         self.defaults.setdefault(ext, ct)
 
 
-def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid") -> bytes:
+def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid", macros: bool = True) -> bytes:
+    """The workbook as a package: ``.xlsm`` (macro-enabled) when it has a VBA project and
+    ``macros`` is true, else ``.xlsx`` (a VBA project is then left out)."""
     if not wb.sheets:
         raise ValueError("a workbook needs at least one sheet")
     out = Out()
+    project = wb.vba if macros else None
+    wb_code = wb.code_name
+    if project is not None:
+        from ..model.vba import reconcile
+
+        project, wb_code, out.code_names = reconcile(project, wb.code_name, [s.code_name for s in wb.sheets])
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml")
     out.default_type("xml", "application/xml")
     visible = [i for i, s in enumerate(wb.sheets) if s.visibility == "visible"]
@@ -127,7 +140,8 @@ def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid") -> bytes:
             names.append(f'<definedName name="_xlnm._FilterDatabase" localSheetId="{i}" hidden="1">{esc(q)}!{af.range.abs_a1()}</definedName>')
 
     w = [XML_DECL, f'<workbook xmlns="{NS_MAIN}" xmlns:r="{NS_REL}">']
-    w.append('<workbookPr date1904="1"/>' if wb.date_system is DateSystem.D1904 else "<workbookPr/>")
+    wp = f' codeName="{esc_attr(wb_code)}"' if wb_code else ""
+    w.append(f'<workbookPr{wp} date1904="1"/>' if wb.date_system is DateSystem.D1904 else f"<workbookPr{wp}/>")
     if wb.protected_structure:
         pw = f' workbookPassword="{esc_attr(wb.structure_password)}"' if wb.structure_password else ""
         w.append(f'<workbookProtection{pw} lockStructure="1"/>')
@@ -165,7 +179,20 @@ def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid") -> bytes:
     if out.dynamic_arrays:
         out.part("xl/metadata.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml", METADATA.encode("utf-8"))
         wb_rels.add("sheetMetadata", "metadata.xml")
-    out.part("xl/workbook.xml", CT_MAIN, "".join(w).encode("utf-8"))
+    if project is not None:
+        from .ovba import write_project
+
+        out.part("xl/vbaProject.bin", CT_VBA, write_project(project))
+        wb_rels.add(REL_VBA, "vbaProject.bin")
+        if project is wb.vba and not project.modified and project.signatures:
+            from .read import SIGNATURE_TYPES
+
+            sig_rels = Rels()
+            for ty, fname, data in project.signatures:
+                out.part(f"xl/{fname}", SIGNATURE_TYPES[ty], data)
+                sig_rels.add(ty, fname)
+            out.part("xl/_rels/vbaProject.bin.rels", None, sig_rels.xml().encode("utf-8"))
+    out.part("xl/workbook.xml", CT_MAIN_MACRO if project is not None else CT_MAIN, "".join(w).encode("utf-8"))
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().encode("utf-8"))
 
     p = wb.props

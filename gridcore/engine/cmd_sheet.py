@@ -492,13 +492,10 @@ def hide_sheet(s, p):
         wb = ctx.wb
         wb.sheet_mut(si).visibility = "hidden"
         if wb.active_sheet == si:
-            n = len(wb.sheets)
-            a = si
-            for k in range(1, n + 1):
-                cand = (si + k) % n
-                if wb.sheets[cand].visibility == "visible":
-                    a = cand
-                    break
+            # As Excel: the next visible sheet to the right, else the nearest to the left.
+            right = [i for i in range(si + 1, len(wb.sheets)) if wb.sheets[i].visibility == "visible"]
+            left = [i for i in range(si - 1, -1, -1) if wb.sheets[i].visibility == "visible"]
+            a = (right or left or [si])[0]
             wb.active_sheet = a
             ctx.sel = Selection.at(wb.sheets[a].view_active)
 

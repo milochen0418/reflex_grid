@@ -11,6 +11,7 @@ from typing import Dict, List, TypedDict
 import reflex as rx
 
 from gridcore.engine import EngineError
+from gridcore.engine.cmd_file import MIMES
 
 from .books import STORE
 from .state import push
@@ -252,7 +253,7 @@ class ManagerState(rx.State):
 
     @rx.event
     async def upload(self, files: List[rx.UploadFile]):
-        """Opens an uploaded .xlsx/.csv as a new shared workbook."""
+        """Opens an uploaded .xlsx/.xlsm/.csv as a new shared workbook."""
         creator = await self._creator()
         for f in files[:1]:
             data = await f.read()
@@ -270,11 +271,12 @@ class ManagerState(rx.State):
     @rx.event
     def download(self, book_id: str):
         meta = STORE.meta(book_id)
-        data = STORE.xlsx_bytes(book_id)
-        if meta is None or data is None:
+        found = STORE.file_bytes(book_id)
+        if meta is None or found is None:
             return rx.toast.error("That workbook isn't there any more.", position="bottom-center")
+        data, ext = found
         stem = "".join("-" if ch in '\\/:*?"<>|' else ch for ch in meta.title).strip() or "Book"
-        return rx.download(data=data, filename=f"{stem}.xlsx", mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        return rx.download(data=data, filename=f"{stem}.{ext}", mime_type=MIMES[ext])
 
     @rx.event
     def delete_book(self, book_id: str):

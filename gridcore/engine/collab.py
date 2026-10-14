@@ -52,7 +52,7 @@ _SHEET_SKIP = frozenset({"cells", "spill", "spill_ranges", "_row_index", "_col_i
 # Sheet attributes merged entry by entry: dicts keyed by row, column or cell.
 _SHEET_KEYED = ("rows", "cols", "comments", "hyperlinks")
 # Workbook attributes undo puts back as a whole.
-_BOOK_ATTRS = ("names", "props", "calc", "protected_structure", "structure_password", "cell_styles", "date_system", "theme", "csv_delimiter")
+_BOOK_ATTRS = ("names", "props", "calc", "protected_structure", "structure_password", "cell_styles", "date_system", "theme", "csv_delimiter", "vba", "code_name")
 
 
 @dataclass
@@ -70,6 +70,8 @@ class Transition:
     epoch_src: int
     epoch_dst: int
     moved: bool
+    # Steps of one macro run share a group: they undo as one.
+    group: Optional[str] = None
 
 
 @dataclass
@@ -292,8 +294,14 @@ class SharedBook:
         self._log(view, before, after, label, moved)
         if hist:
             h = hist[0]
-            sheet_src = before.sheets[h.sheet_index].name if 0 <= h.sheet_index < len(before.sheets) else view.sheet
-            view.undo.append(Transition(label, before, after, h.selection, view.selection.copy(), sheet_src, view.sheet, act.epoch, self.epoch, moved))
+            group = hist[-1].group
+            last = view.undo[-1] if view.undo else None
+            if group is not None and last is not None and last.group == group and last.dst is before and not moved and not last.moved and last.epoch_dst == act.epoch:
+                # The next step of a macro run nobody interrupted: one transition for the run.
+                view.undo[-1] = Transition(last.label, last.src, after, last.sel_src, view.selection.copy(), last.sheet_src, view.sheet, last.epoch_src, self.epoch, False, group)
+            else:
+                sheet_src = before.sheets[h.sheet_index].name if 0 <= h.sheet_index < len(before.sheets) else view.sheet
+                view.undo.append(Transition(label, before, after, h.selection, view.selection.copy(), sheet_src, view.sheet, act.epoch, self.epoch, moved, group))
             del view.undo[:-UNDO_LIMIT]
             view.redo.clear()
         self._notify()

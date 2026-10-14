@@ -292,6 +292,7 @@ def calculate_now(s: Session, p: Dict[str, Any]):
 
     def f(ctx):
         ctx.structural = True
+        ctx.recalc = True
 
     edit(s, f)
     return {"circular": len(d.calc.circular)}

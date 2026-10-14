@@ -21,6 +21,15 @@ def unique_column_name(t: Table, base: str, skip: Optional[int] = None) -> str:
     return name
 
 
+def new_column_name(names) -> str:
+    """The header Excel gives a new table column: the first free "ColumnN"."""
+    used = {n.lower() for n in names}
+    k = 1
+    while f"column{k}" in used:
+        k += 1
+    return f"Column{k}"
+
+
 def header_text(wb, sh, rc) -> str:
     from .display import value_text
 
@@ -94,7 +103,7 @@ def auto_expand(ctx, si: int, rc: Tuple[int, int]) -> None:
             m = ctx.sheet_mut(si)
             tt = next(x for x in m.tables if x.id == t.id)
             tt.range = RangeRef(r.r0, r.c0, r.r1, r.c1 + 1)
-            tt.columns.append(TableColumn(unique_column_name(tt, header_text(ctx.wb, m, rc) or f"Column{len(tt.columns) + 1}")))
+            tt.columns.append(TableColumn(unique_column_name(tt, header_text(ctx.wb, m, rc) or new_column_name(c.name for c in tt.columns))))
             ctx.structural = True
             return
 

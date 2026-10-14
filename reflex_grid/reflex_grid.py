@@ -14,6 +14,7 @@ from .components.dialogs import all_dialogs
 from .components.manager import manager_page
 from .components.ribbon import ribbon
 from .components.sheet_view import sheet_view
+from .components.vba import macro_bar, vba_dialogs
 from .room import BookRoom
 from .state import AuthState, GridState
 from .workbooks import ManagerState
@@ -24,6 +25,7 @@ def index() -> rx.Component:
         rx.vstack(
             title_bar(),
             ribbon(),
+            macro_bar(),
             rx.box(
                 sheet_view(
                     geometry=GridState.geometry,
@@ -54,6 +56,7 @@ def index() -> rx.Component:
         ),
         backstage(),
         all_dialogs(),
+        vba_dialogs(),
         book_gone(),
         incoming_call(),
         position="relative",

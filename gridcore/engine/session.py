@@ -10,7 +10,7 @@ from __future__ import annotations
 import itertools
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..calc import Calc
 from ..core.addr import RangeRef, parse_cell
@@ -31,6 +31,8 @@ class HistoryEntry:
     wb: Workbook
     selection: Selection
     sheet_index: int
+    # Steps of one macro run share a group and undo as one.
+    group: Optional[str] = None
 
 
 @dataclass
@@ -62,6 +64,11 @@ class DocState:
         # Set by an edit that moved cells to other addresses (see ``Ctx.moved``); whoever needs
         # to know resets it (the collaboration layer, before each command).
         self.cells_moved = False
+        # Whether the workbook's event macros (Worksheet_Change…) run when people edit it.
+        self.macros_enabled = False
+        # Sheets a macro protected with UserInterfaceOnly: protected from people, while macros
+        # may still change them (lower-case names; like Excel, not saved with the file).
+        self.ui_only_protection: Set[str] = set()
 
     def is_dirty(self) -> bool:
         return self.wb is not self.saved
@@ -89,6 +96,12 @@ class CommandSpec:
 
 COMMANDS: Dict[str, CommandSpec] = {}
 
+# Called after every command that ran, as hook(session, command id, workbook before, selection
+# before, result): gridcore.engine.macro runs the workbook's event macros there.
+EVENT_HOOK: Optional[Callable[["Session", str, Optional[Workbook], Optional[Selection], Any], None]] = None
+# Commands that carry on a paused macro run: what they do joins the run's undo step.
+_RESUMING = ("macro.answer", "macro.continue", "macro.stop")
+
 
 def command(cid: str, label: str, menu: Tuple[str, ...] = (), shortcut: Optional[str] = None, params: str = "", undoable: bool = True, journal: bool = True):
     def deco(fn):
@@ -108,6 +121,8 @@ class Ctx:
         self.wb = wb
         self.changed: List[Tuple[int, int, int]] = []
         self.structural = False
+        self.recalc = False  # recalculate everything, even in manual mode (F9)
+        self.unprotected: Set[str] = set()  # protected sheets this edit may change anyway (macros)
         self.moved = False
         self.sel = sel
         self.fit_rows: List[Tuple[int, int]] = []
@@ -141,6 +156,11 @@ class Session:
         self.format_painter: Optional[Tuple[Workbook, int, RangeRef]] = None
         # Last Find query (for Find Next).
         self.last_find: Optional[Dict[str, Any]] = None
+        # Macros: the run waiting for an answer or its next time slice, whether runs may pause
+        # for the person (a UI drives them), and the undo group of the run in progress.
+        self.macro_run = None
+        self.interactive_macros = False
+        self.undo_group: Optional[str] = None
 
     # ------------------------------------------------------------ documents
 
@@ -175,12 +195,24 @@ class Session:
         if spec is None:
             raise EngineError(f"unknown command `{cid}`")
         params = params or {}
+        if cid not in _RESUMING:
+            self.undo_group = None
         before = None
         if self.docs:
             d = self.doc()
             before = (d.uid, d.wb, d.selection.copy())
+        undoable, label = spec.undoable, spec.label
         try:
             result = spec.run(self, params)
+            hook = EVENT_HOOK
+            if hook is not None and before is not None and self.docs:
+                d = self.doc()
+                mid = (d.uid, d.wb, d.selection.copy())
+                hook(self, cid, before[1], before[2], result)
+                if not undoable and mid[0] == before[0] and d.wb is not mid[1]:
+                    # An event macro changed the workbook after a step that isn't an edit (a
+                    # new selection, another sheet): undo takes back what the macro did.
+                    undoable, label, before = True, "Macro", mid
         except EngineError:
             raise
         except Exception as e:  # never crash: restore the workbook as it was
@@ -195,10 +227,16 @@ class Session:
             self.journal.append((cid, {k: v for k, v in params.items() if "password" not in k.lower()}))
             if len(self.journal) > 10_000:
                 del self.journal[:5_000]
-        if spec.undoable and before is not None:
+        if undoable and before is not None:
             for d in self.docs:
                 if d.uid == before[0] and d.wb is not before[1]:
-                    d.undo.append(HistoryEntry(spec.label.rstrip("…"), before[1], before[2], before[1].active_sheet))
+                    group = self.undo_group
+                    if group is not None and d.undo and d.undo[-1].group == group:
+                        # The next step of the same macro run: one undo takes back the whole run.
+                        d.redo.clear()
+                        d.revision += 1
+                        continue
+                    d.undo.append(HistoryEntry(label.rstrip("…"), before[1], before[2], before[1].active_sheet, group))
                     if len(d.undo) > UNDO_LIMIT:
                         del d.undo[0]
                     d.redo.clear()
@@ -216,17 +254,27 @@ def edit(s: Session, f: Callable[[Ctx], Any]) -> Any:
 
 
 def commit(d: DocState, f: Callable[[Ctx], Any]) -> Any:
-    sel = d.selection.copy()
-    ctx = Ctx(d.wb.clone(), sel)
+    ctx = begin_edit(d)
     r = f(ctx)
+    finish_edit(d, ctx)
+    return r
+
+
+def begin_edit(d: DocState) -> Ctx:
+    """An edit on a copy of the document's workbook; :func:`finish_edit` recalculates and
+    commits it. (Macros keep one open across many cell writes.)"""
+    return Ctx(d.wb.clone(), d.selection.copy())
+
+
+def finish_edit(d: DocState, ctx: Ctx) -> None:
     wb = ctx.wb
     if ctx.changed and len(ctx.changed) <= 200_000:
         from .tables import sync_headers
 
         sync_headers(wb, ctx.changed)
-    check_protection(d.wb, wb)
-    if ctx.structural:
-        if wb.calc.mode == "manual":
+    check_protection(d.wb, wb, ctx.unprotected)
+    if ctx.structural or ctx.recalc:
+        if wb.calc.mode == "manual" and not ctx.recalc:
             d.calc.rebuild(wb)
         else:
             d.calc.recalc_all(wb)
@@ -243,7 +291,6 @@ def commit(d: DocState, f: Callable[[Ctx], Any]) -> Any:
     d.selection = ctx.sel
     if ctx.moved:
         d.cells_moved = True
-    return r
 
 
 PROTECTED = "The cell or chart you're trying to change is on a protected sheet. To make a change, unprotect the sheet (Review › Unprotect Sheet)."
@@ -266,10 +313,11 @@ def same_content(a, b) -> bool:
     return type(a.value) is type(b.value) and a.value == b.value
 
 
-def check_protection(old: Workbook, new: Workbook) -> None:
-    """Refuses an edit that changed what a locked cell on a protected sheet holds."""
+def check_protection(old: Workbook, new: Workbook, exempt: Optional[Set[str]] = None) -> None:
+    """Refuses an edit that changed what a locked cell on a protected sheet holds (``exempt``:
+    lower-case names of sheets the edit may change anyway)."""
     for sh in old.sheets:
-        if sh.protection is None:
+        if sh.protection is None or (exempt and sh.name.lower() in exempt):
             continue
         i = new.sheet_index(sh.name)
         if i is None:

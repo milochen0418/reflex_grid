@@ -16,8 +16,9 @@ Each layer only imports the ones before it.
 | functions | `gridcore/functions` | The registry (arity, argument kinds, signature, description) and 478 functions with Excel's array lifting |
 | model | `gridcore/model` | `Workbook` → `Sheet` → copy-on-write `CellStore`; interned immutable `Style`s; tables, conditional formats, validation, notes, links, filters, charts, pictures, sparklines, print settings, protection, defined names |
 | calc | `gridcore/calc` | The evaluator (references stay lazy, special forms such as `IF`, `LET`, `LAMBDA`, `OFFSET`, `INDIRECT`) and `Calc`: a dependency graph indexed by cell, row block, tall and wide ranges; dirty closure + topological order; spills and `#SPILL!`; cycles (`#CIRC!` or iterative calculation) |
-| xlsx | `gridcore/xlsx` | Streaming XLSX reader and writer (ElementTree), styles/theme/drawing/chart/comment parts, CSV/TSV |
-| engine | `gridcore/engine` | `Session` (open documents, clipboard, journal), the command registry, undo/redo, structural edits, fill, conditional-format evaluation, the viewport payloads the UI draws, and several people on one workbook (`collab.py`) |
+| xlsx | `gridcore/xlsx` | Streaming XLSX reader and writer (ElementTree), styles/theme/drawing/chart/comment parts, CSV/TSV, VBA projects (`cfb.py` compound files, `ovba.py` the `vbaProject.bin` format) |
+| vba | `gridcore/vba` | The VBA language, independent of Excel: lexer, parser, compiler to closures, runtime (Variants, ByRef, arrays, classes, `On Error`), VBA's function library; a *host* supplies the application's objects (see [vba.md](vba.md)) |
+| engine | `gridcore/engine` | `Session` (open documents, clipboard, journal), the command registry, undo/redo, structural edits, fill, conditional-format evaluation, the viewport payloads the UI draws, several people on one workbook (`collab.py`), and macros (`macro/`: Excel's object model as the VBA host, runs, event macros, VBA worksheet functions; `cmd_macro.py`) |
 
 ### Snapshots, undo and recalculation
 
@@ -73,7 +74,7 @@ exactly puts its epoch back, so earlier transitions become undoable again.
 ## reflex_grid
 
 - **Books** (`reflex_grid/books.py`): the shared workbooks. Each is `books/<id>.xlsx` (the workbook, written
-  by the xlsx writer, so Excel opens it) plus `books/<id>.json` (title, creator, times, sheet names) under
+  by the xlsx writer, so Excel opens it; `<id>.xlsm` when it has macros) plus `books/<id>.json` (title, creator, times, sheet names) under
   `REFLEX_GRID_HOME`. `STORE.open(id)` reads one into a `Book` (a `SharedBook`) shared by every tab on it; a
   new address creates a blank book. A change schedules a save `SAVE_DELAY` seconds later on a timer thread:
   the workbook snapshot is taken under the book's lock and encoded outside it. Books nobody has open are
@@ -128,3 +129,12 @@ exactly puts its epoch back, so earlier transitions become undoable again.
   never with `@` (`Table1[[#This Row],[Units]]`) — and shown as `[@Units]` inside their own table.
 - `#SPILL!` and `#CALC!` are cached as `#VALUE!`, as they are not error codes of the file format.
 - Differential formats (conditional formatting) put a solid fill's colour in `bgColor`, as Excel does.
+
+## Macros
+
+A workbook's VBA project is part of its snapshot (`Workbook.vba`, an immutable `VbaProject`), so editing code
+is an ordinary undoable, shared edit. A macro runs through the engine like a person: `Range.Value` writes are
+batched into one open edit, everything else is an engine command, and the whole run is one undo step (a
+`group` on the history entry, which `collab.py` merges into one transition while nobody else edits). A run
+that shows a `MsgBox` pauses on a worker thread outside `book.act`, so nobody waits on a dialog. Details,
+security and compatibility: [vba.md](vba.md).

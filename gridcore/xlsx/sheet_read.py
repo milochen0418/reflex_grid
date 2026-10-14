@@ -89,6 +89,7 @@ def read_sheet(cx, part: str, name: str) -> Sheet:
     for e in others:
         tag = local(e.tag)
         if tag == "sheetPr":
+            sheet.code_name = attr(e, "codeName") or ""
             tc = child(e, "tabColor")
             if tc is not None:
                 sheet.tab_color = read_color(tc, cx.palette)

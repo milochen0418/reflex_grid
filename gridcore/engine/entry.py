@@ -45,11 +45,13 @@ def check_arg_counts(expr) -> None:
                 raise EngineError(f"{spec.name} has too {'few' if few else 'many'} arguments. Use {spec.signature}")
 
 
-def parse_formula_input(text: str) -> Formula:
+def parse_formula_input(text: str, strict: bool = False) -> Formula:
+    """The formula typed as ``text``; missing closing parentheses are added, as Excel does
+    for people (``strict``: not for macros, where Excel refuses the formula)."""
     body = text[1:] if text.startswith("=") else text
     candidate = body
     err: Optional[ParseError] = None
-    for _ in range(9):
+    for _ in range(1 if strict else 9):
         try:
             e = parse(candidate)
         except ParseError as ex:
@@ -62,9 +64,10 @@ def parse_formula_input(text: str) -> Formula:
     raise EngineError(f"There's a problem with this formula: {err}")
 
 
-def input_to_cell(wb, sheet, rc: Tuple[int, int], text: str) -> Optional[Cell]:
+def input_to_cell(wb, sheet, rc: Tuple[int, int], text: str, strict: bool = False) -> Optional[Cell]:
     """The cell that typing ``text`` into ``rc`` produces (``None``: an empty, unformatted cell).
-    May intern new styles (automatic number formats, wrap for line breaks)."""
+    May intern new styles (automatic number formats, wrap for line breaks). ``strict``: a
+    formula with a syntax error is refused instead of corrected (macros)."""
     style = sheet.style_id(rc)
     st = wb.styles.get(style)
     if text == "":
@@ -73,7 +76,7 @@ def input_to_cell(wb, sheet, rc: Tuple[int, int], text: str) -> Optional[Cell]:
     if st.num_fmt == "@":
         return Cell(text, None, style)
     if is_formula_input(text):
-        f = parse_formula_input(text)
+        f = parse_formula_input(text, strict)
         if st.num_fmt == "General":
             up = f.text.upper()
             for prefixes, code in _AUTO_DATE:

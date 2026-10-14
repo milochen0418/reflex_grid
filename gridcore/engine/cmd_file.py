@@ -71,10 +71,27 @@ def open_file(s: Session, p: Dict[str, Any]):
     return {"name": d.name, "index": s.active, "warnings": d.warnings}
 
 
+MIMES = {
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+    "csv": "text/csv",
+    "tsv": "text/tab-separated-values",
+}
+
+
+def workbook_format(s: Session) -> str:
+    """The file format that keeps everything: ``xlsm`` for a workbook with macros, else ``xlsx``."""
+    return "xlsm" if s.doc().wb.vba is not None else "xlsx"
+
+
 def encode(s: Session, fmt: str, sheet: Optional[int] = None, delimiter: str = ",") -> bytes:
+    """The workbook as a file. ``xlsx`` leaves a VBA project out (a macro-free workbook);
+    ``xlsm`` keeps it."""
     d = s.doc()
-    if fmt == "xlsx":
-        return write_xlsx(d.wb)
+    if fmt == "auto":
+        fmt = workbook_format(s)
+    if fmt in ("xlsx", "xlsm"):
+        return write_xlsx(d.wb, macros=fmt == "xlsm")
     if fmt in ("csv", "tsv"):
         si = d.wb.active_sheet if sheet is None else sheet
         sh = d.wb.sheet(si)
@@ -82,21 +99,21 @@ def encode(s: Session, fmt: str, sheet: Optional[int] = None, delimiter: str = "
     raise EngineError(f"unknown format `{fmt}`")
 
 
-@command("file.saveBytes", "Encode Workbook", params="{format?: xlsx|csv|tsv, sheet?} → {name, mime, data (base64)}", undoable=False, journal=False)
+@command("file.saveBytes", "Encode Workbook", params="{format?: auto|xlsx|xlsm|csv|tsv (auto: xlsm when the workbook has macros), sheet?} → {name, mime, data (base64)}", undoable=False, journal=False)
 def save_bytes(s: Session, p: Dict[str, Any]):
     d = s.doc()
-    fmt = p_str(p, "format", "xlsx")
+    fmt = p_str(p, "format", "auto")
+    if fmt == "auto":
+        fmt = workbook_format(s)
+    if fmt not in MIMES:
+        raise EngineError(f"unknown format `{fmt}`")
     data = encode(s, fmt, p_int(p, "sheet"))
     stem = os.path.splitext(d.name)[0] or "Book1"
-    mime = {
-        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "csv": "text/csv",
-        "tsv": "text/tab-separated-values",
-    }[fmt]
-    if fmt == "xlsx":
+    mime = MIMES[fmt]
+    if fmt in ("xlsx", "xlsm"):
         d.saved = d.wb
-        if not d.name.lower().endswith(".xlsx"):
-            d.name = stem + ".xlsx"
+        if not d.name.lower().endswith("." + fmt):
+            d.name = stem + "." + fmt
     return {"name": f"{stem}.{fmt}", "mime": mime, "data": base64.b64encode(data).decode("ascii"), "size": len(data)}
 
 
@@ -120,7 +137,7 @@ def save_as(s: Session, p: Dict[str, Any]):
 def _save_to(s: Session, path: str):
     d = s.doc()
     lower = path.lower()
-    fmt = "csv" if lower.endswith(".csv") else ("tsv" if lower.endswith((".tsv", ".txt")) else "xlsx")
+    fmt = "csv" if lower.endswith(".csv") else ("tsv" if lower.endswith((".tsv", ".txt")) else ("xlsm" if lower.endswith((".xlsm", ".xltm")) else "xlsx"))
     data = encode(s, fmt)
     tmp = path + ".tmp"
     try:
@@ -129,11 +146,15 @@ def _save_to(s: Session, path: str):
         os.replace(tmp, path)
     except OSError as e:
         raise EngineError(f"ReflexGrid can't save `{path}`: {e.strerror}")
-    if fmt == "xlsx":
+    if fmt in ("xlsx", "xlsm"):
         d.saved = d.wb
         d.path = path
         d.name = os.path.basename(path)
-    return {"path": path, "size": len(data)}
+    out: Dict[str, Any] = {"path": path, "size": len(data)}
+    if fmt == "xlsx" and d.wb.vba is not None:
+        out["warning"] = "The VBA project was left out: an .xlsx workbook can't hold macros. Save as .xlsm to keep them."
+        s.messages.append(out["warning"])
+    return out
 
 
 @command("file.close", "Close", menu=("File",), shortcut="Ctrl+W", params="{index?}", undoable=False)

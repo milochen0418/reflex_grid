@@ -70,6 +70,8 @@ class Sheet:
         self.view_top_left: Tuple[int, int] = (0, 0)
         # Unmodelled worksheet XML kept from a file (passed through on save).
         self.kept_xml: Dict[str, str] = {}
+        # The sheet's name in VBA (its document module, e.g. ``Sheet1``); "" until it has one.
+        self.code_name = ""
         self._row_index: Optional[_LineIndex] = None
         self._col_index: Optional[_LineIndex] = None
 

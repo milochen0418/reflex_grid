@@ -45,6 +45,8 @@ def get(token: str) -> Entry:
         e = _SESSIONS.get(token)
         if e is None:
             e = Entry(CollabSession())
+            # A tab shows a macro's dialogs (MsgBox, InputBox) and runs long macros in steps.
+            e.session.interactive_macros = True
             _SESSIONS[token] = e
             _evict(now)
         e.last_used = now
@@ -70,5 +72,8 @@ def _evict(now: float) -> None:
     for k in stale:
         e = _SESSIONS.pop(k)
         s = e.session
+        run = getattr(s, "macro_run", None)
+        if run is not None:
+            run.abandon()
         if s.book is not None and s.view is not None:
             s.book.leave(s.view.key)

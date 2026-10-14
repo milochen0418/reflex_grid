@@ -153,7 +153,7 @@ def test_typed_numbers():
     assert p("1,23").value == "1,23"
     assert p("12%").value == 0.12
     assert p("$1,200.50").value == 1200.5
-    assert p("$1,200.50").format == '"$"#,##0.00'
+    assert p("$1,200.50").format == "$#,##0.00_);[Red]($#,##0.00)"  # as Excel applies it
     assert p("(100)").value == -100.0
     assert p("1e3").value == 1000.0
     assert p("1 1/2").value == 1.5

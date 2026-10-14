@@ -51,6 +51,10 @@ class Workbook:
         self.cell_styles: List[Tuple[str, object]] = []
         # Field separator of the CSV this workbook was read from.
         self.csv_delimiter: Optional[str] = None
+        # The VBA project (macros) and the workbook's name in it (``ThisWorkbook``); a project is
+        # immutable, so snapshots share it (see :mod:`gridcore.model.vba`).
+        self.vba = None
+        self.code_name = ""
         # Sheets this workbook object may mutate in place (copy-on-write; ids of sheet objects).
         self._owned: set = set(id(s) for s in self.sheets)
 

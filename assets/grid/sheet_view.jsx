@@ -1245,6 +1245,16 @@ export function SheetView(props) {
         cmd("home.insertSheet");
         return;
       }
+      if (k === "F11" && e.altKey) {
+        e.preventDefault();
+        dialog("vba");
+        return;
+      }
+      if (k === "F8" && e.altKey) {
+        e.preventDefault();
+        dialog("macros");
+        return;
+      }
       if (k === "F2" && e.shiftKey) {
         e.preventDefault();
         dialog("note");

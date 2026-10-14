@@ -727,7 +727,7 @@ def parse_tsv(text: str) -> List[List[str]]:
     return rows
 
 
-@command("edit.paste", "Paste", menu=("Home", "Clipboard"), shortcut="Ctrl+V", params='{text?: "system clipboard text", at?: "B2"}')
+@command("edit.paste", "Paste", menu=("Home", "Clipboard"), shortcut="Ctrl+V", params='{text?: "system clipboard text", at?: "B2", range?: "B2:B9" (tiled when a multiple of what was copied)}')
 def paste(s: Session, p: Dict[str, Any]):
     text = p.get("text")
     clip = s.clipboard
@@ -735,7 +735,7 @@ def paste(s: Session, p: Dict[str, Any]):
         return paste_text(s, p, text)
     if clip is None:
         raise EngineError("Nothing to paste.")
-    return paste_special(s, {"what": "all", **({"at": p["at"]} if p.get("at") else {})})
+    return paste_special(s, {"what": "all", **({"at": p["at"]} if p.get("at") else {}), **({"range": p["range"]} if p.get("range") else {})})
 
 
 def paste_text(s: Session, p: Dict[str, Any], text: str):
@@ -822,9 +822,16 @@ def paste_special(s: Session, p: Dict[str, Any]):
     if csh is None:
         raise EngineError("The copied cells are gone.")
     sel = d.selection.current()
-    at = param_cell(s, p, "at") if p.get("at") else sel.start
+    if p.get("range"):
+        # Pasting into a given range (VBA's Copy Destination:=): tiled when it is a multiple.
+        target = RangeRef.parse(str(p["range"]).rsplit("!", 1)[-1])
+        if target is None:
+            raise EngineError(f"not a range: `{p['range']}`")
+        sel, at = target, target.start
+    else:
+        at = param_cell(s, p, "at") if p.get("at") else sel.start
     h, w = (src.width, src.height) if transpose else (src.height, src.width)
-    tile = not p.get("at") and not sel.is_single() and sel.height % h == 0 and sel.width % w == 0 and sel.start == at
+    tile = (p.get("range") or not p.get("at")) and not sel.is_single() and sel.height % h == 0 and sel.width % w == 0 and sel.start == at
     dest = RangeRef(at[0], at[1], at[0] + (sel.height if tile else h) - 1, at[1] + (sel.width if tile else w) - 1)
     if dest.r1 >= MAX_ROWS or dest.c1 >= MAX_COLS:
         raise EngineError("The data you're pasting doesn't fit on the sheet.")
@@ -1116,7 +1123,7 @@ def fill_left(s, p):
     return _fill_dir(s, p, 0, -1)
 
 
-@command("edit.autoFill", "AutoFill", params='{source?: "A1:A2", target: "A1:A10", mode?: series|alternate|copy|formats|values}')
+@command("edit.autoFill", "AutoFill", params='{source?: "A1:A2", target: "A1:A10", mode?: series|alternate|fillseries|copy|formats|values}')
 def auto_fill(s: Session, p: Dict[str, Any]):
     d = s.doc()
     si = param_sheet(s, p)

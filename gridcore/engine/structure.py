@@ -135,6 +135,14 @@ def shift_lines(ctx, si: int, axis: str, at: int, count: int, insert: bool) -> N
             continue
         nrc = (nv, rc[1]) if rows else (rc[0], nv)
         sm.cells.set(nrc, cell)
+    if insert and at > 0:
+        # The new lines take the cell formats of the line before them, as Excel's Insert does.
+        before = RangeRef(at - 1, 0, at - 1, MAX_COLS - 1) if rows else RangeRef(0, at - 1, MAX_ROWS - 1, at - 1)
+        styled = [(rc, cell.style) for rc, cell in sm.cells.iter_range(before) if cell.style]
+        if styled and len(styled) * count <= 200_000:
+            for rc, style in styled:
+                for k in range(at, min(at + count, MAX_ROWS if rows else MAX_COLS)):
+                    sm.cells.set((k, rc[1]) if rows else (rc[0], k), Cell(None, None, style))
     # Spills are laid out again by the full recalculation.
     sm.spill = {}
     sm.spill_ranges = {}

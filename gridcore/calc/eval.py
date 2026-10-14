@@ -44,6 +44,12 @@ FULL_SIZE_CELLS = 16_384
 MAX_DEPTH = 400
 
 
+# Worksheet functions defined outside the function library (VBA Functions of the workbook's
+# macros): set by gridcore.engine.macro. Called as hook(evaluator, NAME, arg exprs); returns the
+# result, or None when it doesn't know the name.
+UDF_HOOK: Optional[Callable[["Evaluator", str, Sequence[Expr]], Any]] = None
+
+
 class Area(NamedTuple):
     sheet: int
     rng: RangeRef
@@ -462,6 +468,12 @@ class Evaluator:
             f = self.name(name)
             if isinstance(f, Lambda):
                 return self.apply_lambda(f, args)
+            hook = UDF_HOOK
+            if hook is not None:
+                self.host.note_volatile()
+                r = hook(self, name, args)
+                if r is not None:
+                    return r
             return CellError.NAME
         if len(args) < spec.min_args or len(args) > spec.max_args:
             return CellError.VALUE

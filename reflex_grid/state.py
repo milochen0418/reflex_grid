@@ -22,7 +22,7 @@ import reflex as rx
 
 from gridcore.core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, col_to_letters
 from gridcore.engine import EngineError, Session, View, geometry, objects, ui_state, viewport
-from gridcore.engine.cmd_file import encode
+from gridcore.engine.cmd_file import MIMES, encode, workbook_format
 from gridcore.engine.cmd_format import CELL_STYLE_NAMES, FORMAT_PRESETS  # noqa: F401
 from gridcore.engine.samples import SAMPLES
 from gridcore.functions import all_functions
@@ -42,8 +42,6 @@ FUNCTIONS = sorted(
     key=lambda x: x["name"],
 )
 CATEGORIES = sorted({f["category"] for f in FUNCTIONS})
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-MIMES = {"xlsx": XLSX_MIME, "csv": "text/csv", "tsv": "text/tab-separated-values"}
 # A tab that hasn't pinged for this long has left (it pings every 5 s; hidden tabs are throttled).
 PEER_IDLE = 30
 # Events that only redraw this tab: the server's answer never moves its selection.
@@ -109,6 +107,27 @@ class GridState(rx.State):
     book_gone: bool = False
     # Other books, for the File backstage.
     recent: List[Dict[str, str]] = []
+    # Macros: the VBA editor (its module list, the module on screen, its code and problems,
+    # the Immediate window) and a running macro's dialog (MsgBox/InputBox) or progress.
+    vba_open: bool = False
+    vba_modules: List[Dict[str, Any]] = []
+    vba_macros: List[Dict[str, Any]] = []
+    vba_module: str = ""
+    vba_kind: str = ""
+    vba_code: str = ""
+    vba_key: int = 0
+    vba_version: str = ""
+    vba_dirty: bool = False
+    vba_locked: bool = False
+    vba_diag: List[Dict[str, Any]] = []
+    vba_error_line: int = 0
+    vba_status: str = ""
+    vba_output: List[str] = []
+    vba_immediate: str = ""
+    macro_prompt: Dict[str, Any] = {}
+    macro_input: str = ""
+    macro_busy: bool = False
+    macro_label: str = ""
     _peer: str = ""
     _guest: str = ""
 
@@ -200,6 +219,14 @@ class GridState(rx.State):
         if shown and not any(f["name"] == name for f in shown):
             return shown[0]
         return next((f for f in FUNCTIONS if f["name"] == name), {"name": name, "signature": "", "description": ""})
+
+    @rx.var
+    def dlg_macros(self) -> List[Dict[str, Any]]:
+        return list((self.dlg or {}).get("macros", []) or []) if self.dialog == "macros" else []
+
+    @rx.var
+    def dlg_macro(self) -> str:
+        return str((self.dlg or {}).get("selected", "") or "") if self.dialog == "macros" else ""
 
     @rx.var
     def dlg_sheets(self) -> List[str]:
@@ -513,12 +540,13 @@ class GridState(rx.State):
             except Exception as ex:  # never let a UI event kill the session
                 extra["lastError"] = {"seq": seq, "message": str(ex), "kind": t}
                 out = rx.toast.error(f"Something went wrong: {ex}", position="bottom-center")
+            pending = self._macro_pending(s)
             self._refresh(entry, book, view, seq, extra, passive=t in _PASSIVE)
         if t == "ping":
             book.prune(PEER_IDLE)
             STORE.close_idle()
         self._publish(room, book)
-        return out
+        return _both(out, pending)
 
     def _commit(self, s: Session, e: Dict[str, Any], seq: int, extra: Dict[str, Any]):
         r, c = int(e["r"]), int(e["c"])
@@ -544,7 +572,7 @@ class GridState(rx.State):
     def _command(self, entry: sessions.Entry, cid: str, params: Dict[str, Any]):
         s = entry.session
         if cid == "ui.save":
-            return self._download(s, "xlsx")
+            return self._download(s, "auto")
         if cid == "ui.saveCsv":
             return self._download(s, "csv")
         if cid == "ui.print":
@@ -563,7 +591,10 @@ class GridState(rx.State):
         return None
 
     def _download(self, s: Session, fmt: str):
-        """A copy of the workbook as a file (the shared book itself is saved on the server)."""
+        """A copy of the workbook as a file (the shared book itself is saved on the server).
+        ``auto``: .xlsm for a workbook with macros, else .xlsx."""
+        if fmt == "auto":
+            fmt = workbook_format(s)
         data = encode(s, fmt)
         return rx.download(data=data, filename=f"{_file_stem(s.doc().name)}.{fmt}", mime_type=MIMES[fmt])
 
@@ -603,15 +634,16 @@ class GridState(rx.State):
         if book is None:
             return None
         out = None
-        with book.act(view):
+        with book.act(view) as s:
             try:
                 out = self._command(entry, cid, dict(params or {}))
             except EngineError as ex:
                 out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+            pending = self._macro_pending(s)
             self._refresh(entry, book, view)
         self._publish(room, book)
         self._focus()
-        return out
+        return _both(out, pending)
 
     @rx.event
     def set_tab(self, tab: str):
@@ -890,6 +922,20 @@ class GridState(rx.State):
         ui = self.ui or {}
         rb = ui.get("ribbon", {})
         dlg: Dict[str, Any] = {}
+        if name == "vba":
+            # Alt+F11: the VBA editor isn't one of the small dialogs.
+            self._vba_load(s, str(params.get("module") or ""))
+            self.vba_open = True
+            return
+        if name == "macros":
+            macros = s.execute("macro.list", {}).get("macros", [])
+            module = str(params.get("module") or "")
+            if module:
+                macros = [m for m in macros if m["module"].lower() == module.lower()] or macros
+            self.dialog = "macros"
+            self.dlg = {"macros": macros, "selected": macros[0]["name"] if macros else ""}
+            self.dlg_error = ""
+            return
         if name == "formatCells":
             st = d.wb.styles.get(sh.style_id(sel.active))
             nf = parse_fmt(st.num_fmt)
@@ -1108,9 +1154,10 @@ class GridState(rx.State):
                     self.dlg = {}
                     self.dlg_error = ""
                     self._focus()
+            pending = self._macro_pending(s)
             self._refresh(entry, book, view)
         self._publish(room, book)
-        return None if failed else out
+        return _both(None if failed else out, pending)
 
     def _dialog_action(self, s: Session, name: str, action: str, d: Dict[str, Any]):
         run = lambda cid, **p: s.execute(cid, p)
@@ -1473,6 +1520,446 @@ class GridState(rx.State):
         return out
 
 
+    # ------------------------------------------------------------ macros (VBA)
+
+    def _vba_load(self, s: Session, module: str = "", line: int = 0) -> None:
+        """Fills the editor from the workbook's project: the module list, and ``module`` (or
+        the one on screen, or the first code module) in the editor."""
+        r = s.execute("macro.list", {})
+        mods = [{"name": m["name"], "kind": m["kind"], "sheet": m.get("sheet", ""), "label": m["name"] + (f" ({m['sheet']})" if m.get("sheet") and m["sheet"] != "(workbook)" else "")} for m in r.get("modules", [])]
+        self.vba_modules = mods
+        self.vba_macros = r.get("macros", [])
+        self.vba_diag = r.get("diagnostics", [])
+        self.vba_locked = bool(r.get("locked")) or bool(r.get("unreadable"))
+        self.vba_status = r.get("unreadable") or ("The VBA project is locked: its code can't be viewed." if r.get("locked") else "")
+        names = [m["name"] for m in mods]
+        pick = next((n for n in names if n.lower() == (module or self.vba_module).lower()), "")
+        if not pick:
+            pick = next((m["name"] for m in mods if m["kind"] == "standard"), names[0] if names else "")
+        self._vba_show(s, pick, line)
+
+    def _vba_show(self, s: Session, module: str, line: int = 0) -> None:
+        self.vba_module = module
+        self.vba_error_line = line
+        self.vba_dirty = False
+        if not module or self.vba_locked:
+            self.vba_code, self.vba_version, self.vba_kind = "", "", ""
+        else:
+            m = s.execute("macro.getModule", {"name": module})
+            self.vba_code, self.vba_version, self.vba_kind = m["code"], m["version"], m["kind"]
+            if not line:
+                d = next((x for x in self.vba_diag if x["module"].lower() == module.lower()), None)
+                self.vba_error_line = int(d["line"]) if d else 0
+        self.vba_key += 1
+
+    def _vba_apply(self, s: Session) -> None:
+        """Puts the editor's code into the workbook (when it changed)."""
+        if not self.vba_dirty or not self.vba_module or self.vba_locked:
+            return
+        r = s.execute("macro.setModule", {"name": self.vba_module, "code": self.vba_code, "version": self.vba_version})
+        self.vba_version = r["version"]
+        self.vba_diag = r.get("diagnostics", [])
+        self.vba_dirty = False
+        d = next((x for x in self.vba_diag if x["module"].lower() == self.vba_module.lower()), None)
+        self.vba_error_line = int(d["line"]) if d else 0
+        self.vba_status = f"Compile error in {d['module']}, line {d['line']}: {d['message']}" if d else ""
+        self.vba_macros = s.execute("macro.list", {}).get("macros", [])
+
+    def _macro_after(self, s: Session, r: Optional[Dict[str, Any]]):
+        """What a macro step left: a dialog to show, more to run, or its end (output, errors)."""
+        if not isinstance(r, dict):
+            return None
+        status = r.get("status")
+        self.macro_label = r.get("label") or self.macro_label
+        if status == "prompt":
+            p = dict(r.get("prompt") or {})
+            self.macro_prompt = p
+            self.macro_input = str(p.get("default") or "")
+            self.macro_busy = False
+            return None
+        if status == "busy":
+            self.macro_prompt = {}
+            self.macro_busy = True
+            return GridState.macro_pump
+        self.macro_prompt = {}
+        self.macro_busy = False
+        out = [str(x) for x in r.get("output") or []]
+        if out:
+            self.vba_output = (self.vba_output + out)[-500:]
+        err = r.get("error")
+        if err and status in ("error", "cancelled") or (err and err.get("kind") in ("timeout", "steps")):
+            where = f" ({err['module']}.{err.get('proc') or ''}, line {err['line']})" if err.get("module") else ""
+            text = (err.get("text") or "The macro stopped.") + where
+            if self.vba_open and err.get("module"):
+                try:
+                    self._vba_apply(s)
+                    self._vba_show(s, err["module"], int(err.get("line") or 0))
+                except EngineError:
+                    pass
+                self.vba_status = text
+                return None
+            if status == "cancelled":
+                return rx.toast.info("The macro was stopped.", position="bottom-center")
+            return rx.toast.error(text, position="bottom-center")
+        msgs = [m.get("prompt", "") for m in r.get("messages") or [] if m.get("prompt")]
+        if msgs:
+            return rx.toast.info(msgs[-1], position="bottom-center")
+        if self.vba_open and status == "done":
+            self.vba_status = f"{self.macro_label}: done." if self.macro_label else ""
+        return None
+
+    def _macro_pending(self, s: Session):
+        """A run that an edit started (an event macro) and that waits for this tab."""
+        run = getattr(s, "macro_run", None)
+        if run is None or not run.paused or self.macro_prompt or self.macro_busy:
+            return None
+        self.macro_label = run.label
+        if run.state == "prompt":
+            self.macro_prompt = dict(run.prompt or {})
+            self.macro_input = str((run.prompt or {}).get("default") or "")
+            return None
+        self.macro_busy = True
+        return GridState.macro_pump
+
+    async def _macro_step(self, cid: str, params: Dict[str, Any], apply_code: bool = False):
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        out = None
+        with book.act(view) as s:
+            try:
+                if apply_code:
+                    self._vba_apply(s)
+                r = s.execute(cid, params)
+                out = self._macro_after(s, r)
+            except EngineError as ex:
+                msg = str(ex).split("\n", 1)[0]
+                if self.vba_open:
+                    self.vba_status = msg
+                out = rx.toast.error(msg, position="bottom-center")
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        return out
+
+    @rx.event
+    async def run_macro(self, name: str):
+        self.dialog, self.dlg, self.dlg_error = "", {}, ""
+        self.macro_label = name
+        return await self._macro_step("macro.run", {"name": name}, apply_code=self.vba_open)
+
+    @rx.event
+    async def answer_macro(self, value: Any):
+        p = self.macro_prompt or {}
+        if p.get("kind") == "inputbox" and value == "ok":
+            value = self.macro_input
+        elif p.get("kind") == "inputbox" and value == "cancel":
+            value = None
+        self.macro_prompt = {}
+        return await self._macro_step("macro.answer", {"value": value})
+
+    @rx.event
+    def set_macro_input(self, text: str):
+        self.macro_input = text
+
+    @rx.event
+    async def stop_macro(self):
+        self.macro_prompt = {}
+        self.macro_busy = False
+        return await self._macro_step("macro.stop", {})
+
+    @rx.event(background=True)
+    async def macro_pump(self):
+        """Runs a long macro in time slices, letting everyone else work in between."""
+        import asyncio
+
+        while True:
+            await asyncio.sleep(0.03)
+            async with self:
+                if not self.macro_busy:
+                    return
+                room = await self.get_state(BookRoom)
+                entry, book, view = self._bound()
+                if book is None:
+                    self.macro_busy = False
+                    return
+                out = None
+                with book.act(view) as s:
+                    run = getattr(s, "macro_run", None)
+                    if run is None or run.state != "busy":
+                        self.macro_busy = False
+                    else:
+                        try:
+                            out = self._macro_after(s, s.execute("macro.continue", {}))
+                        except EngineError as ex:
+                            self.macro_busy = False
+                            out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+                    self._refresh(entry, book, view)
+                self._publish(room, book)
+                if not self.macro_busy:
+                    return None if out is GridState.macro_pump else out
+
+    @rx.event
+    async def open_vba(self, module: str = "", line: int = 0):
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        self.dialog, self.dlg, self.dlg_error = "", {}, ""
+        with book.act(view) as s:
+            try:
+                self._vba_load(s, module, int(line or 0))
+            except EngineError as ex:
+                return rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+        self.vba_open = True
+        return None
+
+    @rx.event
+    async def close_vba(self):
+        out = None
+        if self.vba_dirty:
+            out = await self._vba_edit(lambda s: None)
+        self.vba_open = False
+        self._focus()
+        return out
+
+    @rx.event
+    def vba_open_change(self, is_open: bool):
+        if not is_open:
+            return GridState.close_vba
+
+    @rx.event
+    def vba_changed(self, code: str):
+        if code != self.vba_code:
+            self.vba_code = code
+            self.vba_dirty = True
+
+    async def _vba_edit(self, f, apply_first: bool = True):
+        """Runs ``f(session)`` on the project (after applying the editor's code) and refreshes
+        the editor and everyone's view."""
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        out = None
+        with book.act(view) as s:
+            try:
+                if apply_first:
+                    self._vba_apply(s)
+                out = f(s)
+            except EngineError as ex:
+                self.vba_status = str(ex).split("\n", 1)[0]
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        return out
+
+    @rx.event
+    async def vba_save(self, code: str):
+        self.vba_changed(code)
+        out = await self._vba_edit(lambda s: None)
+        if not self.vba_status:
+            self.vba_status = "Saved."
+        return out
+
+    @rx.event
+    async def vba_select(self, name: str):
+        def f(s):
+            self._vba_load(s, name)
+
+        return await self._vba_edit(f)
+
+    @rx.event
+    async def vba_add(self, kind: str):
+        def f(s):
+            r = s.execute("macro.addModule", {"kind": kind})
+            self._vba_load(s, r["name"])
+            self.vba_status = f"Inserted {r['name']}."
+
+        return await self._vba_edit(f)
+
+    @rx.event
+    async def vba_remove(self):
+        name = self.vba_module
+
+        def f(s):
+            s.execute("macro.deleteModule", {"name": name})
+            self.vba_dirty = False
+            self._vba_load(s, "")
+            self.vba_status = f"Removed {name}."
+
+        self.vba_dirty = False
+        return await self._vba_edit(f, apply_first=False)
+
+    @rx.event
+    async def vba_rename(self, form: Dict[str, Any]):
+        new = str(form.get("name") or "").strip()
+        old = self.vba_module
+
+        def f(s):
+            s.execute("macro.renameModule", {"name": old, "newName": new})
+            self._vba_load(s, new)
+
+        return await self._vba_edit(f)
+
+    @rx.event
+    async def vba_compile(self):
+        def f(s):
+            d = s.execute("macro.check", {})["diagnostics"]
+            self.vba_diag = d
+            if d:
+                self._vba_load(s, d[0]["module"], int(d[0]["line"] or 0))
+                self.vba_status = f"Compile error in {d[0]['module']}, line {d[0]['line']}: {d[0]['message']}"
+            else:
+                self.vba_status = "No compile errors."
+
+        return await self._vba_edit(f)
+
+    @rx.event
+    async def vba_goto(self, module: str, line: int):
+        def f(s):
+            self._vba_load(s, module, int(line or 0))
+
+        return await self._vba_edit(f)
+
+    @rx.event
+    async def vba_run(self, code: str, proc: str):
+        """F5 or Run: the Sub the cursor is in (a macro), else the Macros dialog."""
+        self.vba_changed(code)
+        target = None
+        for m in self.vba_macros:
+            if m["module"].lower() == self.vba_module.lower() and m["proc"].lower() == (proc or "").lower():
+                target = m["name"]
+        if target is None and proc:
+            # Not in the list yet (just typed): apply the code first, then look again.
+            await self._vba_edit(lambda s: None)
+            for m in self.vba_macros:
+                if m["module"].lower() == self.vba_module.lower() and m["proc"].lower() == proc.lower():
+                    target = m["name"]
+        if target is None:
+            return GridState.open_dialog("macros", {"module": self.vba_module})
+        self.macro_label = target
+        return await self._macro_step("macro.run", {"name": target}, apply_code=True)
+
+    @rx.event
+    async def vba_export(self):
+        name = self.vba_module
+
+        def f(s):
+            r = s.execute("macro.exportModule", {"name": name})
+            return rx.download(data=r["text"].encode("cp1252", "replace"), filename=r["fileName"], mime_type="text/plain")
+
+        return await self._vba_edit(f)
+
+    @rx.event
+    async def vba_import(self, files: List[rx.UploadFile]):
+        for up in files[:5]:
+            raw = await up.read()
+            name = os.path.basename(up.name or up.filename or "Module1.bas")
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("cp1252", "replace")
+
+            def f(s, text=text, name=name):
+                r = s.execute("macro.importModule", {"fileName": name, "text": text})
+                self._vba_load(s, r["name"])
+                self.vba_status = f"Imported {name} as {r['name']}."
+
+            out = await self._vba_edit(f)
+            if out is not None:
+                return out
+        return None
+
+    @rx.event
+    async def open_vba_with(self, kind: str):
+        """Developer › Module / Class Module: a new module, open in the editor."""
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        self.vba_open = True
+        out = None
+        room = await self.get_state(BookRoom)
+        with book.act(view) as s:
+            try:
+                r = s.execute("macro.addModule", {"kind": kind})
+                self._vba_load(s, r["name"])
+            except EngineError as ex:
+                out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        return out
+
+    @rx.event
+    async def edit_macro(self, name: str):
+        """The Macros dialog's Edit: the macro's module, at the macro (a new module when the
+        name isn't a macro yet, as Excel's Create)."""
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        self.dialog, self.dlg, self.dlg_error = "", {}, ""
+        room = await self.get_state(BookRoom)
+        out = None
+        with book.act(view) as s:
+            try:
+                macros = s.execute("macro.list", {}).get("macros", [])
+                hit = next((m for m in macros if m["name"].lower() == (name or "").lower()), None)
+                if hit is not None:
+                    self._vba_load(s, hit["module"], int(hit.get("line") or 0))
+                    self.vba_error_line = 0
+                elif name and re.match(r"^[A-Za-z][A-Za-z0-9_]*$", name):
+                    lst = s.execute("macro.list", {})
+                    mod = next((m["name"] for m in lst.get("modules", []) if m["kind"] == "standard"), "")
+                    if not mod:
+                        mod = s.execute("macro.addModule", {"kind": "standard"})["name"]
+                    code = s.execute("macro.getModule", {"name": mod})["code"]
+                    code = (code.rstrip("\n") + "\n\n" if code.strip() else "") + f"Sub {name}()\n\nEnd Sub\n"
+                    s.execute("macro.setModule", {"name": mod, "code": code})
+                    self._vba_load(s, mod)
+                else:
+                    self._vba_load(s, "")
+                self.vba_open = True
+            except EngineError as ex:
+                out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        return out
+
+    @rx.event
+    def set_vba_immediate(self, text: str):
+        self.vba_immediate = text
+
+    @rx.event
+    async def vba_immediate_run(self, form: Optional[Dict[str, Any]] = None):
+        code = str((form or {}).get("code", self.vba_immediate) or "").strip()
+        if not code:
+            return None
+        self.vba_output = (self.vba_output + ["> " + code])[-500:]
+        self.vba_immediate = ""
+        self.macro_label = "Immediate"
+        return await self._macro_step("macro.immediate", {"code": code}, apply_code=True)
+
+    @rx.event
+    def vba_clear_output(self):
+        self.vba_output = []
+
+    @rx.event
+    async def enable_macros(self, on: bool = True):
+        """Event macros on (and Workbook_Open, as Excel runs it when content is enabled)."""
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        out = None
+        with book.act(view) as s:
+            try:
+                s.execute("macro.enableEvents", {"on": bool(on)})
+                if on:
+                    out = self._macro_after(s, s.execute("macro.open", {}))
+            except EngineError as ex:
+                out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        return out
+
 async def push(book_id: str) -> None:
     """Shows a book as it is now to everyone on it, from outside their own events (a tab that
     closed, a deletion, a save that finished): one of them publishes it to the room, and the
@@ -1500,6 +1987,15 @@ async def push(book_id: str) -> None:
 
 
 STORE.on_saved = push
+
+
+def _both(a, b):
+    """Two event results as one (either may be None)."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return [*(a if isinstance(a, list) else [a]), b]
 
 
 def _spans(idx: List[int], axis: str) -> str:

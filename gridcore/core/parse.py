@@ -124,7 +124,7 @@ def _parse_plain(t: str) -> Optional[tuple[float, Optional[str]]]:
     if not (digits[0].isdigit() or digits[0] == "."):
         return None
     try:
-        n = float(digits)
+        n = float(_fifteen_digits(digits))
     except ValueError:
         return None
     if not math.isfinite(n):
@@ -135,7 +135,8 @@ def _parse_plain(t: str) -> Optional[tuple[float, Optional[str]]]:
     if neg:
         n = -n
     if currency:
-        fmt = '"$"#,##0.00' if "." in digits else '"$"#,##0'
+        # Excel's built-in currency formats (5..8): negatives in red, in parentheses.
+        fmt = "$#,##0.00_);[Red]($#,##0.00)" if "." in digits else "$#,##0_);[Red]($#,##0)"
     elif percent:
         fmt = "0.00%" if "." in digits else "0%"
     elif sci:
@@ -145,6 +146,22 @@ def _parse_plain(t: str) -> Optional[tuple[float, Optional[str]]]:
     else:
         fmt = None
     return n, fmt
+
+
+def _fifteen_digits(digits: str) -> str:
+    """Excel keeps 15 significant digits of a typed number; the rest become zeros
+    (123456789012345678 is stored as 123456789012345000)."""
+    mant, _, exp = digits.replace("E", "e").partition("e")
+    sig = 0
+    out = []
+    for ch in mant:
+        if ch.isdigit():
+            if sig or ch != "0":
+                sig += 1
+            out.append(ch if sig <= 15 else "0")
+        else:
+            out.append(ch)
+    return "".join(out) + ("e" + exp if exp else "")
 
 
 def _parse_fraction(t: str) -> Optional[float]:
@@ -260,7 +277,7 @@ def _parse_date(t: str, sys: DateSystem) -> Optional[tuple[float, str]]:
             y, m, d = _num(a), _num(b), _num(c)
             if y is not None and m is not None and d is not None:
                 s = _valid_ymd(sys, y, m, d)
-                return None if s is None else (s, "yyyy-mm-dd")
+                return None if s is None else (s, "m/d/yyyy")
         m, d, y = _num(a), _num(b), _num(c)
         if m is not None and d is not None and y is not None:
             y = _two_digit_year(y, c)
@@ -294,6 +311,12 @@ def _parse_date(t: str, sys: DateSystem) -> Optional[tuple[float, str]]:
             return None if s is None else (s, "mmm-yy")
     # "Mar 4, 2026" / "March 4 2026" / "4 March 2026"
     words = [w for w in re.split(r"[ ,]", t) if w]
+    if len(words) == 2:
+        # "Jan 2024": the first of the month.
+        mo, y = month_from_name(words[0]), _num(words[1])
+        if mo is not None and y is not None and len(words[1]) == 4:
+            s = _valid_ymd(sys, y, mo, 1)
+            return None if s is None else (s, "mmm-yy")
     if len(words) == 3:
         mo, d, y = month_from_name(words[0]), _num(words[1]), _num(words[2])
         if mo is not None and d is not None and y is not None:

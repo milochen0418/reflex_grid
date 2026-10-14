@@ -31,7 +31,9 @@ class Rels:
 
     def add(self, kind: str, target: str, external: bool = False) -> str:
         rid = f"rId{len(self.items) + 1}"
-        if kind == "core-properties":
+        if "://" in kind:
+            ty = kind
+        elif kind == "core-properties":
             ty = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
         else:
             ty = f"{NS_REL}/{kind}"
@@ -119,8 +121,10 @@ def write_sheet(wb, si: int, selected: bool, out) -> Tuple[str, Rels]:
 
     s = [XML_DECL, f'<worksheet xmlns="{NS_MAIN}" xmlns:r="{NS_REL}">']
     fit = sheet.print.fit_to is not None
-    if sheet.tab_color is not None or fit:
-        s.append("<sheetPr>")
+    names = getattr(out, "code_names", None)
+    code_name = names[si] if names is not None and si < len(names) else sheet.code_name
+    if sheet.tab_color is not None or fit or code_name:
+        s.append(f'<sheetPr codeName="{esc_attr(code_name)}">' if code_name else "<sheetPr>")
         if sheet.tab_color is not None:
             s.append(f"<tabColor {color_attrs(sheet.tab_color)}/>")
         if fit:

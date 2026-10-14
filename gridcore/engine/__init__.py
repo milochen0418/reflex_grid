@@ -10,10 +10,12 @@ from . import (  # noqa: F401  (imported for command registration)
     cmd_format,
     cmd_formulas,
     cmd_insert,
+    cmd_macro,
     cmd_sheet,
     cmd_view,
     cmd_whatif,
 )
+from . import macro as _macro  # noqa: F401  (VBA: worksheet functions and event macros)
 from .cmd_file import open_bytes
 from .collab import CollabSession, SharedBook, View
 from .selection import Selection

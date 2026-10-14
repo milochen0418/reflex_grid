@@ -163,7 +163,7 @@ def test_text_to_columns():
     s = new()
     s.run("range.setValues", range="A1", values=[["x,1,2026-01-02"], ["y,2,2026-01-03"]])
     s.run("data.textToColumns", range="A1:A2", delimiters=[","])
-    assert val(s, "A2") == "y" and val(s, "B2") == 2 and s.run("cell.get", cell="C1")["text"] == "2026-01-02"
+    assert val(s, "A2") == "y" and val(s, "B2") == 2 and s.run("cell.get", cell="C1")["text"] == "1/2/2026"
 
 
 def test_validation_kinds():

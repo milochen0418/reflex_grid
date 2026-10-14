@@ -320,8 +320,10 @@ def resize_table(s, p):
     def fn(ctx, sm, tt):
         cols = list(tt.columns[: rng.width])
         tt.range = rng
+        from .tables import new_column_name
+
         for i in range(len(cols), rng.width):
-            cols.append(TableColumn(f"Column{i + 1}"))
+            cols.append(TableColumn(new_column_name(c.name for c in cols)))
         tt.columns = cols
         if tt.header_row:
             for i in range(rng.width):

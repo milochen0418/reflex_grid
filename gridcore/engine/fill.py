@@ -144,7 +144,8 @@ class Pattern:
 
 def fill(ctx, sheet: int, src: RangeRef, target: RangeRef, mode: str = "series") -> None:
     """Fills ``target`` (which contains ``src`` at one edge) from the pattern in ``src``.
-    ``mode``: series, alternate (Ctrl+drag), copy, formats, values."""
+    ``mode``: series, alternate (Ctrl+drag), fillseries (always a series: a single number counts
+    up, as VBA's ``xlFillSeries``), copy, formats, values."""
     wb = ctx.wb
     sh = wb.sheet(sheet)
     vertical = target.height != src.height or target.width == src.width
@@ -166,11 +167,11 @@ def fill(ctx, sheet: int, src: RangeRef, target: RangeRef, mode: str = "series")
         else:
             idxs = range(src.c1 + 1, target.c1 + 1) if forward else range(src.c0 - 1, target.c0 - 1, -1)
             targets = [(lane, c) for c in idxs]
-        if mode in ("series", "alternate"):
+        if mode in ("series", "alternate", "fillseries"):
             first = src_cells[0][1]
             fmt = wb.styles.get(first.style).num_fmt if first is not None else "General"
             pattern = Pattern.detect([c for _, c in src_cells], [], wb.date_system, fmt)
-            if mode == "alternate":
+            if mode == "alternate" or (mode == "fillseries" and pattern.kind == "copy"):
                 pattern = pattern.alternate([c for _, c in src_cells])
         else:
             pattern = Pattern()

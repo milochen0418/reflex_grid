@@ -599,7 +599,7 @@ def chart_tab() -> rx.Component:
     )
 
 
-TABS = ["File", "Home", "Insert", "Page Layout", "Formulas", "Data", "Review", "View"]
+TABS = ["File", "Home", "Insert", "Page Layout", "Formulas", "Data", "Review", "View", "Developer"]
 
 
 def tab_button(name: str) -> rx.Component:
@@ -617,6 +617,12 @@ def tab_button(name: str) -> rx.Component:
         background=rx.cond(name == "File", "transparent", "transparent"),
         _hover={"background": "#EEF2F5"},
     )
+
+
+def developer_tab() -> rx.Component:
+    from .vba import developer_tab as tab
+
+    return tab()
 
 
 def ribbon() -> rx.Component:
@@ -641,6 +647,7 @@ def ribbon() -> rx.Component:
                 ("Data", data_tab()),
                 ("Review", review_tab()),
                 ("View", view_tab()),
+                ("Developer", developer_tab()),
                 ("Table Design", table_tab()),
                 ("Chart Design", chart_tab()),
                 home_tab(),

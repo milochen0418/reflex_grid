@@ -1,0 +1,634 @@
+{
+ "write number": [
+  "Double|1.5;String|1.5;String|1.5;String|General;",
+  "A1=1.5{Double|1.5}"
+ ],
+ "write numeric strings": [
+  "",
+  "A1=123{Double|123} A2=12{Double|12} A3=1234{Double|1234}[#,##0] A4=0.5{Double|0.5}[0%] A5=5{Currency|5}[$#,##0_);[Red]($#,##0)] A6=1000{Double|1000}[0.00E+00] A7=-5{Double|-5} A8=-{String|-} A9=1.5{Double|1.5}[# ?/?] A10=0{Double|0} A11=7{Double|7} A12=0.5{Double|0.5}"
+ ],
+ "write date strings": [
+  "",
+  "A1=45293{Date|1/2/2024}[m/d/yyyy] A2=45293{Date|1/2/2024}[m/d/yyyy] A3=0.572916666666667{Double|0.572916666666667}[h:mm] A4=45293.6277777778{Date|1/2/2024 3:04:00 PM}[m/d/yyyy h:mm] A5=45292{Date|1/1/2024}[mmm-yy] A6=45293{Date|1/2/2024}[d-mmm-yy]"
+ ],
+ "write logical strings": [
+  "",
+  "A1=TRUE{Boolean|True} A2=FALSE{Boolean|False} A3=yes{String|yes} A4=#N/A{Error|Error 2042}"
+ ],
+ "write formula text": [
+  "Double|3;Boolean|True;String|#DIV/0!;",
+  "A1==1+2{Double|3} A2==1/0{Error|Error 2007}"
+ ],
+ "apostrophe": [
+  "String|123;String|123;String|123;String|';String|;",
+  "A1=123{String|123}"
+ ],
+ "empty string": [
+  "Boolean|True;String|;Double|0;Double|1;",
+  ""
+ ],
+ "assign Empty and Null": [
+  "Boolean|True;Boolean|True;",
+  ""
+ ],
+ "date value": [
+  "Date|1/15/2024;Double|45306;String|1/15/2024;String|m/d/yyyy;",
+  "A1=45306{Date|1/15/2024}[m/d/yyyy]"
+ ],
+ "date and time value": [
+  "String|############;String|m/d/yyyy h:mm;",
+  "A1=45306.5625{Date|1/15/2024 1:30:00 PM}[m/d/yyyy h:mm]"
+ ],
+ "time value": [
+  "String|1:30:15 PM;String|h:mm:ss AM/PM;Double|0.562673611111111;",
+  "A1=0.562673611111111{Double|0.562673611111111}[h:mm:ss AM/PM]"
+ ],
+ "date before 1900": [
+  "E1004;",
+  ""
+ ],
+ "currency value": [
+  "String|$1,234.50 ;String|$#,##0.00_);($#,##0.00);String|Currency;String|Double;",
+  "A1=1234.5{Currency|1234.5}[$#,##0.00_);($#,##0.00)]"
+ ],
+ "logical value": [
+  "Boolean|True;String|TRUE;String|TRUE;",
+  "A1=TRUE{Boolean|True}"
+ ],
+ "error value": [
+  "Boolean|True;String|#N/A;String|Error 2042;String|#N/A;",
+  "A1=#N/A{Error|Error 2042}"
+ ],
+ "formula error": [
+  "Boolean|True;String|#DIV/0!;",
+  "A1==1/0{Error|Error 2007}"
+ ],
+ "long digit string": [
+  "Double|1.23456789012345E+17;String|1.2346E+17;",
+  "A1=123456789012345000{Double|1.23456789012345E+17}"
+ ],
+ "text format": [
+  "String|String;String|Double;String|5;",
+  "A1=0123{String|0123}[@] A2=5{Double|5}[@]"
+ ],
+ "format kept on write": [
+  "String|25.6%;String|Date;String|3/15/2023;",
+  "A1=0.256{Double|0.256}[0.0%] A2=45000{Date|3/15/2023}[m/d/yyyy]"
+ ],
+ "general text of numbers": [
+  "String|0.33333333;String|1.2346E+11;String|1.234E-06;String|-1234.5;",
+  "A1=0.333333333333333{Double|0.333333333333333} A2=123456789012{Double|123456789012} A3=0.000001234{Double|1.234E-06} A4=-1234.5{Double|-1234.5}"
+ ],
+ "integer types": [
+  "String|Double;String|Double;String|Double;String|Double;",
+  "A1=5{Double|5} A2=7{Double|7} A3=9{Double|9} A4=1.5{Double|1.5}"
+ ],
+ "formula result": [
+  "Boolean|False;Double|0.3;",
+  "A1==0.1+0.2{Double|0.3}"
+ ],
+ "text of formats": [
+  "String|50%;String|1,234.50;String|1.23E+04;String|Mar 9, 2024;String|36:00;String|(5);",
+  "A1=0.5{Double|0.5}[0%] A2=1234.5{Double|1234.5}[#,##0.00] A3=12345{Double|12345}[0.00E+00] A4=45360{Date|3/9/2024}[mmm d, yyyy] A5=1.5{Double|1.5}[[h]:mm] A6=-5{Double|-5}[0;(0)]"
+ ],
+ "Formula to R1C1": [
+  "String|=R[-2]C[-2]+R2C2+R1C[-1];",
+  "C3==A1+$B$2+B$1{Double|0}"
+ ],
+ "R1C1 to Formula": [
+  "String|=B2*2+$A$1;",
+  "C3==B2*2+$A$1{Double|0}"
+ ],
+ "formula on a range": [
+  "String|=A3*2;Double|2;",
+  "A1=1{Double|1} B1==A1*2{Double|2} A2=1{Double|1} B2==A2*2{Double|2} A3=1{Double|1} B3==A3*2{Double|2}"
+ ],
+ "formulas from an array": [
+  "Double|2;String|x;",
+  "A1==1+1{Double|2} B1=x{String|x}"
+ ],
+ "HasFormula": [
+  "Null|;Boolean|True;Boolean|False;Boolean|False;",
+  "A1==1{Double|1} A2=1{Double|1}"
+ ],
+ "Formula of constants": [
+  "String|45355;String|1234567.891;String|text;String|;",
+  "A1=45355{Date|3/4/2024}[m/d/yyyy] A2=1234567.891{Double|1234567.891} A3=text{String|text}"
+ ],
+ "formula with strings": [
+  "String|ab;String|=\"a\"&\"b\";",
+  "A1==\"a\"&\"b\"{String|ab}"
+ ],
+ "formula normalised": [
+  "String|=SUM(B1:B2);String|= 1 + 2;",
+  "A1==SUM(B1:B2){Double|0} A2== 1 + 2{Double|3}"
+ ],
+ "invalid formula": [
+  "Long|1004;Boolean|True;",
+  ""
+ ],
+ "unknown function": [
+  "String|#NAME?;",
+  "A1==FOOBAR(1){Error|Error 2029}"
+ ],
+ "FormulaArray": [
+  "Double|2;Boolean|True;String|={1;2;3};String|$A$1:$A$3;",
+  "A1=={1;2;3}{Double|1} A2=={1;2;3}{Double|2} A3=={1;2;3}{Double|3}"
+ ],
+ "formula with sheet name": [
+  "Double|5;Boolean|True;",
+  "A1==Case35!B1+1{Double|5} B1=4{Double|4}"
+ ],
+ "value of several areas": [
+  "Double|1;",
+  "A1=1{Double|1} C1=2{Double|2}"
+ ],
+ "2-D value": [
+  "String|Variant();Long|1;Long|2;Long|1;Long|2;Double|3;Boolean|False;Boolean|True;",
+  "A1=3{Double|3} B1=3{Double|3} A2=3{Double|3} B2=3{Double|3}"
+ ],
+ "1-D array across": [
+  "",
+  "A1=1{Double|1} B1=2{Double|2} C1=3{Double|3}"
+ ],
+ "1-D array down": [
+  "",
+  "A1=1{Double|1} A2=1{Double|1} A3=1{Double|1}"
+ ],
+ "short array": [
+  "String|#N/A;",
+  "A1=1{Double|1} B1=2{Double|2} C1=#N/A{Error|Error 2042} D1=#N/A{Error|Error 2042}"
+ ],
+ "small 2-D array into a bigger range": [
+  "",
+  "A1=1{Double|1} B1=1{Double|1} A2=2{Double|2} B2=2{Double|2} A3=#N/A{Error|Error 2042} B3=#N/A{Error|Error 2042}"
+ ],
+ "0-based 2-D array": [
+  "Boolean|True;",
+  "A1=a{String|a} B2=d{String|d}"
+ ],
+ "Transpose": [
+  "String|Variant();Long|1;Long|3;String|z;",
+  "A1=x{String|x} A2=y{String|y} A3=z{String|z}"
+ ],
+ "range to range": [
+  "",
+  "A1=7{Double|7} C1=7{Double|7} A2=7{Double|7} C2=7{Double|7} A4=4{Double|4} B4=4{Double|4}"
+ ],
+ "range object as a value": [
+  "",
+  "A1=7{Double|7} A2=7{Double|7}"
+ ],
+ "empty cells in arrays": [
+  "Boolean|True;String|Empty;",
+  ""
+ ],
+ "Value and Value2 of currency": [
+  "String|Currency;String|Double;",
+  "A1=5{Currency|5}[$#,##0.00]"
+ ],
+ "dates in arrays": [
+  "String|Date;String|Currency;",
+  "A1=45292{Date|1/1/2024}[m/d/yyyy] B1=2.5{Currency|2.5}[$#,##0.00_);($#,##0.00)]"
+ ],
+ "scalar to a block": [
+  "",
+  "A1=x{String|x} B1=x{String|x} C1=x{String|x} A2=x{String|x} B2=x{String|x} C2=x{String|x}"
+ ],
+ "Text of several cells": [
+  "Variant()|1..2;Variant()|1..2;",
+  "A1=1{Double|1} B1=3{Double|3} A2=2{Double|2} B2=3{Double|3}"
+ ],
+ "Cells and Item": [
+  "String|$C$2;String|$C$3;String|$B$3;String|$B$4;String|$A$1;String|$C$1;",
+  ""
+ ],
+ "Offset and Resize": [
+  "String|$D$3;String|$B$1:$C$2;String|$B$2:$D$3;String|$B$2:$B$3;String|$C$2;",
+  ""
+ ],
+ "Offset off the sheet": [
+  "Long|1004;Boolean|True;",
+  ""
+ ],
+ "Rows and Columns": [
+  "Long|1048576;Long|16384;Long|5;String|$B$1:$B$5;String|$A$2:$C$2;String|$B:$C;String|$2:$3;Long|2;",
+  ""
+ ],
+ "EntireRow and EntireColumn": [
+  "String|$2:$3;String|$B:$B;Long|1;Long|16384;",
+  ""
+ ],
+ "End": [
+  "String|$A$5;String|$A$1;String|$C$1;String|$A$5;String|$A$1048576;String|$C$1;Long|5;String|$XFD$1;",
+  "A1=1{Double|1} C1=1{Double|1} A2=1{Double|1} A3=1{Double|1} A4=1{Double|1} A5=1{Double|1}"
+ ],
+ "End with gaps": [
+  "String|$A$2;String|$A$4;String|$A$4;String|$A$4;",
+  "A1=1{Double|1} A2=1{Double|1} A4=1{Double|1} A5=1{Double|1}"
+ ],
+ "CurrentRegion": [
+  "String|$A$1:$C$4;String|$A$1:$C$4;String|$F$6;String|$H$10;",
+  "A1=1{Double|1} B1=1{Double|1} A2=1{Double|1} B2=1{Double|1} A3=1{Double|1} B3=1{Double|1} C4=1{Double|1} F6=1{Double|1}"
+ ],
+ "UsedRange": [
+  "String|$B$2:$D$5;Long|4;",
+  "B2=1{Double|1} D5=1{Double|1}"
+ ],
+ "Address forms": [
+  "String|B2:C3;String|B$2:C$3;String|R2C2:R3C3;String|R[1]C[1]:R[2]C[2];String|$A$1:$B$2,$D$4;String|$B2;",
+  ""
+ ],
+ "Count": [
+  "Long|9;Long|1048576;Long|2097152;LongLong|17179869184;Long|6;",
+  ""
+ ],
+ "Areas": [
+  "Long|2;String|$D$4:$D$5;Long|6;Long|2;String|$A$2;Long|1;Long|1;",
+  ""
+ ],
+ "Union and Intersect": [
+  "String|$A$1:$A$3;String|$A$1:$A$2;String|$B$2:$C$3;Boolean|True;Long|3;String|$A$1:$B$2;",
+  ""
+ ],
+ "Range of two corners": [
+  "String|$B$2:$D$4;String|$A$1:$C$2;String|$A$1:$C$3;String|$A$1:$D$4;",
+  ""
+ ],
+ "Range relative to a range": [
+  "String|$B$2;String|$C$3;String|$C$2:$D$3;Long|4;",
+  ""
+ ],
+ "invalid references": [
+  "Long|1004;Long|1004;Long|1004;Long|1004;",
+  ""
+ ],
+ "For Each order": [
+  "String|A1,B1,A2,B2,A1:A2;B1:B2;A1:B1|A2:B2|A1.C1.C2.;",
+  ""
+ ],
+ "rows and columns of a block": [
+  "String|$A$2;String|$B$2;Long|3;String|$C$1:$C$3;String|$C$2;",
+  ""
+ ],
+ "positions": [
+  "Long|5;Long|3;Long|6;Double|15;Double|65;Double|65;Double|15;Double|130;",
+  ""
+ ],
+ "last cell idioms": [
+  "Long|10;Long|3;Long|10;Long|10;Long|5;String|$E$10;",
+  "A1=1{Double|1} B1=1{Double|1} C1=1{Double|1} A2=2{Double|2} A3=2{Double|2} E3=3{Double|3} A4=2{Double|2} A5=2{Double|2} A6=2{Double|2} A7=2{Double|2} A8=2{Double|2} A9=2{Double|2} A10=2{Double|2}"
+ ],
+ "Font": [
+  "Boolean|True;Boolean|True;Double|14;String|Arial;Double|255;Long|2;Long|3;Boolean|False;",
+  ""
+ ],
+ "Font of several cells": [
+  "Null|;Double|9;Null|;",
+  ""
+ ],
+ "Interior": [
+  "Double|65280;Long|4;Long|1;Double|16777215;Long|-4142;Long|-4142;",
+  ""
+ ],
+ "Interior by index": [
+  "Double|255;Double|65535;Long|-4142;Double|16777215;",
+  ""
+ ],
+ "NumberFormat": [
+  "String|General;String|0.00;Null|;String|General;",
+  ""
+ ],
+ "alignment": [
+  "Long|-4152;Long|1;Long|-4160;Long|-4107;Boolean|True;Boolean|False;Long|2;Long|-4131;",
+  ""
+ ],
+ "borders": [
+  "Long|1;Long|-4142;Long|2;Long|-4138;Long|1;",
+  ""
+ ],
+ "all borders": [
+  "Long|1;Long|1;Long|1;Long|2;",
+  ""
+ ],
+ "Merge": [
+  "Boolean|True;Boolean|True;String|$A$1:$B$2;Null|;Boolean|True;String|$C$3;String|$A$1;",
+  ""
+ ],
+ "Merge keeps the first value": [
+  "String|x;Boolean|True;",
+  "A1=x{String|x}"
+ ],
+ "Merge across": [
+  "String|$A$1:$B$1;String|$A$2:$B$2;",
+  ""
+ ],
+ "value of a merged area": [
+  "Double|5;Boolean|True;",
+  "A1=5{Double|5}"
+ ],
+ "ColumnWidth": [
+  "Double|10;Double|65;Double|12;Double|77;Double|5;Double|5;Double|12;",
+  ""
+ ],
+ "RowHeight": [
+  "Double|15;Double|20.25;Double|20.25;Double|20;",
+  ""
+ ],
+ "Hidden": [
+  "Boolean|True;Boolean|True;Double|0;Boolean|True;Double|0;Boolean|False;Double|15;",
+  ""
+ ],
+ "AutoFit": [
+  "Boolean|True;Boolean|True;",
+  "A1=a fairly long text value in one cell{String|a fairly long text value in one cell}"
+ ],
+ "Locked": [
+  "Boolean|True;Boolean|False;Boolean|False;Null|;",
+  ""
+ ],
+ "ClearContents keeps formats": [
+  "Boolean|True;String|0.00;Boolean|True;",
+  ""
+ ],
+ "ClearFormats keeps values": [
+  "Double|5;String|General;Boolean|False;",
+  "A1=5{Double|5}"
+ ],
+ "Clear": [
+  "Boolean|True;Boolean|False;",
+  ""
+ ],
+ "Delete shift up": [
+  "Double|3;String|=SUM(A1:A4);Double|13;",
+  "A1=1{Double|1} C1==SUM(A1:A4){Double|13} A2=3{Double|3} A3=4{Double|4} A4=5{Double|5}"
+ ],
+ "Delete shift left": [
+  "Double|3;Boolean|True;",
+  "A1=1{Double|1} B1=3{Double|3} C1=4{Double|4}"
+ ],
+ "deleting a referenced row": [
+  "String|=#REF!;",
+  "A1=1{Double|1} C1==#REF!{Error|Error 2023} A2=1{Double|1} A3=1{Double|1} A4=1{Double|1}"
+ ],
+ "Insert shift down": [
+  "Double|2;String|=A3;Boolean|True;",
+  "A1=1{Double|1} C1==A3{Double|2} A3=2{Double|2} A4=3{Double|3}"
+ ],
+ "inserted rows take the format above": [
+  "Boolean|True;Double|2;",
+  "A3=2{Double|2}"
+ ],
+ "insert columns": [
+  "Double|2;String|=D1;Boolean|True;",
+  "A1=1{Double|1} C1=2{Double|2} D1=3{Double|3} A2==D1{Double|3}"
+ ],
+ "Copy to a destination": [
+  "String|=C3+$A$1;Double|2;",
+  "A1=1{Double|1} A2==A1+$A$1{Double|2} C3=1{Double|1} C4==C3+$A$1{Double|2}"
+ ],
+ "Copy to a bigger range": [
+  "",
+  "A1=2{Double|2} B1=1{Double|1} C1=2{Double|2} A2=2{Double|2} B2=1{Double|1} C2=2{Double|2} B3=1{Double|1}"
+ ],
+ "Copy rows": [
+  "Boolean|True;",
+  "A1=1{Double|1} B1=2{Double|2} C1=3{Double|3} A3=1{Double|1} B3=2{Double|2} C3=3{Double|3}"
+ ],
+ "Cut moves references": [
+  "String|=C1*2;Double|6;Boolean|True;",
+  "B1==C1*2{Double|6} C1=3{Double|3}"
+ ],
+ "PasteSpecial values": [
+  "String|2;Boolean|False;",
+  "A1=1{Double|1} C1=1{Double|1} A2==A1+1{Double|2} C2=2{Double|2}"
+ ],
+ "PasteSpecial formats": [
+  "Boolean|True;String|0.0;Double|5;",
+  "C1=5{Double|5}[0.0]"
+ ],
+ "PasteSpecial transpose": [
+  "",
+  "A1=1{Double|1} C1=1{Double|1} D1=2{Double|2} E1=3{Double|3} A2=2{Double|2} A3=3{Double|3}"
+ ],
+ "PasteSpecial add": [
+  "Double|6;",
+  "A1=5{Double|5} B1=6{Double|6}"
+ ],
+ "FillDown and FillRight": [
+  "String|=A3*2;String|=F2;",
+  "A1=1{Double|1} B1==A1*2{Double|2} D1==D2{Double|0} E1==E2{Double|0} F1==F2{Double|0} A2=1{Double|1} B2==A2*2{Double|2} A3=1{Double|1} B3==A3*2{Double|2}"
+ ],
+ "AutoFill series": [
+  "",
+  "A1=1{Double|1} B1=1{Double|1} C1=1{Double|1} A2=2{Double|2} B2=1{Double|1} C2=2{Double|2} A3=3{Double|3} B3=1{Double|1} C3=3{Double|3} A4=4{Double|4} A5=5{Double|5} A6=6{Double|6}"
+ ],
+ "AutoFill text": [
+  "",
+  "A1=Item1{String|Item1} B1=Mon{String|Mon} C1=Jan{String|Jan} D1=x{String|x} A2=Item2{String|Item2} B2=Tue{String|Tue} C2=Feb{String|Feb} D2=x{String|x} A3=Item3{String|Item3} B3=Wed{String|Wed} C3=Mar{String|Mar} D3=x{String|x}"
+ ],
+ "AutoFill dates and formulas": [
+  "String|2/2/2024;String|=ROW()*10;",
+  "A1=45322{Date|1/31/2024}[m/d/yyyy] B1==ROW()*10{Double|10} A2=45323{Date|2/1/2024}[m/d/yyyy] B2==ROW()*10{Double|20} A3=45324{Date|2/2/2024}[m/d/yyyy] B3==ROW()*10{Double|30}"
+ ],
+ "Sort with a header": [
+  "",
+  "A1=Name{String|Name} B1=Score{String|Score} A2=c{String|c} B2=3{Double|3} A3=b{String|b} B3=2{Double|2} A4=a{String|a} B4=1{Double|1}"
+ ],
+ "Sort with two keys": [
+  "",
+  "A1=x{String|x} B1=3{Double|3} A2=x{String|x} B2=2{Double|2} A3=x{String|x} B3=1{Double|1} A4=y{String|y} B4=5{Double|5} A5=y{String|y} B5=1{Double|1}"
+ ],
+ "Sort mixed types": [
+  "",
+  "A1=1{Double|1} A2=3{Double|3} A3=10{Double|10} A4=a{String|a} A5=b{String|b} A6=TRUE{Boolean|True}"
+ ],
+ "Sort keeps row formulas": [
+  "String|=A1*10;Double|10;",
+  "A1=1{Double|1} B1==A1*10{Double|10} A2=2{Double|2} B2==A2*10{Double|20} A3=3{Double|3} B3==A3*10{Double|30}"
+ ],
+ "Sort object": [
+  "",
+  "A1=k{String|k} B1=v{String|v} A2=a{String|a} B2=3{Double|3} A3=b{String|b} B3=1{Double|1} A4=c{String|c} B4=2{Double|2}"
+ ],
+ "Sort left to right": [
+  "",
+  "A1=1{Double|1} B1=2{Double|2} C1=3{Double|3} A2=a{String|a} B2=b{String|b} C2=c{String|c}"
+ ],
+ "RemoveDuplicates": [
+  "",
+  "A1=k{String|k} B1=v{String|v} A2=x{String|x} B2=1{Double|1} A3=x{String|x} B3=2{Double|2} A4=y{String|y} B4=1{Double|1}"
+ ],
+ "Find starts after the first cell": [
+  "String|A2,A3,A1,;",
+  "A1=abc{String|abc} A2=b{String|b} A3=xbx{String|xbx}"
+ ],
+ "Find options": [
+  "String|$A$2;String|$A$2;String|$A$4;String|$A$4;String|$A$2;Boolean|True;String|$A$4;",
+  "A1=Apple{String|Apple} A2=apple{String|apple} A3=pineapple{String|pineapple} A4=APPLE PIE{String|APPLE PIE}"
+ ],
+ "Find in values or formulas": [
+  "String|$A$1;Boolean|True;String|$A$2;String|$A$2;",
+  "A1==1+1{Double|2} A2=10{Double|10}"
+ ],
+ "Replace": [
+  "Boolean|True;",
+  "A1=aXc{String|aXc} B1=dog{String|dog} A2=X{String|X} B2=concat{String|concat} A3=XoX{String|XoX}"
+ ],
+ "SpecialCells": [
+  "String|$A$1,$C$1,$A$4;String|$A$2;String|$B$1,$B$2:$C$4,$A$3;String|$A$1,$C$1;String|$A$4;",
+  "A1=1{Double|1} C1=2{Double|2} A2==A1{Double|1} A4=x{String|x}"
+ ],
+ "SpecialCells finds nothing": [
+  "Long|1004;Boolean|True;",
+  "A1=1{Double|1}"
+ ],
+ "TextToColumns": [
+  "String|Double;",
+  "A1=a{String|a} B1=b{String|b} C1=c{String|c} A2=1{Double|1} B2=2{Double|2} C2=3{Double|3}"
+ ],
+ "comments": [
+  "String|hello;Long|1;Boolean|True;Long|1004;Long|0;",
+  ""
+ ],
+ "hyperlinks": [
+  "String|Example;Long|1;String|https://example.com/;Long|1;Long|0;String|Example;",
+  "A1=Example{String|Example}"
+ ],
+ "validation": [
+  "String|a,b,c;Long|3;",
+  ""
+ ],
+ "conditional formats": [
+  "Long|1;String|=1;Long|1;Long|5;Long|0;",
+  ""
+ ],
+ "names": [
+  "String|$A$1:$A$3;Boolean|True;Long|3;Double|6;",
+  "A1=2{Double|2} A2=2{Double|2} A3=2{Double|2}"
+ ],
+ "constant names": [
+  "Double|0.05;Double|0.05;String|=0.05;Double|5;",
+  "A1==TaxRate*100{Error|Error 2029}"
+ ],
+ "naming a range": [
+  "String|$A$1:$A$2;Boolean|True;",
+  ""
+ ],
+ "Evaluate": [
+  "Double|6;Double|6;Long|3;String|$A$1:$A$3;Error|Error 2007;String|abc;Double|6;",
+  "A1=2{Double|2} A2=2{Double|2} A3=2{Double|2}"
+ ],
+ "WorksheetFunction": [
+  "Double|15;Double|3;Double|3;Double|3;Object|Range;Double|4;Double|3;Double|10;Double|4;Double|3;String|1,234.50;String|a b;String|Hello World;String|aYa;Double|5;Double|10;",
+  "A1=1{Double|1} A2=2{Double|2} A3=3{Double|3} A4=4{Double|4} A5=5{Double|5}"
+ ],
+ "WorksheetFunction errors": [
+  "Long|1004;Long|0;Boolean|True;String|Error 2042;String|Error 2042;Long|1004;",
+  "A1=1{Double|1} A2=1{Double|1} A3=1{Double|1}"
+ ],
+ "worksheet functions on arrays": [
+  "Double|6;Double|5;Double|20;Double|2;Long|1;Long|2;Double|2;Double|4;Double|4;",
+  "A1=4{Double|4} B1=4{Double|4} A2=4{Double|4} B2=4{Double|4}"
+ ],
+ "VBA and Excel rounding": [
+  "Double|2;Double|3;Double|4;Double|-2;Double|6;",
+  ""
+ ],
+ "adding sheets": [
+  "Long|1;Boolean|True;Boolean|True;Boolean|True;Long|0;Boolean|True;",
+  ""
+ ],
+ "invalid sheet names": [
+  "Long|1004;Long|1004;Long|1004;Long|1004;",
+  ""
+ ],
+ "copying a sheet": [
+  "Boolean|True;Double|5;Boolean|True;",
+  "A1=5{Double|5}"
+ ],
+ "sheet order": [
+  "Boolean|True;Boolean|True;Boolean|True;String|Results;Boolean|True;",
+  ""
+ ],
+ "hiding sheets": [
+  "Long|0;Boolean|True;Long|2;",
+  ""
+ ],
+ "type names": [
+  "String|Worksheet;String|Worksheet;String|Workbook;String|Application;String|Range;String|Font;String|Range;String|Range;String|Sheets;String|Sheets;String|WorksheetFunction;String|Names;String|Interior;String|Borders;String|Range;",
+  ""
+ ],
+ "protection": [
+  "Long|1004;Boolean|True;Boolean|True;Boolean|False;Double|1;",
+  "A1=1{Double|1}"
+ ],
+ "unlocked cells on a protected sheet": [
+  "Long|1004;Double|1;Boolean|True;",
+  "A1=1{Double|1}"
+ ],
+ "protection for the user only": [
+  "Long|0;Double|1;",
+  "A1=1{Double|1}"
+ ],
+ "Select and Activate": [
+  "String|$B$2:$C$3;String|$B$2;String|$C$3;String|$B$2:$C$3;String|$E$5;String|$E$5;",
+  ""
+ ],
+ "moving the selection": [
+  "String|$B$3;Long|2;String|$A$1;String|$D$4;String|$D$4;",
+  ""
+ ],
+ "writing through the selection": [
+  "Boolean|True;",
+  "B2=9{Double|9} C2=x{String|x} B3=9{Double|9}"
+ ],
+ "events of macro changes": [
+  "String|chg:A1,chg:B1:C2,chg:D1,chg:E1,;",
+  "A1=1{Double|1} B1=2{Double|2} C1=2{Double|2} E1==1{Double|1} B2=2{Double|2} C2=2{Double|2}"
+ ],
+ "EnableEvents": [
+  "String|chg:A2,;",
+  "A1=1{Double|1} A2=2{Double|2}"
+ ],
+ "manual calculation": [
+  "Double|2;Double|10;Double|10;",
+  "A1=5{Double|5} A2==A1*2{Double|10}"
+ ],
+ "tables": [
+  "Long|2;Long|2;String|$A$1:$B$1;String|$A$2:$B$3;String|Qty;Long|2;String|$A$1:$B$3;Boolean|False;Double|3;",
+  "A1=Name{String|Name} B1=Qty{String|Qty} D1==SUM(tblCase151[Qty]){Double|3} A2=x{String|x} B2=1{Double|1} A3=y{String|y} B3=2{Double|2}"
+ ],
+ "table rows and columns": [
+  "Long|3;String|$A$1:$C$4;String|Column1;Empty|;Boolean|True;",
+  "A1=Name{String|Name} B1=Qty{String|Qty} C1=Column1{String|Column1} A3=x{String|x} B3=1{Double|1} A4=y{String|y} B4=2{Double|2}"
+ ],
+ "writing next to a table": [
+  "String|$A$1:$C$3;",
+  "A1=Name{String|Name} B1=Qty{String|Qty} C1=New{String|New} A2=x{String|x} B2=1{Double|1} A3=z{String|z}"
+ ],
+ "AutoFilter": [
+  "Boolean|True;Boolean|True;Boolean|True;Boolean|False;String|$A$1:$B$2,$A$4:$B$4;String|$A$1:$B$4;Boolean|False;Boolean|False;Boolean|False;",
+  "A1=Name{String|Name} B1=Qty{String|Qty} A2=x{String|x} B2=1{Double|1} A3=y{String|y} B3=2{Double|2} A4=x{String|x} B4=3{Double|3}"
+ ],
+ "AutoFilter conditions": [
+  "String|$A$1,$A$3:$A$4;String|$A$1:$A$2,$A$6;",
+  "A1=n{String|n} A2=1{Double|1} A3=2{Double|2} A4=3{Double|3} A5=4{Double|4} A6=5{Double|5}"
+ ],
+ "delete rows in a loop": [
+  "",
+  "A1=keep1{String|keep1} A2=keep3{String|keep3} A3=keep5{String|keep5}"
+ ],
+ "totals by key": [
+  "",
+  "A1=x{String|x} B1=1{Double|1} D1=x{String|x} E1==SUMIF(A:A,D1,B:B){Double|10}[0.00] A2=y{String|y} B2=2{Double|2} D2=y{String|y} E2==SUMIF(A:A,D2,B:B){Double|7}[0.00] A3=x{String|x} B3=3{Double|3} D3=z{String|z} E3==SUMIF(A:A,D3,B:B){Double|4}[0.00] A4=z{String|z} B4=4{Double|4} A5=y{String|y} B5=5{Double|5} A6=x{String|x} B6=6{Double|6}"
+ ],
+ "report with formats": [
+  "String|72.50;Double|72.5;",
+  "A1=Item{String|Item} B1=Qty{String|Qty} C1=Price{String|Price} A2=Item 1{String|Item 1} B2=4{Double|4} C2=2.5{Double|2.5}[#,##0.00] A3=Item 2{String|Item 2} B3=6{Double|6} C3=3.75{Double|3.75}[#,##0.00] A4=Item 3{String|Item 3} B4=8{Double|8} C4=5{Double|5}[#,##0.00] A5=Total{String|Total} B5==SUM(B2:B4){Double|18} C5==SUMPRODUCT($B$2:$B$4,$C$2:$C$4){Double|72.5}[#,##0.00]"
+ ],
+ "arrays in and out": [
+  "",
+  "A1=5{Double|5} B1=50{Double|50} C1=a{String|a} D1=2{Double|2} E1=TRUE{Boolean|True} A2=3{Double|3} B2=30{Double|30} A3=8{Double|8} B3=80{Double|80} A4=1{Double|1} B4=10{Double|10} A5=9{Double|9} B5=90{Double|90}"
+ ]
+}

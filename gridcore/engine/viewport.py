@@ -576,4 +576,5 @@ def ui_state(session) -> Dict[str, Any]:
         if session.clipboard is not None and session.clipboard.doc_uid == d.uid
         else None,
         "formatPainter": session.format_painter is not None,
+        "macros": {"project": wb.vba is not None, "enabled": bool(getattr(d, "macros_enabled", False))},
     }

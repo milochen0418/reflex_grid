@@ -151,6 +151,8 @@ def read_xlsx(data: bytes) -> Tuple[Workbook, List[str]]:
     wp = child(wb_xml, "workbookPr")
     if wp is not None and flag(wp, "date1904", False):
         cx.date_system = DateSystem.D1904
+    if wp is not None and attr(wp, "codeName"):
+        wb.code_name = attr(wp, "codeName") or ""
     wb.date_system = cx.date_system
     cp = child(wb_xml, "calcPr")
     if cp is not None:
@@ -254,10 +256,46 @@ def read_xlsx(data: bytes) -> Tuple[Workbook, List[str]]:
         if x is not None:
             c = child(x, "Company")
             wb.props.company = (c.text or "").strip() if c is not None else ""
-    if _find_rel(wb_rels, "vbaProject") is not None:
-        cx.warn("macros (VBA project) are not supported and will not be saved")
+    vr = _find_rel(wb_rels, "vbaProject")
+    if vr is not None:
+        _read_vba(cx, wb, vr.target)
     wb.styles = cx.styles
     return wb, cx.report.warnings
+
+
+# Parts that sign a VBA project: relationship type → content type.
+SIGNATURE_TYPES = {
+    "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature": "application/vnd.ms-office.vbaProjectSignature",
+    "http://schemas.microsoft.com/office/2014/relationships/vbaProjectSignatureAgile": "application/vnd.ms-office.vbaProjectSignatureAgile",
+    "http://schemas.microsoft.com/office/2020/07/relationships/vbaProjectSignatureV3": "application/vnd.ms-office.vbaProjectSignatureV3",
+}
+
+
+def _read_vba(cx: Ctx, wb: Workbook, part: str) -> None:
+    """The workbook's VBA project. One that can't be read is still kept, byte for byte."""
+    from ..model.vba import VbaProject
+    from .ovba import OvbaError, read_project
+
+    data = cx.pkg.read(part)
+    if data is None:
+        cx.warn(f"missing part {part} (the VBA project)")
+        return
+    sigs = []
+    for r in cx.pkg.rels(part):
+        if r.type in SIGNATURE_TYPES and not r.external:
+            b = cx.pkg.read(r.target)
+            if b is not None:
+                sigs.append((r.type, r.target.rsplit("/", 1)[-1], b))
+    try:
+        project = read_project(data)
+    except (OvbaError, ValueError, KeyError, IndexError) as e:
+        cx.warn(f"the VBA project can't be read ({e}); it is kept as it is but can't be edited or run")
+        project = VbaProject(base=data, unreadable=str(e) or "unreadable")
+    for w in project.warnings:
+        cx.warn(f"VBA: {w}")
+    from dataclasses import replace
+
+    wb.vba = replace(project, signatures=tuple(sigs))
 
 
 def _unique_name(wb: Workbook, name: str, i: int) -> str:

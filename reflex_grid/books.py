@@ -1,7 +1,8 @@
 """Shared workbooks ("books"): stored as .xlsx files, opened once per server process, edited by
 everyone viewing them at the same time.
 
-Each book is ``<home>/books/<id>.xlsx`` (the workbook, as Excel reads it) plus ``<id>.json``
+Each book is ``<home>/books/<id>.xlsx`` (the workbook, as Excel reads it; ``<id>.xlsm`` when it
+has macros) plus ``<id>.json``
 (title, creator, times, sheet names). ``<home>`` is ``REFLEX_GRID_HOME``, by default
 ``~/Library/Application Support/reflex_grid`` on macOS and ``$XDG_DATA_HOME/reflex_grid`` (or
 ``~/.local/share/reflex_grid``) elsewhere: outside the project, so saving never triggers a hot
@@ -131,8 +132,23 @@ class BookStore:
 
     # ------------------------------------------------------------ files
 
-    def _xlsx(self, book_id: str) -> Path:
-        return self.dir / f"{book_id}.xlsx"
+    def _xlsx(self, book_id: str, ext: str = "xlsx") -> Path:
+        return self.dir / f"{book_id}.{ext}"
+
+    def _file(self, book_id: str) -> Path:
+        """The stored workbook: ``<id>.xlsm`` for a workbook with macros, else ``<id>.xlsx``."""
+        xlsm = self._xlsx(book_id, "xlsm")
+        return xlsm if xlsm.exists() else self._xlsx(book_id)
+
+    def _store(self, book_id: str, wb: Workbook, data: bytes) -> None:
+        """Writes the workbook file (as .xlsm when it has macros) and drops the other one."""
+        ext = file_extension(wb)
+        _atomic_write(self._xlsx(book_id, ext), data)
+        other = self._xlsx(book_id, "xlsx" if ext == "xlsm" else "xlsm")
+        try:
+            other.unlink()
+        except OSError:
+            pass
 
     def _json(self, book_id: str) -> Path:
         return self.dir / f"{book_id}.json"
@@ -210,7 +226,7 @@ class BookStore:
         data = write_xlsx(doc.wb)
         meta.size = len(data)
         self.dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write(self._xlsx(book_id), data)
+        self._store(book_id, doc.wb, data)
         self._write_meta(meta)
         return meta
 
@@ -224,7 +240,7 @@ class BookStore:
         return self.create(d, name, creator)
 
     def create_from_file(self, data: bytes, filename: str, creator: Optional[dict] = None) -> Tuple[BookMeta, List[str]]:
-        """A new book from an uploaded .xlsx/.csv/.tsv, with the reader's warnings (raises
+        """A new book from an uploaded .xlsx/.xlsm/.csv/.tsv, with the reader's warnings (raises
         EngineError when the file can't be read)."""
         d = open_bytes(Session(), data, os.path.basename(filename or "Book.xlsx"))
         stem = os.path.splitext(os.path.basename(filename or ""))[0]
@@ -247,11 +263,12 @@ class BookStore:
                 meta = self.create_blank(creator, book_id=book_id)
                 doc = DocState(Workbook(), meta.title)
             else:
+                path = self._file(book_id)
                 try:
-                    data = self._xlsx(book_id).read_bytes()
+                    data = path.read_bytes()
                 except OSError as e:
                     raise EngineError(f"The workbook file is missing: {e.strerror}")
-                doc = open_bytes(Session(), data, f"{meta.title}.xlsx")
+                doc = open_bytes(Session(), data, f"{meta.title}{path.suffix}")
                 doc.name = meta.title
             doc.saved = doc.wb
             book = Book(doc, meta)
@@ -294,21 +311,23 @@ class BookStore:
                     if book._timer is not None:
                         book._timer.cancel()
                         book._timer = None
-            for p in (self._xlsx(book_id), self._json(book_id)):
+            for p in (self._xlsx(book_id), self._xlsx(book_id, "xlsm"), self._json(book_id)):
                 try:
                     p.unlink()
                 except OSError:
                     pass
 
-    def xlsx_bytes(self, book_id: str) -> Optional[bytes]:
-        """The workbook as an .xlsx file: as it is now when open, else as stored."""
+    def file_bytes(self, book_id: str) -> Optional[Tuple[bytes, str]]:
+        """The workbook as a file and its extension (xlsx, or xlsm with macros): as it is now
+        when open, else as stored."""
         book = self.get(book_id)
         if book is not None:
             with book.lock:
                 wb = book.doc.wb
-            return write_xlsx(wb)
+            return write_xlsx(wb), file_extension(wb)
+        path = self._file(book_id)
         try:
-            return self._xlsx(book_id).read_bytes()
+            return path.read_bytes(), path.suffix[1:]
         except OSError:
             return None
 
@@ -345,7 +364,7 @@ class BookStore:
             with self._lock:
                 if book.deleted:
                     return False
-                _atomic_write(self._xlsx(book.key), data)
+                self._store(book.key, wb, data)
                 with book.lock:
                     book.meta.size = len(data)
                     book.meta.sheets = [s.name for s in wb.sheets]
@@ -393,6 +412,11 @@ class BookStore:
                     self._open.pop(book.key, None)
                     closed.append(book.key)
         return closed
+
+
+def file_extension(wb: Workbook) -> str:
+    """xlsm for a workbook with a VBA project (Excel won't open macros in an .xlsx), else xlsx."""
+    return "xlsm" if getattr(wb, "vba", None) is not None else "xlsx"
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
