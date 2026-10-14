@@ -1,8 +1,10 @@
-"""Sheets and data: sample workbooks, tables, charts, AutoFilter, sort, data validation lists,
-sheet tabs (add, rename, switch)."""
+"""Sheets and data: sample workbooks, tables, charts, moving a chart and a picture, AutoFilter, sort,
+data validation lists, sheet tabs (add, rename, switch)."""
 
+import struct
 import sys
 import time
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -16,6 +18,44 @@ def open_sample(g: Grid, name: str) -> None:
     g.page.click(f"#sample-{name.lower()}")
     g.wait_title(name)
     g.wait_idle(0.8)
+
+
+def png(w: int, h: int) -> bytes:
+    """A plain green ``w`` × ``h`` PNG."""
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\x00" + b"\x4e\xa7\x2e" * w for _ in range(h))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+def wait_box(obj, want: dict, what: str, timeout: float = 8.0) -> None:
+    """Waits until a chart or picture is drawn at ``want`` (x, y, width, height, to the pixel)."""
+    end = time.time() + timeout
+    while True:
+        b = obj.bounding_box()
+        if all(abs(b[k] - want[k]) <= 1 for k in ("x", "y", "width", "height")):
+            return
+        if time.time() > end:
+            raise AssertionError(f"{what}: at {b}, expected {want}")
+        time.sleep(0.1)
+
+
+def drag_object(g: Grid, obj, dx: float, dy: float) -> dict:
+    """Drags a chart or picture by its body: it moves by (dx, dy) and keeps its size, both while it
+    is dragged and once the server has it (only the handles resize). Returns where it is now."""
+    page = g.page
+    b0 = obj.bounding_box()
+    want = {**b0, "x": b0["x"] + dx, "y": b0["y"] + dy}
+    x, y = b0["x"] + b0["width"] / 2, b0["y"] + b0["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + dx, y + dy, steps=8)
+    wait_box(obj, want, "while dragging", 2.0)
+    page.mouse.up()
+    wait_box(obj, want, "after the drop")
+    return want
 
 
 def body(g: Grid) -> None:
@@ -62,6 +102,27 @@ def body(g: Grid) -> None:
     page.click("#rb-sort-desc")
     g.wait_idle(0.8)
     g.wait_text("H2", "North")
+    page.click("#tab-home")
+
+    # Dragging a chart or a picture by its body moves it without resizing it, either way; each drag
+    # is one undo step.
+    chart = page.locator(".rg-chart").first
+    home = chart.bounding_box()
+    away = drag_object(g, chart, 120, 60)
+    drag_object(g, chart, -120, -60)
+    g.key("Mod+z")
+    wait_box(chart, away, "after one undo")
+    g.key("Mod+z")
+    wait_box(chart, home, "after two undos")
+    g.click("H8")
+    page.click("#tab-insert")
+    page.get_by_role("button", name="Pictures", exact=True).click()
+    page.locator('#dlg-insertPicture input[type="file"]').set_input_files({"name": "green.png", "mimeType": "image/png", "buffer": png(120, 80)})
+    picture = page.locator(".rg-image").first
+    picture.wait_for(state="visible")
+    g.wait_idle(0.5)
+    drag_object(g, picture, 70, 50)
+    drag_object(g, picture, -70, -50)
     page.click("#tab-home")
 
     # Grades sample: list validation with an in-cell dropdown drives XLOOKUP.

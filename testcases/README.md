@@ -25,7 +25,7 @@ The `run_test.py` script should:
 | `smoke_home` | A workbook loads: ribbon, formula bar, grid headers, sheet tabs, status bar, title bar (title, save status, who is here); no console errors |
 | `editing_formulas` | Typing values and formulas, recalculation, formula bar, autocomplete, AutoSum, fill handle, undo/redo, copy/paste |
 | `formatting_ribbon` | Bold, fill colour, number formats, merge, borders, Format Cells dialog, column resize |
-| `sheets_data` | Sheet tabs (add/rename/switch), sort, filter dialog, tables, conditional formatting, charts from samples |
+| `sheets_data` | Sheet tabs (add/rename/switch), sort, filter dialog, tables, conditional formatting, charts from samples, dragging a chart and a picture (they move without resizing; one undo per drag) |
 | `xlsx_roundtrip` | Upload an .xlsx built with openpyxl, check what renders, download it again and re-read it with openpyxl |
 | `collab_live` | Three people on one workbook: presence, each other's selections and typing, edits and formulas reaching everyone, change highlights, per-person sheets, per-person undo, the shared title, jumping to someone, leaving and closing a tab |
 | `workbook_manager` | The workbook list: who is editing, a new workbook and its title, search and filters, uploading, downloading, deleting a workbook someone has open |

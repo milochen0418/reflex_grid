@@ -2312,25 +2312,30 @@ export function SheetView(props) {
         setObjSel(o.id);
         kbdRef.current && kbdRef.current.focus({ preventScroll: true });
         const start = { mx: ev.clientX, my: ev.clientY, x: o.x, y: o.y, width: o.width, height: o.height };
+        let last = null;
         const moveFn = (e2) => {
           const dx = (e2.clientX - start.mx) / z, dy = (e2.clientY - start.my) / z;
           let n = { id: o.id, x: start.x, y: start.y, width: start.width, height: start.height };
           if (mode === "move") n = { ...n, x: Math.max(0, start.x + dx), y: Math.max(0, start.y + dy) };
-          if (mode.includes("e")) n.width = Math.max(20, start.width + dx);
-          if (mode.includes("s")) n.height = Math.max(20, start.height + dy);
-          if (mode.includes("w")) { n.width = Math.max(20, start.width - dx); n.x = start.x + (start.width - n.width); }
-          if (mode.includes("n")) { n.height = Math.max(20, start.height - dy); n.y = start.y + (start.height - n.height); }
+          else {
+            // A handle ("nw", "e"…) resizes; a move never does, though "move" has an "e" too.
+            if (mode.includes("e")) n.width = Math.max(20, start.width + dx);
+            if (mode.includes("s")) n.height = Math.max(20, start.height + dy);
+            if (mode.includes("w")) { n.width = Math.max(20, start.width - dx); n.x = start.x + (start.width - n.width); }
+            if (mode.includes("n")) { n.height = Math.max(20, start.height - dy); n.y = start.y + (start.height - n.height); }
+          }
+          last = n;
           setObjDrag(n);
         };
         const upFn = (e2) => {
           window.removeEventListener("mousemove", moveFn);
           window.removeEventListener("mouseup", upFn);
-          setObjDrag((cur) => {
-            if (cur && cur.id === o.id && (cur.x !== o.x || cur.y !== o.y || cur.width !== o.width || cur.height !== o.height)) {
-              send("object", { id: o.id, x: cur.x, y: cur.y, width: cur.width, height: cur.height });
-            }
-            return null;
-          });
+          setObjDrag(null);
+          // Sent here, not from a state updater: React may call those twice (Strict Mode), which
+          // would send the move twice and leave an empty undo step.
+          if (last && (last.x !== o.x || last.y !== o.y || last.width !== o.width || last.height !== o.height)) {
+            send("object", { id: o.id, x: last.x, y: last.y, width: last.width, height: last.height });
+          }
         };
         window.addEventListener("mousemove", moveFn);
         window.addEventListener("mouseup", upFn);
