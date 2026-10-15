@@ -8,7 +8,8 @@ readme = "README.md"
 packages = [{include = "reflex_grid"}, {include = "gridcore"}]
 
 [tool.poetry.dependencies]
-python = "~3.11"
+# Tested on CPython 3.11–3.15 (unit tests and every E2E suite); development uses 3.11.
+python = ">=3.11,<3.16"
 reflex = "0.10.0"
 # Sign-in (SSO) and calls through DDNS Intents; the app also runs without it (guests, no calls).
 reflex-ddns-auth = {path = "../reflex_ddns_auth", develop = true}

@@ -973,7 +973,7 @@ name = "reflex-ddns-auth"
 version = "0.1.0"
 description = "Shared SSO AuthState for Reflex apps on *.reflex-ddns.com"
 optional = false
-python-versions = ">=3.11,<3.12"
+python-versions = ">=3.11,<3.16"
 groups = ["main"]
 files = []
 develop = true
@@ -1252,5 +1252,5 @@ h11 = ">=0.16.0,<1"
 
 [metadata]
 lock-version = "2.1"
-python-versions = "~3.11"
-content-hash = "b9b0332c7354b77fc54a0ffaea882e5ec169ba3b0ae527c732962a20a36ca3eb"
+python-versions = ">=3.11,<3.16"
+content-hash = "aac11df534ce310f452edca6a69da8cc499a6583e28bb26ad918271cbe7847dc"

@@ -138,7 +138,7 @@ def light_in_dark_mode(g: Grid) -> None:
     page = g.page
     page.emulate_media(color_scheme="dark")
     page.evaluate("() => localStorage.setItem('theme', 'system')")
-    g.open(os.getenv("BASE_URL", "http://127.0.0.1:3000").rstrip("/"), g.book)
+    g.open(os.getenv("BASE_URL", "http://127.0.0.1:3611").rstrip("/"), g.book)
     page.click("#tab-developer")
     page.click("#rb-vba")
     page.locator("#dlg-vba").wait_for(state="visible")

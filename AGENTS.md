@@ -15,7 +15,8 @@ If you already read them earlier in the session, **re-check** when unsure.
 
 ## 1) Python / Poetry requirements (strict)
 
-This project targets **Python 3.11** (always set the Poetry env to 3.11 before installing deps or running commands).
+This project supports **Python 3.11–3.15** (`pyproject.toml`) and is developed on **Python 3.11** (always set the
+Poetry env to 3.11 before installing deps or running commands).
 
 - Prefer Poetry-managed environments.
 - If Poetry selected another Python (e.g. 3.12+), switch it:
@@ -80,8 +81,11 @@ Reflex server, sets `OUTPUT_DIR` and collects artifacts:
 poetry run ./run_test_suite.sh smoke_home
 ```
 
-Optional environment variables (see `testcases/README.md`): `BASE_URL` (default `http://127.0.0.1:3000`),
-`HEADLESS=0` to watch the browser. The runner keeps the workbooks a suite creates in its `output/data`;
+The runner's server listens on its own ports (frontend `3611`, backend `8611`; `TEST_FRONTEND_PORT` /
+`TEST_BACKEND_PORT` move them). Never test on `3000`/`8000`, and never free or kill what runs there: other
+local projects and sessions use those ports. Optional environment variables (see `testcases/README.md`):
+`BASE_URL` (default `http://127.0.0.1:3611`), `HEADLESS=0` to watch the browser. The runner keeps the
+workbooks a suite creates in its `output/data`;
 when you run the app yourself, point `REFLEX_GRID_HOME` at a scratch folder to keep test workbooks out of
 the user's own.
 

@@ -81,7 +81,7 @@ are detected first and reported as skipped.
 ## Getting Started
 
 This project uses [Poetry](https://python-poetry.org/) for dependency management.
-Make sure you have **Python 3.11** and Poetry installed.
+Make sure you have **Python 3.11–3.15** (3.11 is used for development) and Poetry installed.
 
 ### 1) Install
 

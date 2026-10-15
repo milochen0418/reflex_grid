@@ -42,8 +42,13 @@ Use the repo-level runner (it manages starting/stopping the Reflex server and co
 poetry run ./run_test_suite.sh smoke_home
 ```
 
+The runner's server uses ports of its own, frontend `3611` and backend `8611`, never `3000`/`8000`: those
+belong to the app you run yourself (`reflex_rerun.sh`) and to other local projects, and the runner frees its
+ports before and after a suite.
+
 Optional env vars:
-- `BASE_URL` (default `http://127.0.0.1:3000`)
+- `TEST_FRONTEND_PORT` / `TEST_BACKEND_PORT` (default `3611` / `8611`) to move the test server
+- `BASE_URL` (default `http://127.0.0.1:3611`, the test server)
 - `HEADLESS=0` to watch the browser
 - `PW_SLOWMO_MS=100` to slow actions down so you can see interactions
 - `PW_TIMEOUT_MS=60000` to increase Playwright timeouts

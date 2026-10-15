@@ -2,6 +2,10 @@ import os
 
 import reflex as rx
 
+# Tests, their artifacts, docs and scripts aren't the app: changing them must not hot-reload a running
+# server (yours, the E2E runner's, or an App Store dev container that mounts this checkout).
+os.environ.setdefault("REFLEX_HOT_RELOAD_EXCLUDE_PATHS", os.pathsep.join(("testcases", "tests", "docs", "scripts")))
+
 config = rx.Config(
     app_name="reflex_grid",
     plugins=[
