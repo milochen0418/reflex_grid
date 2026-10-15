@@ -259,10 +259,7 @@ def test_xlsm_package():
     assert '<sheetPr codeName="Sheet2">' in z.read("xl/worksheets/sheet2.xml").decode()
     openpyxl = pytest.importorskip("openpyxl")
     book = openpyxl.load_workbook(io.BytesIO(data), keep_vba=True)
-    try:
-        assert book.sheetnames == ["Sheet1", "Sheet2"] and book.vba_archive is not None
-    finally:
-        book.vba_archive.close()
+    assert book.sheetnames == ["Sheet1", "Sheet2"] and book.vba_archive is not None
     # Read back: the project, the code names and every document module.
     wb, warnings = read_xlsx(data)
     assert not warnings

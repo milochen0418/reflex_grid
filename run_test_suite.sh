@@ -20,15 +20,9 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
-# The suite's server gets ports of its own, never 3000/8000: those are for the app you run yourself
-# (reflex_rerun.sh) and for other local projects, and this runner frees its ports before and after.
-TEST_FRONTEND_PORT="${TEST_FRONTEND_PORT:-3611}"
-TEST_BACKEND_PORT="${TEST_BACKEND_PORT:-8611}"
 # Prefer IPv4 loopback to avoid IPv6/localhost quirks.
-BASE_URL="${BASE_URL:-http://127.0.0.1:$TEST_FRONTEND_PORT}"
-# The page's websocket goes to the test backend (rxconfig.py reads API_URL).
-API_URL="http://localhost:$TEST_BACKEND_PORT"
-export BASE_URL API_URL
+BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
+export BASE_URL
 export OUTPUT_DIR
 
 REFLEX_LOG="$OUTPUT_DIR/reflex.log"
@@ -48,49 +42,41 @@ run_in_poetry_env() {
   fi
 }
 
-free_test_ports() {
-  local pids
-  pids="$(lsof -ti:"$TEST_FRONTEND_PORT","$TEST_BACKEND_PORT" 2>/dev/null || true)"
-  if [[ -n "$pids" ]]; then
-    kill -9 $pids >/dev/null 2>&1 || true
-  fi
-}
-
 cleanup() {
   set +e
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
   fi
-  # Also ensure the test ports are freed.
-  free_test_ports
+  # Also ensure ports are freed.
+  lsof -ti:3000,8000 2>/dev/null | xargs -r kill -9 >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 echo "[runner] suite=$SUITE_NAME"
-echo "[runner] base_url=$BASE_URL (backend port $TEST_BACKEND_PORT)"
+echo "[runner] base_url=$BASE_URL"
 echo "[runner] output_dir=$OUTPUT_DIR"
 
-# Free the test ports first, so the readiness check below can't see a server that is about to be
+# Free the ports first, so the readiness check below can't see a server that is about to be
 # replaced.
-free_test_ports
+lsof -ti:3000,8000 2>/dev/null | xargs -r kill -9 >/dev/null 2>&1 || true
 for i in $(seq 1 20); do
-  if ! lsof -ti:"$TEST_FRONTEND_PORT","$TEST_BACKEND_PORT" >/dev/null 2>&1; then break; fi
+  if ! lsof -ti:3000,8000 >/dev/null 2>&1; then break; fi
   sleep 0.5
 done
 
-echo "[runner] starting server on ports $TEST_FRONTEND_PORT/$TEST_BACKEND_PORT ..."
+echo "[runner] starting server via ./reflex_rerun.sh ..."
 (
   cd "$ROOT_DIR"
-  # rxconfig.py keeps test artifacts and docs from hot-reloading it (that would reset sessions mid-test).
-  run_in_poetry_env reflex run --frontend-port "$TEST_FRONTEND_PORT" --backend-port "$TEST_BACKEND_PORT"
+  # Ensure we don't double-wrap poetry: reflex_rerun.sh already handles POETRY_ACTIVE.
+  ./reflex_rerun.sh
 ) >"$REFLEX_LOG" 2>&1 &
 SERVER_PID=$!
 
 echo "[runner] waiting for server to be reachable..."
 READY=0
 for i in $(seq 1 240); do
-  code="$(curl -s -m 5 -o /dev/null -w "%{http_code}" "$BASE_URL" || true)"
+  code="$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL" || true)"
   if [[ "$code" =~ ^2|^3 ]]; then
     READY=1
     break

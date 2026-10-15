@@ -254,7 +254,7 @@ def _read_views(e: ET.Element, sheet: Sheet) -> None:
                     sheet.view_top_left = c
         active_pane = attr(p, "activePane")
     sels = list(kids(v, "selection"))
-    sel = next((s for s in sels if attr(s, "pane") == active_pane), sels[-1] if sels else None)
+    sel = next((s for s in sels if attr(s, "pane") == active_pane), None) or (sels[-1] if sels else None)
     if sel is not None:
         c = parse_cell(attr(sel, "activeCell") or "")
         if c is not None:

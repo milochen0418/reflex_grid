@@ -57,11 +57,6 @@ End Sub
 
 def wait_gone(page, selector: str, timeout: float = 15.0) -> None:
     page.locator(selector).wait_for(state="detached", timeout=timeout * 1000)
-    # A dialog's overlay fades out after its content: a click meanwhile would land on it.
-    page.wait_for_function(
-        "() => [...document.querySelectorAll('.rt-BaseDialogOverlay')].every((o) => o.querySelector('.rt-BaseDialogContent'))",
-        timeout=timeout * 1000,
-    )
 
 
 def wait_empty(g: Grid, a1: str, timeout: float = 8.0) -> None:
@@ -207,7 +202,6 @@ def body(g: Grid) -> None:
     names = [x.strip() for x in page.locator(".dlg-macro").all_inner_texts()]
     assert names == ["Hello", "Fill", "Slow"], names
     page.click("#dlg-cancel")
-    wait_gone(page, "#dlg-macros")
     g.click("B12")
     g.type_in("B12", "=Twice(4)")
     g.wait_text("B12", "8")

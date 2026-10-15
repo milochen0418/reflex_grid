@@ -201,7 +201,7 @@ class Grid:
 
 @contextmanager
 def session(default_out: str):
-    base_url = os.getenv("BASE_URL", "http://127.0.0.1:3611").rstrip("/")
+    base_url = os.getenv("BASE_URL", "http://127.0.0.1:3000").rstrip("/")
     out = Path(os.getenv("OUTPUT_DIR", default_out))
     out.mkdir(parents=True, exist_ok=True)
     headless = env_bool("HEADLESS", True)
@@ -247,7 +247,7 @@ MEDIA_ARGS = ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-str
 def people(default_out: str, count: int = 2, media: bool = False):
     """``count`` people, each in a browser context of their own (separate sessions, as on
     separate computers), on the same new workbook. ``media`` gives them a fake microphone."""
-    base_url = os.getenv("BASE_URL", "http://127.0.0.1:3611").rstrip("/")
+    base_url = os.getenv("BASE_URL", "http://127.0.0.1:3000").rstrip("/")
     out = Path(os.getenv("OUTPUT_DIR", default_out))
     out.mkdir(parents=True, exist_ok=True)
     headless = env_bool("HEADLESS", True)

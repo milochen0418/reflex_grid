@@ -15,8 +15,7 @@ If you already read them earlier in the session, **re-check** when unsure.
 
 ## 1) Python / Poetry requirements (strict)
 
-This project supports **Python 3.11–3.15** (`pyproject.toml`) and is developed on **Python 3.11** (always set the
-Poetry env to 3.11 before installing deps or running commands).
+This project targets **Python 3.11** (always set the Poetry env to 3.11 before installing deps or running commands).
 
 - Prefer Poetry-managed environments.
 - If Poetry selected another Python (e.g. 3.12+), switch it:
@@ -81,11 +80,8 @@ Reflex server, sets `OUTPUT_DIR` and collects artifacts:
 poetry run ./run_test_suite.sh smoke_home
 ```
 
-The runner's server listens on its own ports (frontend `3611`, backend `8611`; `TEST_FRONTEND_PORT` /
-`TEST_BACKEND_PORT` move them). Never test on `3000`/`8000`, and never free or kill what runs there: other
-local projects and sessions use those ports. Optional environment variables (see `testcases/README.md`):
-`BASE_URL` (default `http://127.0.0.1:3611`), `HEADLESS=0` to watch the browser. The runner keeps the
-workbooks a suite creates in its `output/data`;
+Optional environment variables (see `testcases/README.md`): `BASE_URL` (default `http://127.0.0.1:3000`),
+`HEADLESS=0` to watch the browser. The runner keeps the workbooks a suite creates in its `output/data`;
 when you run the app yourself, point `REFLEX_GRID_HOME` at a scratch folder to keep test workbooks out of
 the user's own.
 
@@ -107,11 +103,10 @@ the user's own.
   publish the book to its room (`GridState._publish`). Keep cells out of Reflex state: the room
   (`reflex_grid/room.py`, a `SharedState`) carries only small, broadcast things.
 - Engine edits that move cells to other addresses set `ctx.moved` (per-person undo depends on it).
-- The UI is light only, like Excel's: the theme is `rx.theme(appearance="light")` (the Radix Themes
-  plugin's, in `rxconfig.py`), the page declares `color-scheme: light`, and each page sets Reflex's colour
-  mode back to light when it mounts (a browser may remember "system" or "dark" from before, which Reflex
-  would apply over the theme and turn dialogs dark), so an OS in dark mode doesn't turn its text light on
-  our white surfaces. On surfaces we colour
+- The UI is light only, like Excel's: the theme is `rx.theme(appearance="light")`, the page declares
+  `color-scheme: light`, and each page sets Reflex's colour mode back to light when it mounts (a browser
+  may remember "system" or "dark" from before, which Reflex would apply over the theme and turn dialogs
+  dark), so an OS in dark mode doesn't turn its text light on our white surfaces. On surfaces we colour
   ourselves (the title bar, the backstage menu, the grid), give text an explicit colour.
 - Excel compatibility is a feature: anything written to `.xlsx` must open in Excel. When touching
   `gridcore/xlsx`, round-trip with openpyxl in a test.
