@@ -48,4 +48,6 @@ poetry run ./reflex_rerun.sh        # then open http://localhost:3000
   [FAQ](https://github.com/milochen0418/reflex_grid#faq)
 - [Excel macros (VBA) in ReflexGrid](vba.md): how macros and UserForms run, the sandbox, checks against
   Excel, limits
+- [Excel compatibility report](compatibility.md): the latest test results by area, compared with answers
+  recorded from Microsoft Excel
 - [Architecture](architecture.md): the engine's layers, commands, undo, recalculation and collaboration

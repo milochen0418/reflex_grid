@@ -86,6 +86,11 @@ Optional environment variables (see `testcases/README.md`): `BASE_URL` (default 
 when you run the app yourself, point `REFLEX_GRID_HOME` at a scratch folder to keep test workbooks out of
 the user's own.
 
+GitHub Actions (`.github/workflows/tests.yml`) runs the unit tests on Python 3.11 and 3.15 and each browser
+suite on every push, and on `main` publishes the docs site with the Excel compatibility report
+(`scripts/compat_report.py`). Keep it green: a new suite goes in the workflow's `suite` matrix, a new unit
+test file in `AREAS` in `scripts/compat_report.py`.
+
 ## 5) How the code is organised (keep it that way)
 
 - `gridcore/` is the spreadsheet engine and must not import Reflex. Layers depend only downward:

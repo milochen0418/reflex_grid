@@ -102,6 +102,10 @@ jobs:
           poetry env use "${{ steps.python.outputs.python-path }}"
           poetry install --no-interaction
           poetry run playwright install --with-deps chromium
+      # The grid's font stack falls back to these metric-compatible fonts where Microsoft's aren't installed
+      # (assets/grid/sheet_view.jsx); without them text is wider and a date can show as ########.
+      - name: Fonts (Carlito for Calibri, Caladea for Cambria, Tinos for Times New Roman)
+        run: sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-croscore
       - name: ${{ matrix.suite }}
         run: poetry run ./run_test_suite.sh ${{ matrix.suite }}
       - name: Record the result

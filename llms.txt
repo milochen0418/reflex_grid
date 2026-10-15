@@ -14,6 +14,7 @@
 - [README](https://raw.githubusercontent.com/milochen0418/reflex_grid/main/README.md): features, comparison with other web spreadsheets, FAQ, install, Python API and command line
 - [Excel macros (VBA)](https://raw.githubusercontent.com/milochen0418/reflex_grid/main/docs/vba.md): design, sandbox, checks against Excel, supported language and object model, limits
 - [Architecture](https://raw.githubusercontent.com/milochen0418/reflex_grid/main/docs/architecture.md): engine layers, commands, undo, recalculation, collaboration
+- [Excel compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html): the latest automated test results by area, compared with answers recorded from Microsoft Excel
 
 ## Optional
 

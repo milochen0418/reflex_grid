@@ -1,5 +1,8 @@
 # ReflexGrid
 
+[![Tests](https://github.com/milochen0418/reflex_grid/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/milochen0418/reflex_grid/actions/workflows/tests.yml)
+[![Excel compatibility report](https://img.shields.io/badge/Excel_compatibility-report-blue)](https://milochen0418.github.io/reflex_grid/compatibility.html)
+
 **An open-source, self-hosted online Excel.** ReflexGrid is a spreadsheet that runs in the browser: it opens
 and saves real `.xlsx` and `.xlsm` workbooks (formulas, cached values, styles, tables, charts…), runs their
 **Excel VBA macros and UserForms**, and lets everyone who opens a workbook's link **edit it together, live**
@@ -102,6 +105,10 @@ generated workbook, its values, formulas and displayed text are compared with wh
 Excel saves the file, and ReflexGrid reads Excel's own file back and recalculates it to match Excel's
 results. Functions the local Excel licence lacks (older versions have no IFS, XLOOKUP, SEQUENCE…)
 are detected first and reported as skipped.
+
+GitHub Actions runs the unit tests (on Python 3.11 and 3.15) and the browser suites on every change, and the
+[Excel compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html) shows the latest results by area: the answers that match Excel's,
+the known differences, and each browser suite.
 
 ## Getting Started
 
@@ -241,7 +248,8 @@ Macros run in a sandbox (no files, shell, network or COM), so a workbook's code 
 **How close to Excel is it?**
 VBA was checked against Microsoft Excel on 457 language and library cases and 158 object-model scenarios;
 the [results](docs/vba.md#checked-against-excel) list the few differences. Excel opens the files ReflexGrid writes, and ReflexGrid
-recalculates Excel's own files to Excel's results (see [Excel compatibility](#excel-compatibility)).
+recalculates Excel's own files to Excel's results (see [Excel compatibility](#excel-compatibility)). The
+[compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html) shows the latest results, from the tests GitHub Actions runs on every change.
 
 **Can several people edit the same `.xlsx` at the same time?**
 Yes. Share a workbook's link: everyone on it sees changes at once and each other's selections, and undo takes
@@ -280,6 +288,10 @@ poetry run ./run_test_suite.sh vba_macros         # the VBA editor, macro dialog
 poetry run ./run_test_suite.sh vba_userforms      # UserForms: modal and modeless, the editor's form view
 poetry run python scripts/excel_vba_oracle_mac.py --objects   # macros compared with Microsoft Excel (Mac, opt-in)
 ```
+
+GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs the unit tests and every
+browser suite except `collab_call` on each push. On `main` it also publishes the
+[compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html), written from that run by `scripts/compat_report.py`.
 
 ## Project structure
 
