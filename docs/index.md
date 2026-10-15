@@ -21,7 +21,7 @@ in Microsoft Excel:
 <a href="https://youtu.be/Zl0tysSTTOI"><img src="https://i.ytimg.com/vi/Zl0tysSTTOI/maxresdefault.jpg" width="640" alt="ReflexGrid demo video: co-editing, VBA macros and UserForms"></a>
 
 - **Co-editing, VBA macros and UserForms**, the latest demo (October 2026):
-  [English, 3:20](https://youtu.be/Zl0tysSTTOI) · [中文, 3:41](https://youtu.be/OvGv0PB3UKU)
+  [English](https://youtu.be/Zl0tysSTTOI) (3:20) · [中文](https://youtu.be/OvGv0PB3UKU) (3:41)
 - **Introduction to the first version** (October 2026, 1:51): [watch](https://www.youtube.com/watch?v=I5rBceuf1tM)
 - **DDNS Intent** (October 2026, 2:21): how apps on re_ddns open each other, which is how ReflexGrid's
   *Call everyone* works: [watch](https://www.youtube.com/watch?v=Y5YKXsWkrxg)
