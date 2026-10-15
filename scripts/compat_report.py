@@ -1,17 +1,21 @@
-"""Writes ReflexGrid's Excel compatibility report from a test run.
+"""Writes ReflexGrid's Excel compatibility report from a test run and the checks in Microsoft Excel.
 
-The unit tests compare ReflexGrid with answers recorded from Microsoft Excel (``tests/*_expected.json``,
-captured with ``scripts/excel_vba_oracle_mac.py``); this script groups pytest's JUnit XML report by area
-and adds the browser suites' results:
+The unit tests compare ReflexGrid with answers recorded from Microsoft Excel (``tests/*_expected.json``);
+the checks in Excel itself (``excel_vba_oracle_mac.py --all --record``, ``excel_check_mac.py --record``)
+keep their results in ``docs/excel-oracle.json``. This script puts them together with the browser
+suites' results:
 
     poetry run pytest --junitxml=reports/unit.xml
     poetry run python scripts/compat_report.py reports/unit.xml --save-env      # a CI job summary
-    python scripts/compat_report.py reports/unit.xml --also reports/py311/unit.xml \\
-        --e2e reports/e2e --page > docs/compatibility.md                       # the docs site page
+    poetry run python scripts/compat_report.py reports/unit.xml --page           # the page, to read
+    python scripts/compat_report.py reports/unit-py3.15/unit.xml --also reports/unit-py3.11/unit.xml \\
+        --e2e reports/e2e --site docs                                            # what CI publishes
 
-``--save-env`` records the Python and system the tests ran on (``env.json`` beside the XML), for a
-report written later on another machine. ``--e2e`` is a folder of ``<suite>.json`` files
-(``{"suite": "vba_userforms", "result": "success"}``) written by the browser jobs.
+``--site DIR`` writes the page (``compatibility.md``), the same report as data (``compatibility.json``)
+and the JUnit XML reports (``data/``) into the docs site's folder. ``--save-env`` records the Python and
+system the tests ran on (``env.json`` beside the XML), for a report written later on another machine.
+``--e2e`` is a folder of ``<suite>.json`` files (``{"suite": "vba_userforms", "result": "success"}``)
+written by the browser jobs.
 """
 
 from __future__ import annotations
@@ -22,17 +26,24 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 REPO = "https://github.com/milochen0418/reflex_grid"
+SITE = "https://milochen0418.github.io/reflex_grid"
+PAGE = f"{SITE}/compatibility.html"
+TITLE = "ReflexGrid Excel compatibility report"
+AUTHOR = "Milo Chen"
+ORACLE = ROOT / "docs" / "excel-oracle.json"
+KINDS = ("passed", "known_differences", "failed", "skipped")
 
 # (area, test modules, what is checked); {names} are filled from the recorded Excel answers.
 AREAS: List[Tuple[str, Tuple[str, ...], str]] = [
@@ -63,7 +74,20 @@ AREAS: List[Tuple[str, Tuple[str, ...], str]] = [
      "workbook store"),
 ]
 
+# How the summary names each check in Excel (docs/excel-oracle.json's keys).
+SHORT = {
+    "vba-language": "VBA language and library cases",
+    "vba-objects": "object-model scenarios",
+    "userforms": "UserForm descriptions",
+    "userform-events": "UserForm event steps",
+    "userform-designer": "form-designer descriptions",
+    "files": "file and formula checks",
+}
+
 RESULT_WORDS = {"success": "Passed", "failure": "**Failed**", "cancelled": "Cancelled", "skipped": "Skipped"}
+
+
+# ---------------------------------------------------------------- reading
 
 
 def recorded_answers() -> Dict[str, int]:
@@ -84,8 +108,8 @@ def recorded_answers() -> Dict[str, int]:
 
 
 def read_junit(path: Path) -> Tuple[Dict[str, Dict[str, int]], List[Tuple[str, str]]]:
-    """Counts per test module (passed, known, failed, skipped) and the known differences."""
-    counts: Dict[str, Dict[str, int]] = defaultdict(lambda: {"passed": 0, "known": 0, "failed": 0, "skipped": 0})
+    """Counts per test module and the known differences (expected failures, with their reasons)."""
+    counts: Dict[str, Dict[str, int]] = defaultdict(lambda: dict.fromkeys(KINDS, 0))
     known: List[Tuple[str, str]] = []
     for case in ET.parse(path).getroot().iter("testcase"):
         parts = (case.get("classname") or "").split(".")
@@ -96,20 +120,13 @@ def read_junit(path: Path) -> Tuple[Dict[str, Dict[str, int]], List[Tuple[str, s
                 outcome = "failed"
             elif child.tag == "skipped":
                 if child.get("type") == "pytest.xfail":
-                    outcome = "known"
+                    outcome = "known_differences"
                     name = re.sub(r"^[^\[]*\[|\]$", "", case.get("name") or "")
                     known.append((name, (child.get("message") or "").strip()))
                 else:
                     outcome = "skipped"
         counts[module][outcome] += 1
     return counts, known
-
-
-def read_env(junit: Path) -> Dict[str, str]:
-    env = junit.with_name("env.json")
-    if env.exists():
-        return json.loads(env.read_text("utf-8"))
-    return this_env()
 
 
 def this_env() -> Dict[str, str]:
@@ -121,6 +138,11 @@ def this_env() -> Dict[str, str]:
     elif system == "Darwin":
         system = f"macOS {platform.mac_ver()[0]}"
     return {"python": platform.python_version(), "os": system}
+
+
+def read_env(junit: Path) -> Dict[str, str]:
+    env = junit.with_name("env.json")
+    return json.loads(env.read_text("utf-8")) if env.exists() else this_env()
 
 
 def commit() -> str:
@@ -142,136 +164,251 @@ def run_url() -> Optional[str]:
 
 def suites() -> List[Tuple[str, str]]:
     """The browser suites and what each checks, from testcases/README.md."""
-    rows = re.findall(r"^\| `(\w+)` \| (.+?) \|$", (ROOT / "testcases" / "README.md").read_text("utf-8"), re.M)
-    return [(name, what) for name, what in rows]
+    return re.findall(r"^\| `(\w+)` \| (.+?) \|$", (ROOT / "testcases" / "README.md").read_text("utf-8"), re.M)
 
 
-def area_table(counts: Dict[str, Dict[str, int]], answers: Dict[str, int], with_what: bool) -> List[str]:
-    head = "| Area | What is checked | Passed | Known differences | Failed |" if with_what else "| Area | Passed | Known differences | Failed |"
-    lines = [head, "|" + "---|" * (head.count("|") - 1)]
-    mapped = set()
-    total = {"passed": 0, "known": 0, "failed": 0, "skipped": 0}
-    rows = [(area, modules, what.format(**answers)) for area, modules, what in AREAS]
-    other = tuple(sorted(m for m in counts if not any(m in mods for _, mods, _ in AREAS)))
-    if other:
-        rows.append(("Other", other, "Other unit tests"))
-    for area, modules, what in rows:
-        c = {k: sum(counts[m][k] for m in modules if m in counts) for k in total}
-        mapped.update(modules)
-        for k in total:
-            total[k] += c[k]
-        failed = f"**{c['failed']}**" if c["failed"] else "0"
-        if c["skipped"]:
-            failed += f" ({c['skipped']} skipped)"
-        cells = [area] + ([what] if with_what else []) + [str(c["passed"]), str(c["known"]), failed]
+def collect(junit: Path, also: List[Path], e2e: Optional[Path], oracle: Path) -> Dict[str, Any]:
+    """Everything the report says, as data (what ``compatibility.json`` holds)."""
+    data: Dict[str, Any] = {
+        "name": TITLE,
+        "url": PAGE,
+        "repository": REPO,
+        "license": "MIT",
+        "commit": commit(),
+        "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+        "test_run": run_url(),
+        "unit_tests": None,
+        "known_differences": [],
+        "browser_suites": [],
+        "excel": None,
+    }
+    if junit.exists():
+        answers = recorded_answers()
+        counts, known = read_junit(junit)
+        rows = [(area, modules, what.format(**answers)) for area, modules, what in AREAS]
+        other = tuple(sorted(m for m in counts if not any(m in mods for _, mods, _ in AREAS)))
+        if other:
+            rows.append(("Other", other, "Other unit tests"))
+        areas = [{"area": area, "checks": what, **{k: sum(counts[m][k] for m in modules if m in counts) for k in KINDS}}
+                 for area, modules, what in rows]
+        env = read_env(junit)
+        data["unit_tests"] = {"python": env["python"], "os": env["os"], "areas": areas,
+                              "total": {k: sum(a[k] for a in areas) for k in KINDS}, "also": []}
+        by_reason: Dict[str, List[str]] = defaultdict(list)
+        for name, reason in known:
+            by_reason[reason].append(name)
+        data["known_differences"] = [{"cases": names, "reason": reason} for reason, names in by_reason.items()]
+        for extra in also:
+            if extra.exists():
+                c, _ = read_junit(extra)
+                data["unit_tests"]["also"].append({**read_env(extra), **{k: sum(v[k] for v in c.values()) for k in KINDS}})
+    results: Dict[str, str] = {}
+    if e2e and e2e.is_dir():
+        for f in e2e.glob("*.json"):
+            r = json.loads(f.read_text("utf-8"))
+            results[r["suite"]] = r["result"]
+    data["browser_suites"] = [{"suite": name, "checks": what, "result": results[name]} for name, what in suites() if name in results]
+    if oracle.exists():
+        data["excel"] = json.loads(oracle.read_text("utf-8"))
+    return data
+
+
+# ---------------------------------------------------------------- writing
+
+
+def _failed(c: Dict[str, int]) -> str:
+    text = f"**{c['failed']}**" if c["failed"] else "0"
+    return text + (f" ({c['skipped']} skipped)" if c["skipped"] else "")
+
+
+def _short(sha: str) -> str:
+    return sha[:7] + (" with uncommitted changes" if "uncommitted" in sha else "")
+
+
+def unit_table(unit: Dict[str, Any], with_what: bool) -> List[str]:
+    head = ["Area"] + (["What is checked"] if with_what else []) + ["Passed", "Known differences", "Failed"]
+    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for a in unit["areas"]:
+        cells = [a["area"]] + ([a["checks"]] if with_what else []) + [str(a["passed"]), str(a["known_differences"]), _failed(a)]
         lines.append("| " + " | ".join(cells) + " |")
-    failed = f"**{total['failed']}**" if total["failed"] else "0"
-    if total["skipped"]:
-        failed += f" ({total['skipped']} skipped)"
-    cells = ["**All unit tests**"] + ([""] if with_what else []) + [f"**{total['passed']}**", str(total["known"]), failed]
+    t = unit["total"]
+    cells = ["**All unit tests**"] + ([""] if with_what else []) + [f"**{t['passed']}**", str(t["known_differences"]), _failed(t)]
     lines.append("| " + " | ".join(cells) + " |")
     return lines
 
 
-def known_list(known: List[Tuple[str, str]]) -> List[str]:
-    by_reason: Dict[str, List[str]] = defaultdict(list)
-    for name, reason in known:
-        by_reason[reason].append(name)
-    return [f"- **{', '.join(names)}**: {reason}" for reason, names in by_reason.items()]
-
-
-def e2e_table(folder: Optional[Path]) -> List[str]:
-    results: Dict[str, str] = {}
-    if folder and folder.is_dir():
-        for f in folder.glob("*.json"):
-            data = json.loads(f.read_text("utf-8"))
-            results[data["suite"]] = data["result"]
-    if not results:
-        return []
-    lines = ["| Suite | What it checks | Result |", "|---|---|---|"]
-    for name, what in suites():
-        if name in results:
-            lines.append(f"| `{name}` | {what} | {RESULT_WORDS.get(results[name], results[name])} |")
+def excel_table(excel: Dict[str, Any], page: bool) -> List[str]:
+    lines = ["| Check | Same answer as Excel | Differences | Not compared | Last run |", "|---|---|---|---|---|"]
+    for c in excel.get("checks", {}).values():
+        missing = c.get("not_compared", {}).get("cases", 0)
+        sha = c["reflexgrid_commit"]
+        run = f"{c['date']}, [{_short(sha)}]({REPO}/commit/{sha.split()[0]})" if page and sha else f"{c['date']}, {_short(sha)}"
+        lines.append(f"| {c['title']} | {c['matched']} of {c['compared']} | {len(c['differences'])} | {missing or ''} | {run} |")
     return lines
 
 
-def report(junit: Path, also: List[Path], e2e: Optional[Path], page: bool) -> str:
-    answers = recorded_answers()
-    env = read_env(junit) if junit.exists() else this_env()
-    sha = commit()
-    url = run_url()
-    out: List[str] = []
-    if junit.exists():
-        counts, known = read_junit(junit)
-    else:
-        counts, known = {}, []
+def summary_lines(data: Dict[str, Any]) -> List[str]:
+    out = []
+    unit = data["unit_tests"]
+    if unit:
+        t = unit["total"]
+        same = all(a["passed"] == t["passed"] and a["failed"] == t["failed"] for a in unit["also"])
+        pythons = " and ".join([unit["python"]] + [a["python"] for a in unit["also"]])
+        each = " on each" if unit["also"] and same else ""
+        out.append(f"- **Unit tests** on Python {pythons}: {t['passed']} pass{each}, "
+                   f"{t['known_differences']} are known differences from Excel, {t['failed']} fail"
+                   f"{'' if same else ' (the Pythons differ: see below)'}.")
+    if data["browser_suites"]:
+        ok = sum(s["result"] == "success" for s in data["browser_suites"])
+        out.append(f"- **In the browser**: {ok} of {len(data['browser_suites'])} end-to-end suites pass, among them "
+                   "several people editing one workbook, VBA macros and UserForms.")
+    if data["excel"]:
+        checks = data["excel"].get("checks", {})
+        versions = " and ".join(sorted({c["excel"] for c in checks.values()}))
+        parts = [f"{c['matched']} of {c['compared']} {SHORT.get(k, k)}" for k, c in checks.items()]
+        out.append(f"- **In {versions}**: " + "; ".join(parts) + " gave the same answer as in ReflexGrid.")
+    return out
 
+
+def json_ld(data: Dict[str, Any], downloads: List[Tuple[str, str, str]]) -> List[str]:
+    """schema.org Dataset markup, so search engines (Google Dataset Search…) can index the report."""
+    ld = {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": TITLE,
+        "description": ("Automated test results showing how closely ReflexGrid, an open-source online spreadsheet, "
+                        "matches Microsoft Excel: the VBA language and library, the Excel object model, UserForms, "
+                        ".xlsm files, formulas, end-to-end browser suites, and checks run in Microsoft Excel itself."),
+        "url": PAGE,
+        "creator": {"@type": "Person", "name": AUTHOR},
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": True,
+        "dateModified": data["generated"],
+        "version": data["commit"][:7] or None,
+        "isBasedOn": REPO,
+        "keywords": ["Excel compatibility", "VBA", "UserForms", "xlsm", "spreadsheet", "test results"],
+        "distribution": [{"@type": "DataDownload", "name": label, "encodingFormat": kind, "contentUrl": f"{SITE}/{path}"}
+                         for label, path, kind in downloads],
+    }
+    return ['<script type="application/ld+json">', json.dumps(ld, indent=1, ensure_ascii=False), "</script>"]
+
+
+def render(data: Dict[str, Any], page: bool, downloads: Optional[List[Tuple[str, str, str]]] = None) -> str:
+    out: List[str] = []
+    unit = data["unit_tests"]
+    sha = data["commit"]
     if page:
-        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         out += [
             "---",
             "title: Excel compatibility report",
-            'description: "How closely ReflexGrid matches Microsoft Excel in its automated tests: the VBA language, '
-            'the Excel object model, UserForms, .xlsm files, formulas and editing together."',
+            'description: "How closely ReflexGrid matches Microsoft Excel, in its automated tests and in Excel itself: '
+            'the VBA language, the Excel object model, UserForms, .xlsm files, formulas and editing together."',
             "---",
             "",
-            "ReflexGrid's tests run on GitHub Actions for every change, on a clean Linux machine. Many of them "
-            "compare ReflexGrid with answers recorded from Microsoft Excel: `scripts/excel_vba_oracle_mac.py` "
-            "runs the same VBA in Excel and saves Excel's answers in the repository "
-            f"([`tests/*_expected.json`]({REPO}/tree/main/tests)), so anyone can check them. Excel itself "
-            "can't run on the Linux machine; the recorded answers are what it is compared with.",
+            "{% raw %}",
+            *summary_lines(data),
             "",
-            "This page is written by the test run itself (`scripts/compat_report.py`), each time `main` changes.",
+            "ReflexGrid's tests run on GitHub Actions for every change, on a clean Linux machine. Many of them compare "
+            "ReflexGrid with answers recorded from Microsoft Excel and kept in the repository "
+            f"([`tests/*_expected.json`]({REPO}/tree/main/tests)), so anyone can check them. Excel can't run on that "
+            "machine, so the checks in Excel itself run on a Mac with Excel, and their latest results are published "
+            "with this page. The page is written by the test run (`scripts/compat_report.py`) each time `main` "
+            "changes.",
             "",
             f"- **Commit**: [{sha[:7]}]({REPO}/commit/{sha})" if sha else "- **Commit**: unknown",
-            f"- **Tested**: {today} (UTC), {env['os']}, Python {env['python']}",
         ]
-        for extra in also:
-            if extra.exists():
-                c, _ = read_junit(extra)
-                tot = {k: sum(v[k] for v in c.values()) for k in ("passed", "known", "failed")}
-                env2 = read_env(extra)
-                out.append(f"- **Also tested**: Python {env2['python']}: {tot['passed']} passed, {tot['known']} "
-                           f"known differences, {tot['failed']} failed")
-            else:
-                out.append(f"- **Also tested**: no results from {extra.parent.name}")
-        if url:
-            out.append(f"- **Test run**: [GitHub Actions]({url})")
+        if unit:
+            out.append(f"- **Tested**: {data['generated']} (UTC), {unit['os']}, Python {unit['python']}")
+            for a in unit["also"]:
+                out.append(f"- **Also tested**: Python {a['python']}: {a['passed']} passed, {a['known_differences']} "
+                           f"known differences, {a['failed']} failed")
+        if data["test_run"]:
+            out.append(f"- **Test run**: [GitHub Actions]({data['test_run']})")
         out += ["", "## Unit tests", ""]
-    else:
-        out += [f"### Excel compatibility: Python {env['python']}, {env['os']}", ""]
+    elif unit:
+        out += [f"### Excel compatibility: Python {unit['python']}, {unit['os']}", ""]
 
-    if counts:
-        out += area_table(counts, answers, with_what=page)
-    else:
-        out.append(f"No unit test results ({junit} is missing).")
+    out += unit_table(unit, with_what=page) if unit else ["No unit test results."]
 
-    if known:
+    if data["known_differences"]:
         out += ["", "## Known differences from Excel" if page else "**Known differences from Excel**", ""]
         if page:
-            out += ["These cases give a different answer from Excel's on purpose or for now; the tests expect it "
+            out += ["These cases give a different answer from Excel's, on purpose or for now; the tests expect it "
                     "(`KNOWN` in `tests/test_vba_object_cases.py`).", ""]
-        out += known_list(known)
+        out += [f"- **{', '.join(k['cases'])}**: {k['reason']}" for k in data["known_differences"]]
 
-    browser = e2e_table(e2e)
-    if browser:
+    if data["browser_suites"]:
         out += ["", "## In the browser" if page else "**In the browser**", ""]
         if page:
-            out += ["End-to-end suites drive the real app with Playwright (headless Chromium), "
-                    f"one job per suite ([`testcases/`]({REPO}/tree/main/testcases)).", ""]
-        out += browser
+            out += ["End-to-end suites drive the real app with Playwright (headless Chromium), one job per suite "
+                    f"([`testcases/`]({REPO}/tree/main/testcases)).", ""]
+        out += ["| Suite | What it checks | Result |", "|---|---|---|"]
+        out += [f"| `{s['suite']}` | {s['checks']} | {RESULT_WORDS.get(s['result'], s['result'])} |" for s in data["browser_suites"]]
+
+    if data["excel"]:
+        checks = list(data["excel"].get("checks", {}).values())
+        envs = sorted({f"{c['excel']} on {c['os']}" for c in checks})
+        out += ["", "## Checked in Microsoft Excel" if page else "**Checked in Microsoft Excel**", ""]
+        if page:
+            out += ["These checks run ReflexGrid's output in Microsoft Excel itself: Excel opens the macro-enabled "
+                    "workbooks and the files ReflexGrid writes, runs the same VBA, describes the same UserForms, and "
+                    "its answers are compared with ReflexGrid's (`scripts/excel_vba_oracle_mac.py --all --record`, "
+                    "`scripts/excel_check_mac.py --record`). They need Excel, so they run on a Mac rather than in CI, "
+                    f"and each row says when and on which commit it last ran. Ran in {'; '.join(envs)}.", ""]
+        out += excel_table(data["excel"], page)
+        if page:
+            notes = []
+            for c in checks:
+                name = c["title"].split(":")[0]
+                for key, what in (("not_compared", "not compared"), ("not_run", "not run on the Mac")):
+                    if c.get(key, {}).get("cases"):
+                        notes.append(f"- **{name}**: {c[key]['cases']} {what}, because {c[key]['why']}.")
+                if c["differences"]:
+                    notes.append(f"- **{name}**, the differences: {', '.join(d['case'] for d in c['differences'])} "
+                                 "(the known differences above).")
+            out += ["", *notes, "", "Every difference, with Excel's answer and ReflexGrid's, is in "
+                    "[excel-oracle.json](excel-oracle.json)."]
 
     if page:
+        if downloads:
+            out += ["", "## Download", "", *[f"- [{label}]({path})" for label, path, _ in downloads]]
         out += [
             "",
             "## Limits",
             "",
-            "What ReflexGrid doesn't do yet (pivot tables, Power Query, controls placed on sheets, macro "
-            "recording, a VBA debugger, anything outside the workbook from a macro) is listed in "
+            "What ReflexGrid doesn't do yet (pivot tables, Power Query, controls placed on sheets, macro recording, a "
+            "VBA debugger, anything outside the workbook from a macro) is listed in "
             "[Excel macros (VBA)](vba.md#not-supported-and-what-happens-instead) and the "
             f"[README's FAQ]({REPO}#faq).",
+            "",
+            "## Cite this report",
+            "",
+            f"{AUTHOR} and contributors ({data['generated'][:4]}). *{TITLE}*, commit {sha[:7] or 'unknown'}, "
+            f"{data['generated']}. {PAGE}",
+            "",
+            f"For the software itself, see [CITATION.cff]({REPO}/blob/main/CITATION.cff) (GitHub's *Cite this "
+            "repository*).",
+            "{% endraw %}",
         ]
+        if downloads:
+            out += ["", *json_ld(data, downloads)]
     return "\n".join(out) + "\n"
+
+
+def write_site(data: Dict[str, Any], junits: List[Path], folder: Path) -> None:
+    """The page, the report as data and the JUnit XML reports, into the docs site's folder."""
+    downloads = [("This report as JSON", "compatibility.json", "application/json")]
+    if data["excel"]:
+        downloads.append(("The checks in Microsoft Excel, with every difference (JSON)", "excel-oracle.json", "application/json"))
+    (folder / "data").mkdir(parents=True, exist_ok=True)
+    for junit in junits:
+        if junit.exists():
+            version = ".".join(read_env(junit)["python"].split(".")[:2])
+            name = f"data/unit-py{version}.xml"
+            shutil.copyfile(junit, folder / name)
+            downloads.append((f"Unit test results, Python {version} (JUnit XML)", name, "application/xml"))
+    (folder / "compatibility.json").write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", "utf-8")
+    (folder / "compatibility.md").write_text(render(data, page=True, downloads=downloads), "utf-8")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -279,13 +416,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("junit", type=Path, help="pytest's JUnit XML report")
     ap.add_argument("--also", type=Path, action="append", default=[], help="another run's report (e.g. another Python)")
     ap.add_argument("--e2e", type=Path, help="folder of the browser suites' <suite>.json results")
-    ap.add_argument("--page", action="store_true", help="write the docs site page instead of a CI summary")
+    ap.add_argument("--oracle", type=Path, default=ORACLE, help="the checks in Excel (default docs/excel-oracle.json)")
+    ap.add_argument("--page", action="store_true", help="print the docs site page instead of a CI summary")
+    ap.add_argument("--site", type=Path, help="write the page, compatibility.json and the JUnit XML into this folder")
     ap.add_argument("--save-env", action="store_true", help="record this Python and system beside the report")
     args = ap.parse_args(argv)
     if args.save_env:
         args.junit.parent.mkdir(parents=True, exist_ok=True)
         args.junit.with_name("env.json").write_text(json.dumps(this_env()), "utf-8")
-    sys.stdout.write(report(args.junit, args.also, args.e2e, args.page))
+    data = collect(args.junit, args.also, args.e2e, args.oracle)
+    if args.site:
+        write_site(data, [args.junit, *args.also], args.site)
+        print(f"wrote {args.site / 'compatibility.md'}, compatibility.json and data/")
+    else:
+        sys.stdout.write(render(data, page=args.page))
     return 0
 
 

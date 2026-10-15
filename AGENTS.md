@@ -89,7 +89,9 @@ the user's own.
 GitHub Actions (`.github/workflows/tests.yml`) runs the unit tests on Python 3.11 and 3.15 and each browser
 suite on every push, and on `main` publishes the docs site with the Excel compatibility report
 (`scripts/compat_report.py`). Keep it green: a new suite goes in the workflow's `suite` matrix, a new unit
-test file in `AREAS` in `scripts/compat_report.py`.
+test file in `AREAS` in `scripts/compat_report.py`. On a Mac with Microsoft Excel (it opens Excel windows), refresh
+the published Excel results after VBA or file-format changes: `poetry run python scripts/excel_vba_oracle_mac.py
+--all --record` and `poetry run python scripts/excel_check_mac.py --record` (they write `docs/excel-oracle.json`).
 
 ## 5) How the code is organised (keep it that way)
 

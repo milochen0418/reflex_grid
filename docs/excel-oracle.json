@@ -1,0 +1,124 @@
+{
+ "about": "Checks of ReflexGrid against the Microsoft Excel installed on a Mac (scripts/excel_vba_oracle_mac.py, scripts/excel_check_mac.py). Each check records the Excel version, the macOS version, the ReflexGrid commit and the date it ran, how many cases Excel and ReflexGrid answered alike, and every difference.",
+ "checks": {
+  "vba-language": {
+   "title": "VBA language and library: each expression and function evaluated by Excel's VBA and by ReflexGrid's",
+   "compared": 442,
+   "matched": 442,
+   "differences": [],
+   "not_compared": {
+    "cases": 2,
+    "why": "Excel for Mac names the type of an array V() where Excel for Windows says Variant(); ReflexGrid follows Windows"
+   },
+   "not_run": {
+    "cases": 13,
+    "why": "they use what only Excel for Windows has (CDec, Scripting.Dictionary, non-ASCII source); their expected answers follow Windows"
+   },
+   "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
+   "os": "macOS 15.3.1",
+   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "date": "2026-10-15"
+  },
+  "vba-objects": {
+   "title": "Excel object model: each scenario run as a macro by Excel and by ReflexGrid, comparing what it answers and the cells it leaves",
+   "compared": 158,
+   "matched": 150,
+   "differences": [
+    {
+     "case": "date and time value",
+     "excel": "String|############;String|m/d/yyyy h:mm;",
+     "reflexgrid": "String|1/15/2024 13:30;String|m/d/yyyy h:mm;"
+    },
+    {
+     "case": "long digit string",
+     "excel": "Double|1.23456789012345E+17;String|1.2346E+17;",
+     "reflexgrid": "Double|1.23456789012345E+17;String|1.23457E+17;"
+    },
+    {
+     "case": "general text of numbers",
+     "excel": "String|0.33333333;String|1.2346E+11;String|1.234E-06;String|-1234.5;",
+     "reflexgrid": "String|0.333333333;String|1.23457E+11;String|1.234E-06;String|-1234.5;"
+    },
+    {
+     "case": "formula normalised",
+     "excel": "String|=SUM(B1:B2);String|= 1 + 2;",
+     "reflexgrid": "String|=SUM(B1:B2);String|=1+2;",
+     "excel_cells": "A1==SUM(B1:B2){Double|0} A2== 1 + 2{Double|3}",
+     "reflexgrid_cells": "A1==SUM(B1:B2){Double|0} A2==1+2{Double|3}"
+    },
+    {
+     "case": "positions",
+     "excel": "Long|5;Long|3;Long|6;Double|15;Double|65;Double|65;Double|15;Double|130;",
+     "reflexgrid": "Long|5;Long|3;Long|6;Double|15;Double|48;Double|48;Double|15;Double|96;"
+    },
+    {
+     "case": "ColumnWidth",
+     "excel": "Double|10;Double|65;Double|12;Double|77;Double|5;Double|5;Double|12;",
+     "reflexgrid": "Double|8.43;Double|48;Double|12;Double|66.75;Double|5;Double|5;Null|;"
+    },
+    {
+     "case": "RowHeight",
+     "excel": "Double|15;Double|20.25;Double|20.25;Double|20;",
+     "reflexgrid": "Double|15;Double|20.25;Null|;Double|20.25;"
+    },
+    {
+     "case": "SpecialCells",
+     "excel": "String|$A$1,$C$1,$A$4;String|$A$2;String|$B$1,$B$2:$C$4,$A$3;String|$A$1,$C$1;String|$A$4;",
+     "reflexgrid": "String|$A$1,$C$1,$A$4;String|$A$2;String|$B$1,$B$2:$C$2,$A$3:$C$3,$B$4:$C$4;String|$A$1,$C$1;String|$A$4;"
+    }
+   ],
+   "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
+   "os": "macOS 15.3.1",
+   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "date": "2026-10-15"
+  },
+  "userforms": {
+   "title": "UserForms ReflexGrid wrote, loaded by Excel, which describes each form and control (type, position, size, caption, value, lists, fonts…) as ReflexGrid does",
+   "compared": 30,
+   "matched": 30,
+   "differences": [],
+   "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
+   "os": "macOS 15.3.1",
+   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "date": "2026-10-15"
+  },
+  "userform-events": {
+   "title": "The events a form's code fires, and their order, in Excel and in ReflexGrid",
+   "compared": 20,
+   "matched": 20,
+   "differences": [],
+   "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
+   "os": "macOS 15.3.1",
+   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "date": "2026-10-15"
+  },
+  "userform-designer": {
+   "title": "Forms made and changed with ReflexGrid's form designer, loaded and described by Excel",
+   "compared": 18,
+   "matched": 18,
+   "differences": [],
+   "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
+   "os": "macOS 15.3.1",
+   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "date": "2026-10-15"
+  },
+  "files": {
+   "title": "Workbooks ReflexGrid wrote: opened by Excel, their values, formulas and displayed text read there, saved by Excel, and Excel's files recalculated by ReflexGrid to Excel's results",
+   "compared": 89,
+   "matched": 89,
+   "differences": [],
+   "workbooks": {
+    "opened": 4,
+    "total": 4
+   },
+   "not_compared": {
+    "cases": 15,
+    "why": "they use functions this Excel lacks (IFS, XLOOKUP, SEQUENCE, TEXTJOIN, LET)"
+   },
+   "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
+   "os": "macOS 15.3.1",
+   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "date": "2026-10-15"
+  }
+ }
+}

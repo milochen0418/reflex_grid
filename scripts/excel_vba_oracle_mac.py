@@ -7,6 +7,10 @@ vbaProject.bin), and ReflexGrid runs the same module. Results are compared as
 ``TypeName|text`` (or ``E<number>`` for a run-time error).
 
     poetry run python scripts/excel_vba_oracle_mac.py [--keep DIR] [--only SUBSTRING]
+    poetry run python scripts/excel_vba_oracle_mac.py --all --record   # every check, kept for the report
+
+``--record`` keeps the results, with the Excel version and the commit, in ``docs/excel-oracle.json``
+(``oracle_record.py``), which the Excel compatibility report publishes.
 
 Excel asks whether to enable the macros of the generated workbook; the script answers through
 System Events (enable the terminal under Privacy & Security › Accessibility if it can't).
@@ -21,7 +25,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -29,6 +33,7 @@ from gridcore.engine import Session  # noqa: E402
 from gridcore.model.vba import STANDARD, VbaModule, default_attributes, new_project  # noqa: E402
 
 from tests.vba_excel_cases import CLASS1, EXPRESSIONS, FUNCTIONS, HELPERS, WINDOWS_ONLY, build_module, mac_cases, repr_vba  # noqa: E402,F401
+from scripts.oracle_record import RESULTS, ROOT, record  # noqa: E402
 
 
 ENABLE = """tell application "System Events"
@@ -256,17 +261,25 @@ def main_objects(args) -> int:
         Path(args.save).write_text(json.dumps(dict(zip(names, [list(x) for x in excel])), indent=1, ensure_ascii=False) + "\n", "utf-8")
         print(f"saved Excel's results to {args.save}")
     bad = 0
+    diffs: List[Dict[str, str]] = []
     for n, e, m in zip(names, excel, mine):
         if args.only and args.only not in n:
             continue
         if e != tuple(m):
             bad += 1
             print(f"DIFF {n}")
+            diff = {"case": n}
             if e[0] != m[0]:
                 print(f"   excel: {e[0]}\n   ours:  {m[0]}")
+                diff.update(excel=e[0], reflexgrid=m[0])
             if e[1] != m[1]:
                 print(f"   excel cells: {e[1]}\n   ours cells:  {m[1]}")
+                diff.update(excel_cells=e[1], reflexgrid_cells=m[1])
+            diffs.append(diff)
     print(f"{len(names) - bad} of {len(names)} cases match")
+    if not args.only:
+        record(args.record, "vba-objects", "Excel object model: each scenario run as a macro by Excel and by ReflexGrid, "
+               "comparing what it answers and the cells it leaves", len(names), len(names) - bad, diffs)
     return 0 if bad == 0 else 1
 
 
@@ -304,16 +317,26 @@ def _forms_run(s) -> List[str]:
     return results(s)
 
 
-def _compare(excel: List[str], mine: List[str], what: str) -> int:
-    bad = 0
+def _compare(excel: List[str], mine: List[str], what: str) -> List[Dict[str, str]]:
+    """The answers that differ (printed as they are found)."""
+    diffs = []
     for i in range(max(len(excel), len(mine))):
         e = excel[i] if i < len(excel) else "(nothing)"
         m = mine[i] if i < len(mine) else "(nothing)"
         if e != m:
-            bad += 1
+            diffs.append({"case": f"{what} {i + 1}", "excel": e, "reflexgrid": m})
             print(f"DIFF {what} {i + 1}\n   excel: {e}\n   ours:  {m}")
-    print(f"{len(mine) - bad} of {len(mine)} {what} match")
-    return 0 if bad == 0 else 1
+    print(f"{len(mine) - len(diffs)} of {len(mine)} {what} match")
+    return diffs
+
+
+FORM_CHECKS = {
+    "forms": ("userforms", "UserForms ReflexGrid wrote, loaded by Excel, which describes each form and control "
+              "(type, position, size, caption, value, lists, fonts…) as ReflexGrid does"),
+    "events": ("userform-events", "The events a form's code fires, and their order, in Excel and in ReflexGrid"),
+    "designer": ("userform-designer", "Forms made and changed with ReflexGrid's form designer, loaded and described "
+                 "by Excel"),
+}
 
 
 def main_forms(args) -> int:
@@ -348,9 +371,18 @@ def _forms_oracle(args, s, key: str, file_name: str) -> int:
     path.write_bytes(base64.b64decode(s.run("file.saveBytes")["data"]))
     print(f"workbook: {path}")
     excel = [x for x in excel_results(path, len(mine)) if x != ""]
-    if args.save and excel:
+    if not excel:
+        print("Excel returned nothing")
+        return 1
+    if args.save:
         _save(args, key, excel)
-    return _compare(excel, mine, key)
+    diffs = _compare(excel, mine, key)
+    record(args.record, *FORM_CHECKS[key], len(mine), len(mine) - len(diffs), diffs)
+    return 0 if not diffs else 1
+
+
+def excel_running() -> bool:
+    return subprocess.run(["pgrep", "-x", "Microsoft Excel"], capture_output=True).returncode == 0
 
 
 def main() -> int:
@@ -363,15 +395,24 @@ def main() -> int:
     ap.add_argument("--forms", action="store_true", help="UserForms ReflexGrid wrote, loaded and described by Excel")
     ap.add_argument("--form-events", action="store_true", help="the events a form's code fires, and their order")
     ap.add_argument("--form-designer", action="store_true", help="a form made with ReflexGrid's form designer, loaded and described by Excel")
+    ap.add_argument("--all", action="store_true", help="every check: the language cases, --objects, --forms, --form-events and --form-designer")
+    ap.add_argument("--record", nargs="?", const=str(RESULTS), help=f"keep the results, with the Excel version and the commit, in this JSON file (default {RESULTS.relative_to(ROOT)})")
     args = ap.parse_args()
-    if args.objects:
-        return main_objects(args)
-    if args.forms:
-        return main_forms(args)
-    if args.form_events:
-        return main_form_events(args)
-    if args.form_designer:
-        return main_form_designer(args)
+    if not args.ours_only and (sys.platform != "darwin" or not Path("/Applications/Microsoft Excel.app").exists()):
+        print("This check needs Microsoft Excel on macOS.")
+        return 2
+    chosen = [run for flag, run in (("objects", main_objects), ("forms", main_forms), ("form_events", main_form_events),
+                                    ("form_designer", main_form_designer)) if getattr(args, flag)]
+    runs = [main_language, main_objects, main_forms, main_form_events, main_form_designer] if args.all else chosen[:1] or [main_language]
+    was_running = args.ours_only or excel_running()
+    codes = [run(args) for run in runs]
+    # Leave Excel as it was: quit it when this started it and nothing else is open.
+    if not was_running and excel_running() and osa('tell application "Microsoft Excel" to count of workbooks', 10) == "0":
+        osa('tell application "Microsoft Excel" to quit', 20)
+    return max(codes)
+
+
+def main_language(args) -> int:
     code, names = build_module()
     mine = ours(code)
     if args.ours_only:
@@ -379,9 +420,6 @@ def main() -> int:
             if args.only in n:
                 print(f"{n:60} {m}")
         return 0
-    if sys.platform != "darwin" or not Path("/Applications/Microsoft Excel.app").exists():
-        print("This check needs Microsoft Excel on macOS.")
-        return 2
     out = Path(args.keep or tempfile.mkdtemp(prefix="reflexgrid-vba-"))
     out.mkdir(parents=True, exist_ok=True)
     s = Session()
@@ -398,17 +436,29 @@ def main() -> int:
     if len(excel) != len(names):
         print(f"Excel returned {len(excel)} results for {len(names)} cases: {excel[:5]}")
         return 1
-    bad = 0
+    bad = quirks = 0
+    diffs: List[Dict[str, str]] = []
     excel = [_us_dates(x) for x in excel]
     for n, e, m in zip(names, excel, mine):
         if args.only and args.only not in n:
             continue
         if any(q in n for q in MAC_QUIRKS):
+            quirks += 1
             continue
         if e != m and not _close(e, m):
             bad += 1
+            diffs.append({"case": n, "excel": e, "reflexgrid": m})
             print(f"DIFF {n:55} excel={e!r:40} ours={m!r}")
-    print(f"{len(names) - bad} of {len(names)} cases match" if not args.only else f"{bad} differences")
+    compared = len(names) - quirks
+    print(f"{compared - bad} of {compared} cases match ({quirks} not compared)" if not args.only else f"{bad} differences")
+    if not args.only:
+        windows_only = len(build_module(windows=True)[1]) - len(names)
+        record(args.record, "vba-language", "VBA language and library: each expression and function evaluated by "
+               "Excel's VBA and by ReflexGrid's", compared, compared - bad, diffs,
+               not_compared={"cases": quirks, "why": "Excel for Mac names the type of an array V() where Excel for "
+                             "Windows says Variant(); ReflexGrid follows Windows"},
+               not_run={"cases": windows_only, "why": "they use what only Excel for Windows has (CDec, "
+                        "Scripting.Dictionary, non-ASCII source); their expected answers follow Windows"})
     return 0 if bad == 0 else 1
 
 

@@ -5,7 +5,10 @@ For each workbook it writes, the script: opens it in Excel (a repair prompt woul
 reported), reads values, formulas and displayed text through AppleScript, lets Excel save it, and
 reads Excel's file back with gridcore, comparing a full recalculation with Excel's cached results.
 
-    poetry run python scripts/excel_check_mac.py [--keep DIR]
+    poetry run python scripts/excel_check_mac.py [--keep DIR] [--record]
+
+``--record`` keeps the results, with the Excel version and the commit, in ``docs/excel-oracle.json``
+(``oracle_record.py``), which the Excel compatibility report publishes.
 
 Functions this Excel installation doesn't have (older licences lack IFS, XLOOKUP, SEQUENCE…) show
 as #NAME? in Excel; the script detects them first and reports those cells as skipped.
@@ -21,7 +24,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -29,7 +32,9 @@ from gridcore.calc import Calc  # noqa: E402
 from gridcore.core.value import CellError  # noqa: E402
 from gridcore.engine import Session  # noqa: E402
 from gridcore.engine.samples import new_sample  # noqa: E402
+from gridcore.core.addr import a1  # noqa: E402
 from gridcore.xlsx import read_xlsx  # noqa: E402
+from scripts.oracle_record import RESULTS, ROOT, record  # noqa: E402
 
 CELL_SCRIPT = """on run argv
 	tell application "Microsoft Excel"
@@ -125,6 +130,7 @@ def main() -> int:
         return 2
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", help="folder to keep the files in (default: a temporary folder)")
+    ap.add_argument("--record", nargs="?", const=str(RESULTS), help=f"keep the results, with the Excel version and the commit, in this JSON file (default {RESULTS.relative_to(ROOT)})")
     args = ap.parse_args()
     out = Path(args.keep or tempfile.mkdtemp(prefix="reflexgrid-excel-"))
     out.mkdir(parents=True, exist_ok=True)
@@ -139,6 +145,8 @@ def main() -> int:
     missing = probe_functions()
     print("functions this Excel lacks:", ", ".join(missing) or "none")
     failures = 0
+    compared = matched = skipped_all = opened_books = 0
+    diffs: List[Dict[str, str]] = []
     for name, checks in books:
         subprocess.run(["open", "-a", "Microsoft Excel", str(out / name)])
         opened = False
@@ -151,7 +159,9 @@ def main() -> int:
         if not opened:
             print(f"FAIL {name}: Excel did not open it (a repair prompt may be showing)")
             failures += 1
+            diffs.append({"case": name, "excel": "did not open the file", "reflexgrid": "wrote it"})
             continue
+        opened_books += 1
         for check in checks:
             sheet, addr, kind, want = check[:4]
             needs = check[4] if len(check) > 4 else []
@@ -159,6 +169,8 @@ def main() -> int:
             if "|" not in res:
                 print(f"FAIL {name} {sheet}!{addr}: {res}")
                 failures += 1
+                compared += 1
+                diffs.append({"case": f"{name} {sheet}!{addr}", "excel": res, "reflexgrid": str(want)})
                 continue
             v, f, t = res.split("|", 2)
             got = {"value": v, "formula": f, "text": t}[kind]
@@ -172,6 +184,13 @@ def main() -> int:
             uses_missing = any(n in missing for n in needs) or any(m.upper() + "(" in f.upper() for m in missing)
             status = "ok  " if ok else ("skip" if uses_missing else "FAIL")
             failures += status == "FAIL"
+            if status == "skip":
+                skipped_all += 1
+            else:
+                compared += 1
+                matched += ok
+                if not ok:
+                    diffs.append({"case": f"{name} {sheet}!{addr} {kind}", "excel": got, "reflexgrid": str(want)})
             print(f"{status} {name} {sheet}!{addr} {kind}: Excel={got!r} expected={want!r}")
         excel(f'tell application "Microsoft Excel"\nset saved of workbook "{name}" to false\nclose workbook "{name}" saving yes\nend tell', 60)
         # Excel's own file, read back and recalculated by gridcore.
@@ -192,7 +211,17 @@ def main() -> int:
             else:
                 failures += 1
                 print(f"FAIL {name} {wb.sheets[si].name}!{rc}: Excel cached {v!r}, gridcore computed {nv!r}")
+                diffs.append({"case": f"{name} {wb.sheets[si].name}!{a1(*rc)} recalculated", "excel": repr(v), "reflexgrid": repr(nv)})
+        compared += same + (len(cached) - same - skipped)
+        matched += same
+        skipped_all += skipped
         print(f"     {name}: Excel's file read back ({len(warnings)} warnings); {same} formulas match Excel, {skipped} skipped")
+    extra = {"workbooks": {"opened": opened_books, "total": len(books)}}
+    if skipped_all:
+        extra["not_compared"] = {"cases": skipped_all, "why": f"they use functions this Excel lacks ({', '.join(missing)})"}
+    record(args.record, "files", "Workbooks ReflexGrid wrote: opened by Excel, their values, formulas and displayed text "
+           "read there, saved by Excel, and Excel's files recalculated by ReflexGrid to Excel's results",
+           compared, matched, diffs, **extra)
     if not was_running and excel('tell application "Microsoft Excel" to count of workbooks', 10) == "0":
         excel('tell application "Microsoft Excel" to quit', 20)
     print("PASS" if failures == 0 else f"FAIL ({failures})")

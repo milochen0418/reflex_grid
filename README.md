@@ -108,7 +108,11 @@ are detected first and reported as skipped.
 
 GitHub Actions runs the unit tests (on Python 3.11 and 3.15) and the browser suites on every change, and the
 [Excel compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html) shows the latest results by area: the answers that match Excel's,
-the known differences, and each browser suite.
+the known differences, each browser suite, and the checks last run in Microsoft Excel itself. It can be
+downloaded as [JSON](https://milochen0418.github.io/reflex_grid/compatibility.json) and cited (see [CITATION.cff](CITATION.cff)). On a Mac with Excel,
+`poetry run python scripts/excel_vba_oracle_mac.py --all --record` and
+`poetry run python scripts/excel_check_mac.py --record` run those checks again and keep their results, with
+the Excel version and the commit, in `docs/excel-oracle.json`, which the report publishes.
 
 ## Getting Started
 
@@ -249,7 +253,8 @@ Macros run in a sandbox (no files, shell, network or COM), so a workbook's code 
 VBA was checked against Microsoft Excel on 457 language and library cases and 158 object-model scenarios;
 the [results](docs/vba.md#checked-against-excel) list the few differences. Excel opens the files ReflexGrid writes, and ReflexGrid
 recalculates Excel's own files to Excel's results (see [Excel compatibility](#excel-compatibility)). The
-[compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html) shows the latest results, from the tests GitHub Actions runs on every change.
+[compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html) shows the latest results, from the tests GitHub Actions runs on every change
+and from the checks run in Microsoft Excel itself.
 
 **Can several people edit the same `.xlsx` at the same time?**
 Yes. Share a workbook's link: everyone on it sees changes at once and each other's selections, and undo takes

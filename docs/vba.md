@@ -214,6 +214,9 @@ Macros run on the server, so they get a sandbox, not the machine:
 
 ## Checked against Excel
 
+The latest results, with the Excel version and the commit they ran on, are in the
+[Excel compatibility report](compatibility.md) (also as [JSON](excel-oracle.json)).
+
 `scripts/excel_vba_oracle_mac.py` (opt-in; it drives the Microsoft Excel installed on a Mac) writes a
 macro-enabled workbook with ReflexGrid, opens it in Excel, runs the cases there and compares the results
 with ReflexGrid's:

@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use ReflexGrid or its Excel compatibility report, please cite it as below."
+title: ReflexGrid
+type: software
+abstract: >-
+  An open-source, self-hosted online Excel: a browser spreadsheet that opens and saves real .xlsx
+  and .xlsm workbooks, runs their Excel VBA macros and UserForms, and lets several people edit the
+  same workbook live. Its engine, gridcore, is pure Python. The Excel compatibility report,
+  written by the test run of each change, is at
+  https://milochen0418.github.io/reflex_grid/compatibility.html
+authors:
+  - given-names: Milo
+    family-names: Chen
+repository-code: "https://github.com/milochen0418/reflex_grid"
+url: "https://milochen0418.github.io/reflex_grid/"
+license: MIT
+version: 0.1.0
+date-released: "2026-10-15"
+keywords:
+  - spreadsheet
+  - excel
+  - xlsx
+  - xlsm
+  - vba
+  - userforms
+  - collaborative editing
+  - python

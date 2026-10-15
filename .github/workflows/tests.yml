@@ -2,7 +2,8 @@ name: Tests
 
 # The unit tests on the App Store's Python (3.11) and the development one (3.15), the browser suites
 # (one job each), and, when main changes, the docs site with the Excel compatibility report written from
-# this run's results (docs/compatibility.md, by scripts/compat_report.py).
+# this run's results and the checks last run in Excel (docs/excel-oracle.json): the page, the report as
+# JSON and the JUnit XML reports, by scripts/compat_report.py --site.
 #
 # pyproject.toml installs reflex_ddns_auth from ../reflex_ddns_auth, so each job clones it beside this
 # repository, as the README's Getting Started does.
@@ -160,7 +161,7 @@ jobs:
       - name: Write the compatibility report
         run: |
           python scripts/compat_report.py reports/unit-py3.15/unit.xml --also reports/unit-py3.11/unit.xml \
-            --e2e reports/e2e --page > docs/compatibility.md
+            --e2e reports/e2e --site docs
       - uses: actions/configure-pages@v6
       - uses: actions/jekyll-build-pages@v1
         with:
