@@ -4,6 +4,7 @@
 
 - Excel VBA macros in the browser: a VBA editor, MsgBox and InputBox dialogs, event macros (Worksheet_Change, Workbook_Open…), VBA functions in formulas, and UserForms (modal and modeless) with a form designer. Macros run on the server in a sandbox: no files, shell, network or COM.
 - Checked against Microsoft Excel: 457 VBA language and library cases, 158 object-model scenarios, and files Excel opens, saves and ReflexGrid recalculates to Excel's results.
+- Third-party VBA runs too: the published spec workbook of VBA-JSON (MIT, written for Excel by its authors) runs its own suite in ReflexGrid, with the result in the compatibility report. Conditional compilation (#If VBA7/Win64/Mac, #Const) is supported.
 - Excel for the web can't run VBA, ONLYOFFICE runs JavaScript macros only, and Collabora Online runs part of VBA with macros off by default. ReflexGrid runs VBA itself, UserForms included.
 - Real-time collaboration: shared links, presence, everyone's selection, per-person undo; workbooks are saved on the server as .xlsx (.xlsm with macros).
 - gridcore works without the UI: 478 worksheet functions, dynamic arrays, LET/LAMBDA, structured references, incremental recalculation; reads and writes .xlsx, .xlsm, .csv; runs VBA macros headless, with no Excel installed (`Session().run("macro.run", name="Main")`, or `python -m gridcore.cli run book.xlsm script.json`).

@@ -16,7 +16,7 @@
    },
    "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
    "os": "macOS 15.3.1",
-   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "reflexgrid_commit": "3758c56a39f0c8841fa43eedda0e074414fed3e3",
    "date": "2026-10-15"
   },
   "vba-objects": {
@@ -69,7 +69,7 @@
    ],
    "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
    "os": "macOS 15.3.1",
-   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "reflexgrid_commit": "3758c56a39f0c8841fa43eedda0e074414fed3e3",
    "date": "2026-10-15"
   },
   "userforms": {
@@ -79,7 +79,7 @@
    "differences": [],
    "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
    "os": "macOS 15.3.1",
-   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "reflexgrid_commit": "3758c56a39f0c8841fa43eedda0e074414fed3e3",
    "date": "2026-10-15"
   },
   "userform-events": {
@@ -89,7 +89,7 @@
    "differences": [],
    "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
    "os": "macOS 15.3.1",
-   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "reflexgrid_commit": "3758c56a39f0c8841fa43eedda0e074414fed3e3",
    "date": "2026-10-15"
   },
   "userform-designer": {
@@ -99,7 +99,7 @@
    "differences": [],
    "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
    "os": "macOS 15.3.1",
-   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "reflexgrid_commit": "3758c56a39f0c8841fa43eedda0e074414fed3e3",
    "date": "2026-10-15"
   },
   "files": {
@@ -117,7 +117,7 @@
    },
    "excel": "Microsoft Excel for Mac 16.114 (build 26101123)",
    "os": "macOS 15.3.1",
-   "reflexgrid_commit": "11b1628f603dd34f8beb0e9ea0381206e87bf38c",
+   "reflexgrid_commit": "3758c56a39f0c8841fa43eedda0e074414fed3e3",
    "date": "2026-10-15"
   }
  }
