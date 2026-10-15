@@ -304,6 +304,7 @@ export function SheetView(props) {
   const [ac, setAc] = useState(null); // function autocomplete {items, index, start}
   const pointRef = useRef(null); // formula point mode {start, end, anchor, cur}
   const seqRef = useRef(0);
+  const answeredRef = useRef({ lastError: 0, clipboardText: 0 }); // seq of the one-shot answers acted on
   const lastWindowRef = useRef(null);
   const sheetRef = useRef(sheetName);
   const sheetIdxRef = useRef(sheetIndex);
@@ -591,14 +592,23 @@ export function SheetView(props) {
       }
       return changed ? n : p;
     });
+    // One-shot answers: passive redraws repeat them until this tab sends another event, so each
+    // is acted on once.
+    const once = (k) => {
+      const a = ui[k];
+      if (!a || a.seq === answeredRef.current[k]) return null;
+      answeredRef.current[k] = a.seq;
+      return a.seq === seqRef.current ? a : null;
+    };
     // A failed commit reopens the editor with what was typed.
-    const err = ui.lastError;
-    if (err && err.seq === seqRef.current && err.kind === "commit" && !edRef.current) {
+    const err = once("lastError");
+    if (err && err.kind === "commit" && !edRef.current) {
       setEd({ r: err.r, c: err.c, text: err.text, mode: "edit", bar: false });
       setTimeout(() => kbdRef.current && kbdRef.current.focus(), 0);
     }
-    if (ui.clipboardText && ui.clipboardText.seq === seqRef.current && navigator.clipboard) {
-      navigator.clipboard.writeText(ui.clipboardText.text).catch(() => {});
+    const clip = once("clipboardText");
+    if (clip && navigator.clipboard) {
+      navigator.clipboard.writeText(clip.text).catch(() => {});
     }
   }, [ui]);
 

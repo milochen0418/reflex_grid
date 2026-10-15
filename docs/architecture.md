@@ -98,8 +98,11 @@ exactly puts its epoch back, so earlier transitions become undoable again.
   pictures) and `ui` (selection, formula bar, name box, status statistics, ribbon state, dropdown lists).
   Each event carries a sequence number; the browser only adopts the server's selection once the server has
   processed its latest event, and never from a *passive* refresh (someone else's change, a `ping`, a scroll),
-  which would undo a move it hasn't sent yet. After every event the handler publishes the book to the room
-  (only what changed is assigned, so only that is sent).
+  which would undo a move it hasn't sent yet. The browser sends its next event without waiting for the
+  answer, so a passive refresh can arrive together with the answer to the tab's own event and be the only
+  one drawn: it repeats that answer's one-shot parts (`lastError`, which reopens the editor after a refused
+  entry, and `clipboardText`) until the tab sends another event, and the grid acts on each once. After every
+  event the handler publishes the book to the room (only what changed is assigned, so only that is sent).
 - **Presence**: each tab pings every 5 s; a tab not heard from for `PEER_IDLE` seconds is dropped. A closing
   tab says goodbye with `navigator.sendBeacon` to `POST /_reflex_grid/bye` (`api.py`, named by its client
   token), and `push()` shows the book to the others at once by publishing it from one of them: the room, a

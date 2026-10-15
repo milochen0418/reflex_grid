@@ -401,6 +401,14 @@ class GridState(rx.State):
         )
         if extra_ui:
             ui.update(extra_ui)
+        if passive:
+            # The browser doesn't wait for answers, so this redraw may be drawn instead of the answer
+            # to its own event (a commit, then the editor's presence): repeat that answer's one-shot
+            # parts until the tab sends another event (the grid acts on each once).
+            for k in ("lastError", "clipboardText"):
+                v = (self.ui or {}).get(k)
+                if v and v.get("seq") == ui["seq"]:
+                    ui.setdefault(k, v)
         if ui != self.ui:
             self.ui = ui
         if self.selected_object >= 0 and not any(o["id"] == self.selected_object for o in (self.objects.get("charts", []) + self.objects.get("images", []))):
@@ -2245,13 +2253,12 @@ async def push(book_id: str) -> None:
     """Shows a book as it is now to everyone on it, from outside their own events (a tab that
     closed, a deletion, a save that finished): one of them publishes it to the room, and the
     room — a SharedState — carries it to all the others."""
-    from reflex.state import _substate_key
     from reflex.utils.prerequisites import get_app
 
     app = get_app().app
     for token in sessions.tokens_on(book_id):
         try:
-            async with app.modify_state(_substate_key(token, GridState)) as root:
+            async with app.modify_state(rx.BaseStateToken(ident=token, cls=GridState)) as root:
                 grid = await root.get_state(GridState)
                 if grid.book != book_id:
                     continue

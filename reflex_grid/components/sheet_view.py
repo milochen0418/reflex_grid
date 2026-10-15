@@ -13,7 +13,8 @@ _JS = rx.asset("grid/sheet_view.jsx")
 
 
 class SheetView(rx.Component):
-    library = f"$/public{_JS}"
+    # The asset's URL carries a content hash (``?v=…``); the module is imported without it.
+    library = _JS.importable_path
     tag = "SheetView"
 
     geometry: rx.Var[dict]

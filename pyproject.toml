@@ -9,7 +9,7 @@ packages = [{include = "reflex_grid"}, {include = "gridcore"}]
 
 [tool.poetry.dependencies]
 python = "~3.11"
-reflex = "0.8.24.post1"
+reflex = "0.10.0"
 # Sign-in (SSO) and calls through DDNS Intents; the app also runs without it (guests, no calls).
 reflex-ddns-auth = {path = "../reflex_ddns_auth", develop = true}
 PyJWT = ">=2.8"

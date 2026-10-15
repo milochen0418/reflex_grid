@@ -113,9 +113,7 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #FFFFFF; color
 """
 
 app = rx.App(
-    # Always light (as CoDoc in MD): the app paints white sheets, ribbon and dialogs, so the theme's
-    # dark colours (light text) would vanish on them when the OS is in dark mode.
-    theme=rx.theme(appearance="light", accent_color="cyan", gray_color="slate", radius="small", scaling="95%"),
+    # The theme (always light) is the Radix Themes plugin's, in rxconfig.py.
     head_components=[rx.el.style(STYLE), rx.el.link(rel="icon", href="/favicon.svg", type="image/svg+xml")],
     # Our own backend routes (a closing tab's goodbye), next to Reflex's.
     api_transformer=api,
