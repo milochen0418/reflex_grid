@@ -1,0 +1,167 @@
+name: Tests
+
+# The unit tests on the App Store's Python (3.11) and the development one (3.15), the browser suites
+# (one job each), and, when main changes, the docs site with the Excel compatibility report written from
+# this run's results (docs/compatibility.md, by scripts/compat_report.py).
+#
+# pyproject.toml installs reflex_ddns_auth from ../reflex_ddns_auth, so each job clones it beside this
+# repository, as the README's Getting Started does.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  POETRY_VERSION: "2.2.1"
+  TELEMETRY_ENABLED: "false"
+
+jobs:
+  unit:
+    name: Unit tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.15"]
+    defaults:
+      run:
+        working-directory: reflex_grid
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: reflex_grid
+      - uses: actions/checkout@v7
+        with:
+          repository: milochen0418/reflex_ddns_auth
+          path: reflex_ddns_auth
+      - name: Install Poetry
+        run: pipx install "poetry==$POETRY_VERSION"
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: poetry
+          cache-dependency-path: reflex_grid/poetry.lock
+      - name: Install
+        run: |
+          poetry env use "${{ steps.python.outputs.python-path }}"
+          poetry install --no-interaction
+      - name: Unit tests
+        run: poetry run pytest -q -rs --junitxml=reports/unit.xml
+      - name: Compatibility summary
+        if: ${{ !cancelled() }}
+        run: poetry run python scripts/compat_report.py reports/unit.xml --save-env >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: unit-py${{ matrix.python }}
+          path: reflex_grid/reports/
+          if-no-files-found: warn
+
+  browser:
+    name: Browser (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [smoke_home, editing_formulas, formatting_ribbon, sheets_data, insert_tab, xlsx_roundtrip,
+                workbook_manager, collab_live, vba_macros, vba_userforms]
+    defaults:
+      run:
+        working-directory: reflex_grid
+    env:
+      PW_TIMEOUT_MS: "60000"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: reflex_grid
+      - uses: actions/checkout@v7
+        with:
+          repository: milochen0418/reflex_ddns_auth
+          path: reflex_ddns_auth
+      - name: Install Poetry
+        run: pipx install "poetry==$POETRY_VERSION"
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+          cache: poetry
+          cache-dependency-path: reflex_grid/poetry.lock
+      - name: Install
+        run: |
+          poetry env use "${{ steps.python.outputs.python-path }}"
+          poetry install --no-interaction
+          poetry run playwright install --with-deps chromium
+      - name: ${{ matrix.suite }}
+        run: poetry run ./run_test_suite.sh ${{ matrix.suite }}
+      - name: Record the result
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p e2e-result
+          printf '{"suite": "%s", "result": "%s"}\n' "${{ matrix.suite }}" "${{ job.status }}" > "e2e-result/${{ matrix.suite }}.json"
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: e2e-result-${{ matrix.suite }}
+          path: reflex_grid/e2e-result/
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: e2e-${{ matrix.suite }}
+          path: reflex_grid/testcases/${{ matrix.suite }}/output/
+          if-no-files-found: warn
+
+  site:
+    name: Docs site
+    needs: [unit, browser]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: unit-py*
+          path: reports
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: e2e-result-*
+          path: reports/e2e
+          merge-multiple: true
+      - name: Write the compatibility report
+        run: |
+          python scripts/compat_report.py reports/unit-py3.15/unit.xml --also reports/unit-py3.11/unit.xml \
+            --e2e reports/e2e --page > docs/compatibility.md
+      - uses: actions/configure-pages@v6
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./_site
+      - uses: actions/upload-pages-artifact@v5
+      - id: deployment
+        uses: actions/deploy-pages@v5
