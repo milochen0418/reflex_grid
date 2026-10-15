@@ -37,15 +37,15 @@ REPO = "https://github.com/milochen0418/reflex_grid"
 # (area, test modules, what is checked); {names} are filled from the recorded Excel answers.
 AREAS: List[Tuple[str, Tuple[str, ...], str]] = [
     ("VBA language and library", ("test_vba_excel_cases",),
-     "Expressions, conversions, strings, dates, `Format`, arrays, `On Error`, classes…: "
+     "Expressions, conversions, strings, dates, `Format`, arrays, `On Error`, classes… against "
      "{excel_cases} answers: {excel_mac} recorded from Microsoft Excel for Mac, {excel_win} that follow "
      "Excel for Windows where Excel for Mac lacks the feature"),
     ("Excel object model from VBA", ("test_vba_object_cases",),
-     "`Range`, `Worksheet`, `Application`, tables, filters, names, formats…: {object_cases} answers "
-     "recorded from Microsoft Excel"),
+     "`Range`, `Worksheet`, `Application`, tables, filters, names, formats… against {object_cases} "
+     "answers recorded from Microsoft Excel"),
     ("UserForms", ("test_vba_forms",),
      "Form designs in `.xlsm` and `.frm`/`.frx` files, the Forms object model, events and their "
-     "order: {form_answers} answers recorded from Microsoft Excel"),
+     "order, against {form_answers} answers recorded from Microsoft Excel"),
     ("Macros and event macros", ("test_vba_macros",),
      "The `macro.*` commands, VBA functions in formulas, `Worksheet_Change` and other events, "
      "`MsgBox`/`InputBox`, undo, the sandbox"),
@@ -223,22 +223,20 @@ def report(junit: Path, also: List[Path], e2e: Optional[Path], page: bool) -> st
             "",
             "This page is written by the test run itself (`scripts/compat_report.py`), each time `main` changes.",
             "",
-            "| | |",
-            "|---|---|",
-            f"| Commit | [`{sha[:7] or 'unknown'}`]({REPO}/commit/{sha}) |" if sha else "| Commit | unknown |",
-            f"| Tested | {today}, {env['os']}, Python {env['python']} |",
+            f"- **Commit**: [{sha[:7]}]({REPO}/commit/{sha})" if sha else "- **Commit**: unknown",
+            f"- **Tested**: {today} (UTC), {env['os']}, Python {env['python']}",
         ]
         for extra in also:
             if extra.exists():
                 c, _ = read_junit(extra)
                 tot = {k: sum(v[k] for v in c.values()) for k in ("passed", "known", "failed")}
                 env2 = read_env(extra)
-                out.append(f"| Also tested | Python {env2['python']}: {tot['passed']} passed, {tot['known']} known "
-                           f"differences, {tot['failed']} failed |")
+                out.append(f"- **Also tested**: Python {env2['python']}: {tot['passed']} passed, {tot['known']} "
+                           f"known differences, {tot['failed']} failed")
             else:
-                out.append(f"| Also tested | no results from {extra.parent.name} |")
+                out.append(f"- **Also tested**: no results from {extra.parent.name}")
         if url:
-            out.append(f"| Test run | [GitHub Actions]({url}) |")
+            out.append(f"- **Test run**: [GitHub Actions]({url})")
         out += ["", "## Unit tests", ""]
     else:
         out += [f"### Excel compatibility: Python {env['python']}, {env['os']}", ""]
