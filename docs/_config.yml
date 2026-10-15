@@ -1,0 +1,13 @@
+# GitHub Pages site for ReflexGrid (Settings › Pages: deploy from branch main, folder /docs).
+title: ReflexGrid
+tagline: Open-source online Excel with VBA macros, UserForms and live collaboration
+description: >-
+  A self-hosted browser spreadsheet that opens and saves real .xlsx and .xlsm workbooks, runs their
+  Excel VBA macros and UserForms, and lets people edit the same workbook together, live.
+url: https://milochen0418.github.io
+baseurl: /reflex_grid
+lang: en
+theme: jekyll-theme-cayman
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap

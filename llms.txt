@@ -1,0 +1,21 @@
+# ReflexGrid
+
+> Open-source, self-hosted online Excel: a browser spreadsheet that opens and saves real .xlsx and .xlsm workbooks, runs their Excel VBA macros and UserForms, and lets several people edit the same workbook live. A pure-Python spreadsheet engine (gridcore) with a Reflex web app. MIT license.
+
+- Excel VBA macros in the browser: a VBA editor, MsgBox and InputBox dialogs, event macros (Worksheet_Change, Workbook_Open…), VBA functions in formulas, and UserForms (modal and modeless) with a form designer. Macros run on the server in a sandbox: no files, shell, network or COM.
+- Checked against Microsoft Excel: 457 VBA language and library cases, 158 object-model scenarios, and files Excel opens, saves and ReflexGrid recalculates to Excel's results.
+- Excel for the web can't run VBA, ONLYOFFICE runs JavaScript macros only, and Collabora Online runs part of VBA with macros off by default. ReflexGrid runs VBA itself, UserForms included.
+- Real-time collaboration: shared links, presence, everyone's selection, per-person undo; workbooks are saved on the server as .xlsx (.xlsm with macros).
+- gridcore works without the UI: 478 worksheet functions, dynamic arrays, LET/LAMBDA, structured references, incremental recalculation; reads and writes .xlsx, .xlsm, .csv; runs VBA macros headless, with no Excel installed (`Session().run("macro.run", name="Main")`, or `python -m gridcore.cli run book.xlsm script.json`).
+- Install: clone reflex_grid and reflex_ddns_auth side by side, then `poetry install` and `poetry run ./reflex_rerun.sh` (Python 3.11 or newer).
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/milochen0418/reflex_grid/main/README.md): features, comparison with other web spreadsheets, FAQ, install, Python API and command line
+- [Excel macros (VBA)](https://raw.githubusercontent.com/milochen0418/reflex_grid/main/docs/vba.md): design, sandbox, checks against Excel, supported language and object model, limits
+- [Architecture](https://raw.githubusercontent.com/milochen0418/reflex_grid/main/docs/architecture.md): engine layers, commands, undo, recalculation, collaboration
+
+## Optional
+
+- [Demo video](https://www.youtube.com/watch?v=I5rBceuf1tM): the first version
+- [re_ddns](https://github.com/milochen0418/re_ddns): the App Store that adds sign-in and calls

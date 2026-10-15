@@ -1,10 +1,21 @@
 [tool.poetry]
 name = "reflex-grid"
 version = "0.1.0"
-description = "ReflexGrid: an Excel-compatible spreadsheet (XLSX in, XLSX out) built with Reflex."
+description = "Open-source online Excel: a browser spreadsheet that opens and saves .xlsx/.xlsm, runs VBA macros and UserForms, and lets people edit together live."
 authors = ["Milo Chen"]
 license = "MIT"
 readme = "README.md"
+homepage = "https://github.com/milochen0418/reflex_grid"
+repository = "https://github.com/milochen0418/reflex_grid"
+documentation = "https://github.com/milochen0418/reflex_grid/tree/main/docs"
+keywords = ["spreadsheet", "excel", "xlsx", "xlsm", "vba", "macros", "userform", "collaboration", "formula-engine"]
+classifiers = [
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial :: Spreadsheet",
+]
 packages = [{include = "reflex_grid"}, {include = "gridcore"}]
 
 [tool.poetry.dependencies]

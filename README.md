@@ -1,15 +1,17 @@
 # ReflexGrid
 
-ReflexGrid is an Excel-compatible spreadsheet that runs in the browser, built with [Reflex](https://reflex.dev/).
-It opens and saves real `.xlsx` workbooks (formulas, cached values, styles, tables, charts…), so files move
-between ReflexGrid and Microsoft Excel without conversion. Workbooks are shared: everyone who opens a
-workbook's link edits it together, live — they see each other's selections, and can call everyone on it.
+**An open-source, self-hosted online Excel.** ReflexGrid is a spreadsheet that runs in the browser: it opens
+and saves real `.xlsx` and `.xlsm` workbooks (formulas, cached values, styles, tables, charts…), runs their
+**Excel VBA macros and UserForms**, and lets everyone who opens a workbook's link **edit it together, live**
+— they see each other's selections, and can call everyone on it. Files move between ReflexGrid and
+Microsoft Excel without conversion. It is written in Python, with [Reflex](https://reflex.dev/) for the web app.
 
 Its engine, **gridcore**, is pure Python with a layered design (core → number formats → formulas → functions →
 model → calc → xlsx → vba → engine), copy-on-write workbook snapshots for undo, dependency-graph recalculation with
 dynamic arrays, an "every action is a command" API, and a sandboxed VBA interpreter that runs Excel macros.
 
-▶ [Demo video](https://www.youtube.com/watch?v=I5rBceuf1tM) (the first version)
+▶ [Demo video](https://www.youtube.com/watch?v=I5rBceuf1tM) (the first version) · [How it compares](#how-it-compares) ·
+[FAQ](#faq) · [中文簡介](#中文簡介)
 
 ## Why ReflexGrid
 
@@ -28,13 +30,34 @@ dynamic arrays, an "every action is a command" API, and a sandboxed VBA interpre
   the workbook's **UserForms** in the browser, modal or modeless, with their event code — on the server, in a
   sandbox, checked against Excel's own answers. See [docs/vba.md](docs/vba.md).
 - **Scriptable**: every user-visible action is a command with a stable id (`cell.set`, `home.bold`,
-  `data.sortAscending`…); the UI, the tests and your own scripts all use the same `Session.execute` API.
+  `data.sortAscending`…); the UI, the tests and your own scripts all use the same `Session.execute` API, so
+  a script can recalculate a workbook or run its macros with no Excel installed.
 - **Edit together, live**: a workbook list like [CoDoc in MD](https://github.com/milochen0418/codoc_in_md)'s
   document manager, shared links, who is here and where (everyone's selection in their colour, as in
   Google Sheets), changes reaching everyone at once, undo that takes back only your own changes, and
   "Call everyone" on a workbook.
 - **Sign-in and calls on re_ddns**: install it from the [re_ddns](https://github.com/milochen0418/re_ddns)
   Agentic App Store — see [With re_ddns](#with-re_ddns-sign-in-and-calls).
+
+## How it compares
+
+The web spreadsheets people usually weigh against each other, as their own documentation describes them
+(checked in October 2026; corrections are welcome in an issue):
+
+| | Open source, self-hosted | Real `.xlsx` files | Live co-editing | Excel VBA macros |
+|---|---|---|---|---|
+| **ReflexGrid** | Yes (MIT) | Yes, and `.xlsm` with its VBA project | Yes | **Run in the browser**: `MsgBox`/`InputBox`, event macros, VBA functions in formulas and **UserForms**, sandboxed on the server |
+| [ONLYOFFICE Docs](https://www.onlyoffice.com/) | Yes (AGPL-3.0) | Yes | Yes | No: its macros are JavaScript, VBA has to be [converted](https://api.onlyoffice.com/docs/macros/guides/converting-vba-macros/) |
+| [Collabora Online](https://www.collaboraonline.com/) | Yes (MPL-2.0) | Yes, through LibreOffice | Yes | Partly, through LibreOffice's VBA compatibility, and [off until an administrator enables macros](https://www.collaboraonline.com/blog/how-to-use-and-manage-macros-in-collabora-online/) |
+| [Univer](https://github.com/dream-num/univer) | Core: yes (Apache-2.0) | Import and export are in its [Pro packages](https://docs.univer.ai/guides/sheets/features/import-export), under a commercial license | Pro packages | No |
+| [Grist](https://github.com/gristlabs/grist-core) | Yes (Apache-2.0) | Import and export; formulas are Python, not Excel's | Yes | No |
+| Excel for the web | No | Yes | Yes | No: VBA macros [can't be created, run or edited](https://support.microsoft.com/en-us/office/work-with-vba-macros-in-excel-for-the-web-98784ad0-898c-43aa-a1da-4f0fb5014343) there |
+| Google Sheets | No | Yes | Yes | No: Apps Script instead, VBA has to be [converted](https://developers.google.com/apps-script/guides/macro-converter/overview) |
+| Zoho Sheet | No | Yes | Yes | [Partly](https://www.zoho.com/blog/sheet/macros-pivot-tables-more-in-zoho-sheet.html) |
+
+ONLYOFFICE and Collabora Online are complete office suites (documents and presentations too) with years of
+polish: pick them for that. Pick ReflexGrid when Excel workbooks have to keep working in a browser, macros and
+forms included, or when you want a spreadsheet engine you can script from Python.
 
 ## Features
 
@@ -81,11 +104,16 @@ are detected first and reported as skipped.
 ## Getting Started
 
 This project uses [Poetry](https://python-poetry.org/) for dependency management.
-Make sure you have **Python 3.15** and Poetry installed.
+Make sure you have **Python 3.15** (3.11 or newer is supported) and Poetry installed.
 
 ### 1) Install
 
+`pyproject.toml` installs [reflex_ddns_auth](https://github.com/milochen0418/reflex_ddns_auth) (sign-in on
+re_ddns; without it everyone is a guest) from `../reflex_ddns_auth`, so clone both side by side:
+
 ```bash
+git clone https://github.com/milochen0418/reflex_grid.git
+git clone https://github.com/milochen0418/reflex_ddns_auth.git
 cd reflex_grid
 poetry env use python3.15
 poetry install
@@ -174,6 +202,71 @@ install a few apps by hand and they work.
 
 Apps on re_ddns open each other in dialogs through **DDNS Intents** (a call is the intent `call.join`); this
 video explains the idea: [DDNS Intent](https://www.youtube.com/watch?v=Y5YKXsWkrxg).
+
+## FAQ
+
+**Is there an open-source alternative to Excel for the web that runs VBA macros?**
+Yes: ReflexGrid. Excel for the web can't run VBA. In ReflexGrid an `.xlsm` opens with its VBA project, and its
+macros run from the Macros dialog (Alt+F8) or the VBA editor, with `MsgBox` and `InputBox` shown as dialogs.
+Event macros such as `Worksheet_Change` run once macros are turned on, and public VBA functions work in
+formulas. See [docs/vba.md](docs/vba.md).
+
+**Do VBA UserForms work in the browser?**
+Yes. The forms in a workbook's VBA project show from their design, modal or modeless, and their event code
+runs as in Excel. The VBA editor has a form designer with a Toolbox and a Properties window.
+[What differs](docs/vba.md#not-supported-and-what-happens-instead) is listed with the other macro limits.
+
+**Can I run Excel VBA macros without Excel, on Linux, macOS or a server?**
+Yes. The VBA interpreter is part of gridcore, the pure-Python engine, so a script or a terminal can open a
+workbook, run a macro and save the result:
+
+```python
+from gridcore.engine import Session
+
+s = Session()
+s.run("file.open", path="report.xlsm")
+s.run("macro.run", name="Main")            # answers=[…] replies to MsgBox/InputBox
+s.run("file.saveAs", path="report-out.xlsm")
+```
+
+```bash
+echo '[["macro.run", {"name": "Main"}]]' > run.json
+poetry run python -m gridcore.cli run report.xlsm run.json -o report-out.xlsm
+```
+
+Macros run in a sandbox (no files, shell, network or COM), so a workbook's code can only change the workbook.
+
+**How close to Excel is it?**
+VBA was checked against Microsoft Excel on 457 language and library cases and 158 object-model scenarios;
+the [results](docs/vba.md#checked-against-excel) list the few differences. Excel opens the files ReflexGrid writes, and ReflexGrid
+recalculates Excel's own files to Excel's results (see [Excel compatibility](#excel-compatibility)).
+
+**Can several people edit the same `.xlsx` at the same time?**
+Yes. Share a workbook's link: everyone on it sees changes at once and each other's selections, and undo takes
+back only your own changes. The server saves the workbook as `.xlsx` (`.xlsm` with macros) as you edit. See
+[Working together](#working-together).
+
+**Can I calculate Excel formulas in Python without Excel?**
+Yes. openpyxl reads and writes formulas but doesn't calculate them; gridcore does, with 478 functions, dynamic
+arrays that spill, `LET`/`LAMBDA`, structured references and incremental recalculation. Use `Session` (above)
+or `poetry run python -m gridcore.cli eval '=SUM(1,2)'`.
+
+**Can I self-host it?**
+Yes. It is MIT-licensed and runs with Python and Poetry ([Getting Started](#getting-started)); workbooks are
+plain `.xlsx` files in `REFLEX_GRID_HOME`. Without sign-in everyone is a guest and the workbook list shows
+every workbook, so on a public server put it behind sign-in ([re_ddns](#with-re_ddns-sign-in-and-calls) or
+your reverse proxy's).
+
+**What doesn't it do yet?**
+Pivot tables (the `GROUPBY` and `PIVOTBY` functions work), Power Query, form and ActiveX controls placed on
+sheets, macro recording and a VBA debugger. [docs/vba.md](docs/vba.md#not-supported-and-what-happens-instead)
+lists the macro limits.
+
+## 中文簡介
+
+**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：478 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。MIT 授權。
+
+**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：478 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。MIT 许可。
 
 ## Tests
 
