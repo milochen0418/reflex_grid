@@ -40,6 +40,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: reflex_grid
+          fetch-depth: 0  # the summary compares the commit the checks in Excel ran on with this one
       - uses: actions/checkout@v7
         with:
           repository: milochen0418/reflex_ddns_auth
@@ -144,6 +145,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # the report compares the commit the checks in Excel ran on with this one
       - uses: actions/setup-python@v7
         with:
           python-version: "3.15"

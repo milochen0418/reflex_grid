@@ -26,6 +26,11 @@ ABOUT = ("Checks of ReflexGrid against the Microsoft Excel installed on a Mac (s
 # The checks in the order the report lists them.
 ORDER = ("vba-language", "vba-objects", "userforms", "userform-events", "userform-designer", "files")
 
+# What the checks' results depend on: when one of these changes after a check ran, its results may not hold
+# any more (``compat_report.py`` says so).
+INPUTS = ("gridcore", "tests/vba_excel_cases.py", "tests/vba_object_cases.py", "tests/vba_form_cases.py",
+          "scripts/excel_vba_oracle_mac.py", "scripts/excel_check_mac.py")
+
 
 def excel_version() -> str:
     def read(key: str) -> str:
@@ -37,13 +42,13 @@ def excel_version() -> str:
 
 
 def commit() -> str:
-    """The commit the check ran on, marked when the engine or the cases had uncommitted changes."""
+    """The commit the check ran on, marked when what it depends on (``INPUTS``) had uncommitted changes."""
 
     def git(*args: str) -> str:
         return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
     sha = git("rev-parse", "HEAD")
-    if sha and git("status", "--porcelain", "--", "gridcore", "tests"):
+    if sha and git("status", "--porcelain", "--", *INPUTS):
         sha += " with uncommitted changes"
     return sha
 

@@ -72,6 +72,9 @@ AREAS: List[Tuple[str, Tuple[str, ...], str]] = [
     ("Editing together", ("test_collab", "test_books"),
      "Several people on one workbook, undo that takes back only your own changes, the shared "
      "workbook store"),
+    ("Third-party VBA: VBA-JSON's own specs", ("test_third_party_vba",),
+     "The spec workbook of [VBA-JSON](https://github.com/VBA-tools/VBA-JSON) (MIT), written for Excel by its "
+     "authors: ReflexGrid opens the published `.xlsm` and runs its own suite, one test per spec"),
 ]
 
 # How the summary names each check in Excel (docs/excel-oracle.json's keys).
@@ -167,6 +170,39 @@ def suites() -> List[Tuple[str, str]]:
     return re.findall(r"^\| `(\w+)` \| (.+?) \|$", (ROOT / "testcases" / "README.md").read_text("utf-8"), re.M)
 
 
+def git(*args: str) -> Optional[str]:
+    try:
+        p = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    except OSError:
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def excel_freshness(excel: Dict[str, Any], head: str) -> List[Dict[str, Any]]:
+    """For each commit the checks in Excel ran on: how far this report's commit is from it, and which
+    of the files the checks depend on (``oracle_record.INPUTS``) changed since."""
+    from scripts.oracle_record import INPUTS
+
+    out = []
+    for ran in sorted({c["reflexgrid_commit"] for c in excel.get("checks", {}).values()}):
+        base = ran.split()[0] if ran else ""
+        entry: Dict[str, Any] = {"checks_commit": base, "uncommitted_changes": "uncommitted" in ran, "report_commit": head}
+        count = git("rev-list", "--count", f"{base}..{head}") if base and head else None
+        changed = git("diff", "--name-only", base, head, "--", *INPUTS) if count is not None else None
+        if count is None or changed is None:
+            entry["known"] = False
+        else:
+            entry.update(known=True, commits_since=int(count), changed_since=[f for f in changed.splitlines() if f],
+                         compare=f"{REPO}/compare/{base[:12]}...{head[:12]}")
+        out.append(entry)
+    return out
+
+
+def excel_totals(excel: Dict[str, Any]) -> Tuple[int, int]:
+    checks = excel.get("checks", {}).values()
+    return sum(c["matched"] for c in checks), sum(c["compared"] for c in checks)
+
+
 def collect(junit: Path, also: List[Path], e2e: Optional[Path], oracle: Path) -> Dict[str, Any]:
     """Everything the report says, as data (what ``compatibility.json`` holds)."""
     data: Dict[str, Any] = {
@@ -181,6 +217,8 @@ def collect(junit: Path, also: List[Path], e2e: Optional[Path], oracle: Path) ->
         "known_differences": [],
         "browser_suites": [],
         "excel": None,
+        "excel_freshness": [],
+        "excel_overall": None,
     }
     if junit.exists():
         answers = recorded_answers()
@@ -210,6 +248,18 @@ def collect(junit: Path, also: List[Path], e2e: Optional[Path], oracle: Path) ->
     data["browser_suites"] = [{"suite": name, "checks": what, "result": results[name]} for name, what in suites() if name in results]
     if oracle.exists():
         data["excel"] = json.loads(oracle.read_text("utf-8"))
+        data["excel_freshness"] = excel_freshness(data["excel"], data["commit"])
+        matched, compared = excel_totals(data["excel"])
+        if compared:
+            versions = sorted({c["excel"] for c in data["excel"]["checks"].values()})
+            data["excel_overall"] = {
+                "matched": matched,
+                "compared": compared,
+                "percent": round(100 * matched / compared, 2),
+                "statement": f"ReflexGrid matched {' and '.join(versions)} in {matched} of {compared} published "
+                             f"comparison cases ({100 * matched / compared:.1f}%). These cases cover what the checks "
+                             "exercise, not every Excel feature or workload.",
+            }
     return data
 
 
@@ -267,6 +317,43 @@ def summary_lines(data: Dict[str, Any]) -> List[str]:
         versions = " and ".join(sorted({c["excel"] for c in checks.values()}))
         parts = [f"{c['matched']} of {c['compared']} {SHORT.get(k, k)}" for k, c in checks.items()]
         out.append(f"- **In {versions}**: " + "; ".join(parts) + " gave the same answer as in ReflexGrid.")
+    if data["excel_overall"]:
+        out.append(f"- **Overall**: {data['excel_overall']['statement']}")
+    stale = [f for f in data["excel_freshness"] if f.get("changed_since") or f["uncommitted_changes"]]
+    for f in stale:
+        out.append(f"- **Note**: the checks in Excel ran on commit {f['checks_commit'][:7]}, and files they depend on "
+                   "changed since, so they may not describe this commit until they run again (see below).")
+    return out
+
+
+def freshness_lines(data: Dict[str, Any], page: bool) -> List[str]:
+    """Which commit the checks in Excel ran on, against this report's commit."""
+    out = []
+    excel = data["excel"]
+    for f in data["excel_freshness"]:
+        runs = [c for c in excel["checks"].values() if c["reflexgrid_commit"].split()[0] == f["checks_commit"]]
+        where = "; ".join(sorted({f"{c['excel']} on {c['os']}, {c['date']}" for c in runs}))
+        ran = f"[{f['checks_commit'][:7]}]({REPO}/commit/{f['checks_commit']})" if page else f["checks_commit"][:7]
+        head = f"[{f['report_commit'][:7]}]({REPO}/commit/{f['report_commit']})" if page else f["report_commit"][:7]
+        text = f"The checks ran on commit {ran}" + (" with uncommitted changes" if f["uncommitted_changes"] else "") + f", in {where}. "
+        if not f["known"]:
+            text += f"This report is for commit {head}; it couldn't compare the two here (no git history)."
+        elif f["commits_since"] == 0:
+            text += "That is this report's commit."
+        else:
+            n = f["commits_since"]
+            later = f"{n} commit{'s' if n != 1 else ''} later" + (f" ([changes]({f['compare']}))" if page else "")
+            text += f"This report is for commit {head}, {later}. "
+            if f["changed_since"]:
+                files = f["changed_since"]
+                shown = ", ".join(f"`{x}`" for x in files[:5]) + (f" and {len(files) - 5} more" if len(files) > 5 else "")
+                text += (f"Since the checks ran, {len(files)} file{'s' if len(files) != 1 else ''} they depend on changed "
+                         f"({shown}), so their results describe commit {f['checks_commit'][:7]} and may not hold for "
+                         "this one until the checks run again.")
+            else:
+                text += ("Nothing the checks depend on (the engine, the test cases, the check scripts) changed since, "
+                         "so their results hold for this commit too.")
+        out.append(text)
     return out
 
 
@@ -334,7 +421,7 @@ def render(data: Dict[str, Any], page: bool, downloads: Optional[List[Tuple[str,
         out += ["", "## Known differences from Excel" if page else "**Known differences from Excel**", ""]
         if page:
             out += ["These cases give a different answer from Excel's, on purpose or for now; the tests expect it "
-                    "(`KNOWN` in `tests/test_vba_object_cases.py`).", ""]
+                    "(`KNOWN` in `tests/test_vba_object_cases.py` and `tests/test_third_party_vba.py`).", ""]
         out += [f"- **{', '.join(k['cases'])}**: {k['reason']}" for k in data["known_differences"]]
 
     if data["browser_suites"]:
@@ -347,14 +434,14 @@ def render(data: Dict[str, Any], page: bool, downloads: Optional[List[Tuple[str,
 
     if data["excel"]:
         checks = list(data["excel"].get("checks", {}).values())
-        envs = sorted({f"{c['excel']} on {c['os']}" for c in checks})
         out += ["", "## Checked in Microsoft Excel" if page else "**Checked in Microsoft Excel**", ""]
         if page:
             out += ["These checks run ReflexGrid's output in Microsoft Excel itself: Excel opens the macro-enabled "
                     "workbooks and the files ReflexGrid writes, runs the same VBA, describes the same UserForms, and "
                     "its answers are compared with ReflexGrid's (`scripts/excel_vba_oracle_mac.py --all --record`, "
                     "`scripts/excel_check_mac.py --record`). They need Excel, so they run on a Mac rather than in CI, "
-                    f"and each row says when and on which commit it last ran. Ran in {'; '.join(envs)}.", ""]
+                    "and each row says when and on which commit it last ran.", ""]
+        out += [*freshness_lines(data, page), ""]
         out += excel_table(data["excel"], page)
         if page:
             notes = []
@@ -386,6 +473,7 @@ def render(data: Dict[str, Any], page: bool, downloads: Optional[List[Tuple[str,
             f"{AUTHOR} and contributors ({data['generated'][:4]}). *{TITLE}*, commit {sha[:7] or 'unknown'}, "
             f"{data['generated']}. {PAGE}",
             "",
+            *([f"To quote the result: *{data['excel_overall']['statement']}*", ""] if data["excel_overall"] else []),
             f"For the software itself, see [CITATION.cff]({REPO}/blob/main/CITATION.cff) (GitHub's *Cite this "
             "repository*).",
             "{% endraw %}",

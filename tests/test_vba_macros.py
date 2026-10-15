@@ -178,6 +178,80 @@ End Sub''')
     assert out[0].split() == ["Long", "-4121", "-4159", "-4162", "-4161", "-4162", "Long", "60000", "2", "4"]
 
 
+
+def test_conditional_compilation_takes_the_windows_64_bit_branches():
+    # ReflexGrid compiles as 64-bit VBA 7 for Windows; a branch not taken is never parsed (here, text that
+    # isn't VBA); #Const names exist only for the directives; VBA.vbTab is the library's constant.
+    s = new()
+    out = run(s, '''#Const LEVEL = 2
+#If VBA7 Then
+Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
+#Else
+Private Declare Function GetTickCount Lib "kernel32" () As Long
+#End If
+#If Mac Then
+    this line is not VBA: only Excel for Mac would read it
+#End If
+
+Function Platform() As String
+#If Mac Then
+    Platform = "mac"
+#ElseIf Win64 And VBA7 Then
+    Platform = "win64"
+#Else
+    Platform = "win32"
+#End If
+End Function
+
+Function Pick() As String
+#If LEVEL > 1 And Not Mac Then ' a comment
+  #If LEVEL = 3 Then
+    Pick = "three"
+  #Else
+    Pick = "more than one"
+  #End If
+#Else
+    Pick = "one"
+#End If
+End Function
+
+Sub M()
+    Debug.Print Platform()
+    Debug.Print Pick()
+    Debug.Print IsEmpty(LEVEL)
+    Debug.Print Len("a" & VBA.vbTab & "b")
+End Sub''')
+    assert [o.strip() for o in out] == ["win64", "more than one", "True", "3"]
+
+
+def test_conditional_compilation_errors_keep_their_lines():
+    s = new()
+    s.run("macro.setModule", name="Module1", code="Sub M()\n#If VBA7 Then\n    x = 1\n#End If\n    If y Then\nEnd Sub\n")
+    d = s.run("macro.list")["diagnostics"]
+    assert len(d) == 1 and d[0]["line"] in (5, 6)
+    s.run("macro.setModule", name="Module1", code="Sub M()\n#If Win64 Then\n    x = 1\nEnd Sub\n")
+    d = s.run("macro.list")["diagnostics"]
+    assert d[0]["line"] == 2 and "#End If" in d[0]["message"]
+    s.run("macro.setModule", name="Module1", code="Sub M()\n#Else\nEnd Sub\n")
+    assert s.run("macro.list")["diagnostics"][0]["line"] == 2
+    s.run("macro.setModule", name="Module1", code="Sub M()\n#If VBA7\n#End If\nEnd Sub\n")
+    assert "Then" in s.run("macro.list")["diagnostics"][0]["message"]
+
+
+def test_the_projects_conditional_compilation_arguments():
+    from dataclasses import replace
+
+    from gridcore.vba.conditional import project_constants
+
+    assert project_constants("DEBUG_MODE = 1 : Level=-2: bad") == {"debug_mode": 1, "level": -2}
+    s = new()
+    s.run("macro.setModule", name="Module1", code='Sub M()\n#If DEBUG_MODE Then\n    Debug.Print "debug"\n#Else\n    Debug.Print "release"\n#End If\nEnd Sub\n')
+    assert s.run("macro.run", name="M")["output"] == ["release"]
+    wb = s.doc().wb
+    wb.vba = replace(wb.vba, constants="DEBUG_MODE = 1")
+    assert s.run("macro.run", name="M")["output"] == ["debug"]
+
+
 def test_find_replace_and_wildcards():
     s = new()
     out = run(s, '''

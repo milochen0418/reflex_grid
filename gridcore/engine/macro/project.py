@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ...model.forms import FormDesign
 from ...model.vba import CLASS, DOCUMENT, FORM, STANDARD, WORKBOOK_BASE, VbaProject
 from ...vba.compiler import ProjectRuntime, compile_project
+from ...vba.conditional import project_constants
 from ...vba.errors import VbaSyntaxError
 from .constants import CONSTANTS, ENUMS
 from .host import GLOBAL_NAMES
@@ -57,7 +58,8 @@ def form_design(p: VbaProject, m) -> FormDesign:
 
 def compile_vba(p: VbaProject) -> ProjectRuntime:
     """Compiles a project (no caching): its modules' compile errors are in ``.errors``."""
-    rt = compile_project(module_inputs(p), GLOBAL_NAMES, CONSTANTS, p.name or "VBAProject", HOST_TYPES, ENUMS)
+    rt = compile_project(module_inputs(p), GLOBAL_NAMES, CONSTANTS, p.name or "VBAProject", HOST_TYPES, ENUMS,
+                         conditional_constants=project_constants(p.constants))
     return rt
 
 

@@ -251,6 +251,11 @@ with ReflexGrid's:
   control, some in a Frame and on a page, properties changed, one moved, one removed) is loaded and described
   by Excel as by ReflexGrid (18 of 18, locked in the same file); so are two Excel-made forms after moving,
   retitling, adding and removing controls (49 rows, three forms).
+- **Third-party code**: the spec workbook of [VBA-JSON](https://github.com/VBA-tools/VBA-JSON) (MIT),
+  written for Excel by its authors, opens and runs in ReflexGrid with its own spec suite
+  (`tests/test_third_party_vba.py`): 22 of its 23 specs pass; the other converts dates to UTC with Windows
+  API calls, which the sandbox doesn't allow. Running it first found that conditional compilation and
+  `VBA.vbTab` were missing, both now supported.
 - Comparing found one more thing worth knowing: Excel compiles a procedure only when it first runs, so a
   compile error in a macro nobody runs goes unnoticed there; ReflexGrid reports it for the module when the
   code is applied (Developer › Compile shows them all).
@@ -271,7 +276,10 @@ when the last reference goes (at the next statement), default members via `Attri
 `While`/`Exit`, `GoTo`/`GoSub`/`Return`/labels/line numbers, `On Error GoTo/Resume Next/GoTo 0`, `Resume`,
 `Err` (`Raise`, `Number`, `Description`, `Source`, `Clear`), `Erl`, `With` (nested), `Mid` statement,
 `LSet`/`RSet`, `Debug.Print`/`Debug.Assert`, `Stop`, `End`, line continuations, `[A1]` evaluation,
-`VBA.`/`Excel.` qualified names, and Excel's enum types (`Dim d As XlDirection`, `XlDirection.xlUp`).
+conditional compilation (`#Const`, `#If`/`#ElseIf`/`#Else`/`#End If`; ReflexGrid compiles as 64-bit VBA 7 for
+Windows, so `VBA7`, `Win64` and `Win32` are True and `Mac` is False, and the project's conditional compilation
+arguments apply), `VBA.`/`Excel.` qualified names (`VBA.Len`, `VBA.vbTab`), and Excel's enum types
+(`Dim d As XlDirection`, `XlDirection.xlUp`).
 
 ### Library
 

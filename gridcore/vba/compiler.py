@@ -393,9 +393,10 @@ class ProjectRuntime:
 # ---------------------------------------------------------------- compiling a project
 
 
-def compile_project(modules: Sequence[Tuple[str, str, str, Sequence[Tuple[str, str]]]], host_globals: Optional[Set[str]] = None, host_constants: Optional[Dict[str, Any]] = None, project_name: str = "VBAProject", host_types: Optional[Set[str]] = None, host_enums: Optional[Dict[str, Dict[str, Any]]] = None) -> ProjectRuntime:
+def compile_project(modules: Sequence[Tuple[str, str, str, Sequence[Tuple[str, str]]]], host_globals: Optional[Set[str]] = None, host_constants: Optional[Dict[str, Any]] = None, project_name: str = "VBAProject", host_types: Optional[Set[str]] = None, host_enums: Optional[Dict[str, Dict[str, Any]]] = None, conditional_constants: Optional[Dict[str, Any]] = None) -> ProjectRuntime:
     """Compiles ``(name, kind, code, member attributes)`` modules. Syntax and declaration errors
-    are collected in ``ProjectRuntime.errors`` (by module); the other modules still run."""
+    are collected in ``ProjectRuntime.errors`` (by module); the other modules still run.
+    ``conditional_constants`` are the project's conditional compilation arguments."""
     rt = ProjectRuntime(project_name)
     rt.host_globals = {g.lower() for g in (host_globals or ())}
     rt.host_constants = {k.lower(): v for k, v in (host_constants or {}).items()}
@@ -417,7 +418,7 @@ def compile_project(modules: Sequence[Tuple[str, str, str, Sequence[Tuple[str, s
         rt.order.append(m)
         attrs[name.lower()] = member_attrs
         try:
-            asts[name.lower()] = parse_module(code, name)
+            asts[name.lower()] = parse_module(code, name, conditional_constants)
         except VbaSyntaxError as e:
             rt.errors[name.lower()] = e
     # Declarations first (types, enums, constants, variables, procedure signatures), so bodies
@@ -2500,6 +2501,11 @@ class ProcCompiler:
                     if lib == "vba":
                         bi = lookup(name)
                         if bi is None:
+                            from .stdlib import CONSTANTS
+
+                            if name.lower() in CONSTANTS and not args:
+                                cv = CONSTANTS[name.lower()]  # VBA.vbTab: a constant of the VBA library
+                                return lambda fr: cv
                             self.error(f"Method or data member not found: VBA.{name}", line)
                         return self.call_builtin(bi, args, line, qualified=True)
                     if lib in ("excel",):

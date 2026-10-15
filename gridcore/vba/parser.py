@@ -3,7 +3,7 @@ it). Compile errors carry the module's physical line number."""
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 
 from . import ast as A
 from .errors import VbaSyntaxError
@@ -36,8 +36,13 @@ _SUFFIX_TYPE = {"%": "Integer", "&": "Long", "^": "LongLong", "!": "Single", "#"
 _BLOCK_ENDS = {"IF", "SUB", "FUNCTION", "PROPERTY", "SELECT", "WITH", "TYPE", "ENUM"}
 
 
-def parse_module(src: str, name: str = "Module") -> A.ModuleAst:
+def parse_module(src: str, name: str = "Module", constants: Optional[Mapping[str, Any]] = None) -> A.ModuleAst:
+    """A module's AST, after its conditional compilation directives (``#If``, ``#Const``…) are
+    applied with the project's ``constants`` (see :mod:`.conditional`)."""
+    from .conditional import preprocess
+
     try:
+        src = preprocess(src, constants, name)
         toks = tokenize(src)
     except VbaSyntaxError as e:
         e.module = name
