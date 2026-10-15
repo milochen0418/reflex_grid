@@ -27,8 +27,8 @@ EOF
 }
 
 require_python() {
-  if ! command -v python3.11 >/dev/null 2>&1; then
-    log "python3.11 is required but not found on PATH."
+  if ! command -v python3.15 >/dev/null 2>&1; then
+    log "python3.15 is required but not found on PATH."
     exit 1
   fi
 }
@@ -95,8 +95,8 @@ remove_poetry_envs() {
 }
 
 recreate_poetry_env() {
-  log "Creating Poetry environment with python3.11"
-  (cd "$ROOT_DIR" && poetry env use python3.11)
+  log "Creating Poetry environment with python3.15"
+  (cd "$ROOT_DIR" && poetry env use python3.15)
   log "Installing dependencies"
   if ! (cd "$ROOT_DIR" && poetry install); then
     log "poetry install failed; attempting to regenerate lockfile"

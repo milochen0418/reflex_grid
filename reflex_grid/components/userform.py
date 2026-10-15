@@ -1,5 +1,5 @@
-"""UserForms on screen: a local React component (``assets/grid/userform.jsx``), a plain asset like
-the grid (see :mod:`.sheet_view`), drawing the forms a person's macros show from the engine's
+"""UserForms on screen: a local React component (``assets/grid/userform.jsx``), a plain asset imported
+like the grid (see :mod:`.sheet_view`), drawing the forms a person's macros show from the engine's
 snapshots and sending back what the person does with them (``macro.formEvent``)."""
 
 import reflex as rx
@@ -10,7 +10,7 @@ _JS = rx.asset("grid/userform.jsx")
 
 
 class UserForms(rx.Component):
-    library = f"$/public{_JS}"
+    library = _JS.importable_path
     tag = "UserForms"
 
     forms: rx.Var[list]
@@ -48,7 +48,7 @@ _DESIGNER_JS = rx.asset("grid/form_designer.jsx")
 class FormDesigner(rx.Component):
     """The VBA editor's form designer (``assets/grid/form_designer.jsx``)."""
 
-    library = f"$/public{_DESIGNER_JS}"
+    library = _DESIGNER_JS.importable_path
     tag = "FormDesigner"
 
     form: rx.Var[dict]

@@ -81,13 +81,13 @@ are detected first and reported as skipped.
 ## Getting Started
 
 This project uses [Poetry](https://python-poetry.org/) for dependency management.
-Make sure you have **Python 3.11** and Poetry installed.
+Make sure you have **Python 3.15** and Poetry installed.
 
 ### 1) Install
 
 ```bash
 cd reflex_grid
-poetry env use python3.11
+poetry env use python3.15
 poetry install
 ```
 

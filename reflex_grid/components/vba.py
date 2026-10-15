@@ -20,7 +20,8 @@ MACROS = GridState.ui["macros"].to(dict)
 
 
 class VbaEditor(rx.Component):
-    library = f"$/public{_JS}"
+    # Without rx.asset's ?v= hash, as the grid (see sheet_view.py).
+    library = _JS.importable_path
     tag = "VbaEditor"
 
     value: rx.Var[str]

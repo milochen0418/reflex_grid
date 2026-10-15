@@ -57,6 +57,12 @@ End Sub
 
 def wait_gone(page, selector: str, timeout: float = 15.0) -> None:
     page.locator(selector).wait_for(state="detached", timeout=timeout * 1000)
+    # A dialog's overlay fades out after its content and takes the clicks until it has gone (unless
+    # another dialog stays open, whose overlay it is).
+    page.wait_for_function(
+        "() => !!document.querySelector('[role=dialog]') || !document.querySelector('.rt-BaseDialogOverlay')",
+        timeout=timeout * 1000,
+    )
 
 
 def wait_empty(g: Grid, a1: str, timeout: float = 8.0) -> None:

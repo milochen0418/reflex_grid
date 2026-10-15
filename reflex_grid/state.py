@@ -401,6 +401,12 @@ class GridState(rx.State):
         )
         if extra_ui:
             ui.update(extra_ui)
+        # The browser sends its next event without waiting for this one's answer (Reflex 0.10), so
+        # the redraw for a passive one right behind a refused commit (the editor closing, a ping) can
+        # reach the grid in the same update: the error stays until this tab's next event.
+        last_error = (self.ui or {}).get("lastError")
+        if passive and "lastError" not in ui and last_error and last_error.get("seq") == ui["seq"]:
+            ui["lastError"] = last_error
         if ui != self.ui:
             self.ui = ui
         if self.selected_object >= 0 and not any(o["id"] == self.selected_object for o in (self.objects.get("charts", []) + self.objects.get("images", []))):
@@ -2245,13 +2251,12 @@ async def push(book_id: str) -> None:
     """Shows a book as it is now to everyone on it, from outside their own events (a tab that
     closed, a deletion, a save that finished): one of them publishes it to the room, and the
     room — a SharedState — carries it to all the others."""
-    from reflex.state import _substate_key
     from reflex.utils.prerequisites import get_app
 
     app = get_app().app
     for token in sessions.tokens_on(book_id):
         try:
-            async with app.modify_state(_substate_key(token, GridState)) as root:
+            async with app.modify_state(rx.BaseStateToken(ident=token, cls=GridState)) as root:
                 grid = await root.get_state(GridState)
                 if grid.book != book_id:
                     continue

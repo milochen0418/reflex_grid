@@ -15,18 +15,19 @@ If you already read them earlier in the session, **re-check** when unsure.
 
 ## 1) Python / Poetry requirements (strict)
 
-This project targets **Python 3.11** (always set the Poetry env to 3.11 before installing deps or running commands).
+This project targets **Python 3.15** (always set the Poetry env to 3.15 before installing deps or running commands).
+`pyproject.toml` still allows 3.11, the Python of the re_ddns App Store image: keep the range covering both.
 
 - Prefer Poetry-managed environments.
-- If Poetry selected another Python (e.g. 3.12+), switch it:
+- If Poetry selected another Python (e.g. 3.11), switch it:
 
 ```bash
-poetry env use python3.11
+poetry env use python3.15
 poetry env info
 poetry install
 ```
 
-If `python3.11` is not available on PATH, use an absolute path to the 3.11 executable.
+If `python3.15` is not available on PATH, use an absolute path to the 3.15 executable.
 
 ## 2) Default rule: use `poetry run` for scripts
 

@@ -553,6 +553,7 @@ export function SheetView(props) {
 
   // ------------------------------------------------------------ server state sync
 
+  const reopenedRef = useRef(0);
   useEffect(() => {
     if (!ui || !ui.selection) return;
     // Someone renaming this sheet keeps its place and drops its old name: not another sheet.
@@ -591,9 +592,14 @@ export function SheetView(props) {
       }
       return changed ? n : p;
     });
-    // A failed commit reopens the editor with what was typed.
+    // A failed commit reopens the editor with what was typed, where the server kept the selection.
+    // Once: the error stays in the passive redraws that follow it (which don't move the selection,
+    // and may reach us in the same update) until the next event.
     const err = ui.lastError;
-    if (err && err.seq === seqRef.current && err.kind === "commit" && !edRef.current) {
+    if (err && err.seq === seqRef.current && err.kind === "commit" && !edRef.current && reopenedRef.current !== err.seq) {
+      reopenedRef.current = err.seq;
+      const s = ui.selection;
+      setSel({ active: s.active, anchor: s.anchor || s.active, ranges: s.ranges });
       setEd({ r: err.r, c: err.c, text: err.text, mode: "edit", bar: false });
       setTimeout(() => kbdRef.current && kbdRef.current.focus(), 0);
     }
