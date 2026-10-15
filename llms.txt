@@ -17,5 +17,6 @@
 
 ## Optional
 
-- [Demo video](https://www.youtube.com/watch?v=I5rBceuf1tM): the first version
+- [Demo video: co-editing, VBA macros and UserForms](https://youtu.be/Zl0tysSTTOI): 3 minutes, English, October 2026
+- [First demo video](https://www.youtube.com/watch?v=I5rBceuf1tM): the first version
 - [re_ddns](https://github.com/milochen0418/re_ddns): the App Store that adds sign-in and calls

@@ -16,7 +16,10 @@ in Microsoft Excel:
   `LET`/`LAMBDA`, and runs VBA macros headless, with no Excel installed.
 - **Self-hosted, MIT-licensed.**
 
-▶ [Demo video](https://www.youtube.com/watch?v=I5rBceuf1tM)
+<a href="https://youtu.be/Zl0tysSTTOI"><img src="https://i.ytimg.com/vi/Zl0tysSTTOI/maxresdefault.jpg" width="640" alt="ReflexGrid demo video: co-editing, VBA macros and UserForms"></a>
+
+▶ [Demo video: co-editing, VBA macros and UserForms](https://youtu.be/Zl0tysSTTOI) (3 min, English) ·
+[the first version](https://www.youtube.com/watch?v=I5rBceuf1tM)
 
 ## Try it
 
