@@ -17,6 +17,8 @@
 
 ## Optional
 
-- [Demo video: co-editing, VBA macros and UserForms](https://youtu.be/Zl0tysSTTOI): 3 minutes, English, October 2026
-- [First demo video](https://www.youtube.com/watch?v=I5rBceuf1tM): the first version
+- [Demo video: co-editing, VBA macros and UserForms](https://youtu.be/Zl0tysSTTOI): English, 3:20, October 2026
+- [The same demo in Chinese](https://youtu.be/OvGv0PB3UKU): 3:41, October 2026
+- [Introduction to the first version](https://www.youtube.com/watch?v=I5rBceuf1tM): 1:51, October 2026
+- [All videos](https://milochen0418.github.io/reflex_grid/#videos): also DDNS Intent and the Agentic App Store demo
 - [re_ddns](https://github.com/milochen0418/re_ddns): the App Store that adds sign-in and calls

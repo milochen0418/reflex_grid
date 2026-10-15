@@ -12,8 +12,8 @@ dynamic arrays, an "every action is a command" API, and a sandboxed VBA interpre
 
 <a href="https://youtu.be/Zl0tysSTTOI"><img src="https://i.ytimg.com/vi/Zl0tysSTTOI/maxresdefault.jpg" width="640" alt="ReflexGrid demo video: co-editing, VBA macros and UserForms"></a>
 
-▶ [Demo video: co-editing, VBA macros and UserForms](https://youtu.be/Zl0tysSTTOI) (3 min, English) ·
-[the first version](https://www.youtube.com/watch?v=I5rBceuf1tM) · [How it compares](#how-it-compares) · [FAQ](#faq) · [中文簡介](#中文簡介)
+▶ Demo of co-editing, VBA macros and UserForms: [English](https://youtu.be/Zl0tysSTTOI) · [中文](https://youtu.be/OvGv0PB3UKU) · [all videos](https://milochen0418.github.io/reflex_grid/#videos) ·
+[How it compares](#how-it-compares) · [FAQ](#faq) · [中文簡介](#中文簡介)
 
 ## Why ReflexGrid
 
@@ -266,9 +266,9 @@ lists the macro limits.
 
 ## 中文簡介
 
-**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：478 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。MIT 授權。[示範影片](https://youtu.be/Zl0tysSTTOI)：英文，約 3 分鐘。
+**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：478 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。MIT 授權。示範影片：[中文](https://youtu.be/OvGv0PB3UKU)、[英文](https://youtu.be/Zl0tysSTTOI)，約 3 分鐘；[全部影片](https://milochen0418.github.io/reflex_grid/#videos)。
 
-**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：478 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。MIT 许可。[演示视频](https://youtu.be/Zl0tysSTTOI)：英文，约 3 分钟。
+**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：478 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。MIT 许可。演示视频：[中文](https://youtu.be/OvGv0PB3UKU)、[英文](https://youtu.be/Zl0tysSTTOI)，约 3 分钟；[全部视频](https://milochen0418.github.io/reflex_grid/#videos)。
 
 ## Tests
 

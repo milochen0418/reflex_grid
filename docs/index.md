@@ -16,10 +16,17 @@ in Microsoft Excel:
   `LET`/`LAMBDA`, and runs VBA macros headless, with no Excel installed.
 - **Self-hosted, MIT-licensed.**
 
+## Videos
+
 <a href="https://youtu.be/Zl0tysSTTOI"><img src="https://i.ytimg.com/vi/Zl0tysSTTOI/maxresdefault.jpg" width="640" alt="ReflexGrid demo video: co-editing, VBA macros and UserForms"></a>
 
-▶ [Demo video: co-editing, VBA macros and UserForms](https://youtu.be/Zl0tysSTTOI) (3 min, English) ·
-[the first version](https://www.youtube.com/watch?v=I5rBceuf1tM)
+- **Co-editing, VBA macros and UserForms**, the latest demo (October 2026):
+  [English, 3:20](https://youtu.be/Zl0tysSTTOI) · [中文, 3:41](https://youtu.be/OvGv0PB3UKU)
+- **Introduction to the first version** (October 2026, 1:51): [watch](https://www.youtube.com/watch?v=I5rBceuf1tM)
+- **DDNS Intent** (October 2026, 2:21): how apps on re_ddns open each other, which is how ReflexGrid's
+  *Call everyone* works: [watch](https://www.youtube.com/watch?v=Y5YKXsWkrxg)
+- **Agentic App Store demo** (July 2026, 16:44): the re_ddns App Store, which installs ReflexGrid with sign-in
+  and calls: [watch](https://www.youtube.com/watch?v=dbz7ta0M1TM)
 
 ## Try it
 
