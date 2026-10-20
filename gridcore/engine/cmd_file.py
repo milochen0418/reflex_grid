@@ -8,6 +8,7 @@ import os
 from typing import Any, Dict, Optional
 
 from ..xlsx import XlsxError, read_csv, read_xlsx, sniff, write_csv, write_xlsx
+from ..xlsx.csv_io import CsvTooLarge
 from .display import cell_text
 from .session import DocState, EngineError, Session, command, edit, p_int, p_str
 
@@ -20,7 +21,8 @@ def open_bytes(s: Session, data: bytes, name: str, path: Optional[str] = None, d
     kind = sniff(data)
     lower = name.lower()
     warnings = []
-    if kind == "xlsx" and not lower.endswith((".csv", ".tsv", ".txt")):
+    # The content decides, not the name: a workbook named `.csv` still opens as a workbook.
+    if kind == "xlsx":
         try:
             wb, warnings = read_xlsx(data)
         except XlsxError as e:
@@ -34,6 +36,8 @@ def open_bytes(s: Session, data: bytes, name: str, path: Optional[str] = None, d
         if err is None:
             wb.sheets[0].name = base[:31]
     elif kind == "xls":
+        if _encrypted_package(data):
+            raise EngineError(f"`{name}` needs a password to open, which ReflexGrid can't open yet. Remove the password in Excel and try again.")
         raise EngineError("Legacy .xls (Excel 97-2003) files aren't supported. Save the file as .xlsx and try again.")
     elif kind == "ods":
         raise EngineError("OpenDocument (.ods) files aren't supported yet. Save the file as .xlsx and try again.")
@@ -43,6 +47,17 @@ def open_bytes(s: Session, data: bytes, name: str, path: Optional[str] = None, d
     d.warnings = list(warnings)
     s.add_document(d)
     return d
+
+
+def _encrypted_package(data: bytes) -> bool:
+    """A workbook with a password to open is a compound file holding the encrypted package (not an
+    .xls file)."""
+    from ..xlsx.cfb import read_cfb
+
+    try:
+        return read_cfb(data).stream("EncryptedPackage") is not None
+    except Exception:  # a damaged compound file is reported as .xls, as before
+        return False
 
 
 @command("file.new", "New Workbook", menu=("File",), shortcut="Ctrl+N", params="{sheets?: 1}", undoable=False)
@@ -95,7 +110,10 @@ def encode(s: Session, fmt: str, sheet: Optional[int] = None, delimiter: str = "
     if fmt in ("csv", "tsv"):
         si = d.wb.active_sheet if sheet is None else sheet
         sh = d.wb.sheet(si)
-        return write_csv(sh, lambda rc: cell_text(d.wb, sh, rc), "\t" if fmt == "tsv" else delimiter)
+        try:
+            return write_csv(sh, lambda rc: cell_text(d.wb, sh, rc), "\t" if fmt == "tsv" else delimiter)
+        except CsvTooLarge as e:
+            raise EngineError(f"ReflexGrid can't save this sheet as {fmt.upper()}: {e}.")
     raise EngineError(f"unknown format `{fmt}`")
 
 
@@ -137,6 +155,10 @@ def save_as(s: Session, p: Dict[str, Any]):
 def _save_to(s: Session, path: str):
     d = s.doc()
     lower = path.lower()
+    if not lower.endswith((".xlsx", ".xltx", ".xlsm", ".xltm", ".csv", ".tsv", ".txt")) and path != d.path:
+        # An unknown extension would get an .xlsx under another name; a workbook opened from such a
+        # file still saves back to it.
+        raise EngineError(f"`{os.path.basename(path)}`: unknown file format. Save as .xlsx, .xlsm, .csv or .tsv.")
     fmt = "csv" if lower.endswith(".csv") else ("tsv" if lower.endswith((".tsv", ".txt")) else ("xlsm" if lower.endswith((".xlsm", ".xltm")) else "xlsx"))
     data = encode(s, fmt)
     tmp = path + ".tmp"
@@ -145,6 +167,10 @@ def _save_to(s: Session, path: str):
             fh.write(data)
         os.replace(tmp, path)
     except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         raise EngineError(f"ReflexGrid can't save `{path}`: {e.strerror}")
     if fmt in ("xlsx", "xlsm"):
         d.saved = d.wb

@@ -23,6 +23,7 @@ from ..model.style import (
     Theme,
 )
 from ..numfmt import parse as parse_fmt
+from ..numfmt.parse import validate as valid_format
 from .layout import autofit_width
 from .selection import Selection
 from .session import EngineError, Session, command, edit, need, p_bool, p_float, p_int, p_str, param_sheet
@@ -619,8 +620,14 @@ def adjust_decimals(code: str, value, delta: int) -> str:
     return ";".join(out)
 
 
+def check_format(code: str) -> None:
+    """Refuses a code Excel's Format Cells refuses (``[0;0``, 256 characters, ``0.00e+00``…)."""
+    if not valid_format(code):
+        raise EngineError("ReflexGrid can't use the number format you typed. Try one of the built-in number formats.")
+
+
 def set_format(s: Session, p: Dict[str, Any], code: str):
-    parse_fmt(code)  # validates (unparseable codes still render, as text)
+    check_format(code)
     return apply_style(s, p, lambda st: replace(st, num_fmt=code), widen=True)
 
 
@@ -740,6 +747,8 @@ def style_from_patch(st: Style, patch: Dict[str, Any]) -> Style:
          params='{numFmt?, font?: {name,size,bold,italic,underline,strike,color,vert}, fill?: {color} | {pattern,fg,bg}, borders?: {left,right,top,bottom,diagDown,diagUp: {style,color}}, align?: {h,v,wrap,shrink,indent,rotation}, protection?: {locked,hidden}, range?}')
 def format_cells(s, p):
     patch = {k: p[k] for k in ("numFmt", "font", "fill", "borders", "align", "protection") if k in p}
+    if patch.get("numFmt") is not None:
+        check_format(str(patch["numFmt"]))
     d = s.doc()
     sh = d.sheet
     if sh.protection is not None and set(patch) == {"protection"}:
@@ -899,6 +908,7 @@ def row_height(s, p):
                 sm.set_row(r, replace(info, hidden=True))
             else:
                 sm.set_row(r, replace(info, size=float(h), hidden=False, custom=True))
+            ctx.rows_shown = ctx.rows_shown or info.hidden != (h == 0)
 
     edit(s, f)
     return None
@@ -941,8 +951,11 @@ def autofit_rows(s, p):
         sm = ctx.sheet_mut(si)
         for r in rows:
             info = sm.row_info(r)
-            if info.custom or info.size is not None:
-                sm.set_row(r, replace(info, custom=False, size=None))
+            # AutoFit shows a hidden row too, an empty one as well (Excel; an empty hidden column
+            # stays hidden, see autofit_cols).
+            if info.custom or info.size is not None or info.hidden:
+                sm.set_row(r, replace(info, custom=False, size=None, hidden=False))
+                ctx.rows_shown = ctx.rows_shown or info.hidden
             ctx.fit_rows.append((si, r))
 
     edit(s, f)
@@ -1016,6 +1029,7 @@ def _hide(s: Session, p: Dict[str, Any], axis: str, hidden: bool):
                 if not hidden and size == 0:
                     size = None
                 sm.set_row(r, replace(info, hidden=hidden, size=size))
+            ctx.rows_shown = bool(lines2)
         else:
             if not hidden:
                 lo, hi = min(lines), max(lines)

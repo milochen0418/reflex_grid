@@ -60,8 +60,9 @@ def sync_headers(wb, changed: List[Tuple[int, int, int]]) -> None:
                 i = rc[1] - tt.range.c0
                 while len(tt.columns) <= i:
                     tt.columns.append(TableColumn(f"Column{len(tt.columns) + 1}"))
-                text = header_text(wb, sm, rc).replace("\n", " ").strip()
-                if not text:
+                # A header keeps spaces at its edges, as in Excel (`Qty ` is not `Qty`).
+                text = header_text(wb, sm, rc).replace("\n", " ")
+                if not text.strip():
                     text = f"Column{i + 1}"
                 name = unique_column_name(tt, text, i)
                 tt.columns[i].name = name

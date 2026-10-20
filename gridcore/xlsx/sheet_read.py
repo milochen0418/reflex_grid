@@ -125,7 +125,7 @@ def read_sheet(cx, part: str, name: str) -> Sheet:
                 if val is not None:
                     sheet.validations.append(val)
         elif tag == "hyperlinks":
-            _read_hyperlinks(e, rels, sheet)
+            _read_hyperlinks(cx, e, rels, sheet, name)
         elif tag == "autoFilter":
             sheet.autofilter = read_autofilter(cx, e)
         elif tag == "printOptions":
@@ -511,7 +511,8 @@ def _cfvo(e: ET.Element) -> CfValue:
 
 
 def _read_cf(cx, e: ET.Element, sheet: Sheet) -> None:
-    ranges = parse_ranges(attr(e, "sqref") or "")[:10000]
+    # Every range is kept: the list is no longer than the file's text.
+    ranges = parse_ranges(attr(e, "sqref") or "")
     if not ranges:
         return
     for r in kids(e, "cfRule"):
@@ -573,7 +574,7 @@ def _read_validation(v: ET.Element) -> Optional[Validation]:
     if sq is None:
         se = child(v, "sqref")
         sq = se.text if se is not None else ""
-    ranges = parse_ranges(sq or "")[:10000]
+    ranges = parse_ranges(sq or "")
     if not ranges:
         return None
 
@@ -613,7 +614,7 @@ def _read_validation(v: ET.Element) -> Optional[Validation]:
     )
 
 
-def _read_hyperlinks(e: ET.Element, rels: List[Rel], sheet: Sheet) -> None:
+def _read_hyperlinks(cx, e: ET.Element, rels: List[Rel], sheet: Sheet, name: str) -> None:
     cells = 0
     for h in kids(e, "hyperlink"):
         rng = RangeRef.parse(attr(h, "ref") or "")
@@ -626,9 +627,10 @@ def _read_hyperlinks(e: ET.Element, rels: List[Rel], sheet: Sheet) -> None:
             target = loc.lstrip("#") if not target else f"{target}#{loc}"
         if not target:
             continue
-        link = Hyperlink(target, attr(h, "tooltip"))
+        link = Hyperlink(target, attr(h, "tooltip"), external=bool(rid) and not target.startswith("#"))
         for rc in rng.cells():
             if cells >= MAX_HYPERLINK_CELLS:
+                cx.warn(f'sheet "{name}": hyperlinks past the first {MAX_HYPERLINK_CELLS:,} cells were dropped')
                 return
             cells += 1
             sheet.hyperlinks[rc] = link

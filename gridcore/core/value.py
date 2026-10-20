@@ -233,6 +233,19 @@ def to_number(v: Value) -> float:
     raise XlError(CellError.VALUE)
 
 
+def to_number_in(v: Value, sys) -> float:
+    """:func:`to_number` with date text read in the date system ``sys`` (in a 1904 workbook
+    ``"1/1/1904"+0`` is 0)."""
+    if type(v) is str and sys is not None and sys.value == "1904":
+        from .parse import parse_number_text_in
+
+        n = parse_number_text_in(v, sys)  # type: ignore[arg-type]
+        if n is None:
+            raise XlError(CellError.VALUE)
+        return n
+    return to_number(v)
+
+
 def to_text(v: Value) -> str:
     """Coercion to text as ``&`` does it."""
     if v is None:
@@ -319,14 +332,27 @@ def compare_numbers(a: float, b: float) -> int:
     return -1 if ra < rb else 1
 
 
+def _fold_char(c: str) -> str:
+    f = c.casefold()
+    if len(f) == 1:
+        return f
+    low = c.lower()  # ẞ folds to ß; ß and İ, whose folding is two letters, stay as they are
+    return low if len(low) == 1 else c
+
+
 def fold(s: str) -> str:
-    """Case folding used for text comparison (Unicode lowercase)."""
-    return s.lower()
+    """Excel's case folding (text comparison, SEARCH, criteria): Unicode simple case folding, one
+    character for each character, so a position in the folded text is one in the text. ς, σ and Σ
+    are one letter, µ and μ too; ß, İ and ı are letters of their own (Excel 16 for Mac)."""
+    f = s.casefold()
+    if len(f) == len(s):
+        return f
+    return "".join(_fold_char(c) for c in s)
 
 
 def compare_text(a: str, b: str) -> int:
     """Case-insensitive text order."""
-    la, lb = a.lower(), b.lower()
+    la, lb = fold(a), fold(b)
     if la == lb:
         return 0
     return -1 if la < lb else 1

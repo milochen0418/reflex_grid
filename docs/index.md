@@ -12,7 +12,7 @@ in Microsoft Excel:
   in a sandbox. Excel for the web can't run VBA; ReflexGrid can.
 - **Edit together, live**: share a workbook's link; everyone sees changes at once and each other's
   selections, and undo takes back only your own changes.
-- **A Python spreadsheet engine**: gridcore calculates 478 Excel functions, with dynamic arrays and
+- **A Python spreadsheet engine**: gridcore calculates 479 Excel functions, with dynamic arrays and
   `LET`/`LAMBDA`, and runs VBA macros headless, with no Excel installed.
 - **Self-hosted, MIT-licensed.**
 

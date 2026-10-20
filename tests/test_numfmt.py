@@ -32,7 +32,7 @@ def test_numbers():
     assert f("0", -2.5) == "-3"
     assert f("0.00", 2.675) == "2.68"
     assert f("0.00", 1.005) == "1.01"
-    assert f("0.0", -0.04) == "-0.0"
+    assert f("0.0", -0.04) == "0.0"  # rounds to zero: no minus sign (Excel)
     assert f("00000", 123.0) == "00123"
     assert f("000-00-0000", 123456789.0) == "123-45-6789"
     assert f("#.##", 0.5) == ".5"

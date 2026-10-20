@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import List, Optional
 
-from ..core.date import DateSystem, DateTime, datetime_from_serial, days_in_month, days_in_month_in, is_leap, serial_from_ymd
+from ..core.date import DateSystem, DateTime, datetime_from_serial, days_in_month, days_in_month_in, is_leap, serial_from_ymd, serial_in_system
 from ..core.parse import parse_input
 from ..core.value import Array, CellError, Value, XlError, scalar, to_number
 from .registry import A, Arg, Ctx, S, fn
@@ -109,12 +109,12 @@ def _second(args, ctx):
 
 @fn("NOW", 0, 0, D, S, "NOW()", "Returns the serial number of the current date and time.", volatile=True)
 def _now(args, ctx):
-    return ctx.now_serial()
+    return serial_in_system(ctx.date_system, ctx.now_serial())
 
 
 @fn("TODAY", 0, 0, D, S, "TODAY()", "Returns the serial number of today's date.", volatile=True)
 def _today(args, ctx):
-    return float(math.floor(ctx.now_serial()))
+    return float(math.floor(serial_in_system(ctx.date_system, ctx.now_serial())))
 
 
 @fn("WEEKDAY", 1, 2, D, S, "WEEKDAY(serial_number, [return_type])", "Converts a serial number to a day of the week.")
@@ -186,7 +186,8 @@ def _edate(args, ctx):
     y, mo = total // 12, total % 12 + 1
     if not 1900 <= y <= 9999:
         raise XlError(CellError.NUM)
-    dd = min(max(d.day, 1), days_in_month_in(sys, y, mo))
+    # Excel's EDATE and EOMONTH keep day 0 (an empty date) and give February 1900 its 28 days.
+    dd = min(d.day, days_in_month(y, mo))
     return float(_ymd(sys, y, mo, dd))
 
 
@@ -199,7 +200,7 @@ def _eomonth(args, ctx):
     y, mo = total // 12, total % 12 + 1
     if not 1900 <= y <= 9999:
         raise XlError(CellError.NUM)
-    return float(_ymd(sys, y, mo, days_in_month_in(sys, y, mo)))
+    return float(_ymd(sys, y, mo, days_in_month(y, mo)))
 
 
 @fn("DATEDIF", 3, 3, D, S, "DATEDIF(start_date, end_date, unit)", "Counts whole years, months or days between two dates. unit: Y, M, D, MD, YM or YD.")

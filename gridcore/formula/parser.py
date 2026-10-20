@@ -28,6 +28,9 @@ from .ast import (
 from .lexer import LexError, Token, tokenize
 
 MAX_DEPTH = 256
+# Excel's limit on formula text, in characters, the leading `=` included (so files, which leave
+# the `=` out, hold at most 8,191).
+MAX_FORMULA_LEN = 8192
 
 
 class ParseError(Exception):
@@ -38,9 +41,10 @@ class ParseError(Exception):
 
 
 def normalize_function_name(name: str) -> str:
-    """``_xlfn.XLOOKUP`` → ``XLOOKUP``."""
+    """``_xlfn.XLOOKUP`` → ``XLOOKUP``. ``_xludf.`` stays: it marks a user-defined function that
+    Excel must not take for the built-in of the same name (``_xludf.CONCAT``)."""
     u = name.upper()
-    for p in ("_XLFN._XLWS.", "_XLFN.", "_XLWS.", "_XLUDF."):
+    for p in ("_XLFN._XLWS.", "_XLFN.", "_XLWS."):
         if u.startswith(p):
             return u[len(p):]
     return u
@@ -50,6 +54,8 @@ def normalize_function_name(name: str) -> str:
 def parse(src: str) -> Expr:
     """Parses formula text. A leading ``=`` is accepted and skipped. Raises :class:`ParseError`."""
     body = src[1:] if src.startswith("=") else src
+    if len(body) + 1 > MAX_FORMULA_LEN:
+        raise ParseError(f"a formula is at most {MAX_FORMULA_LEN:,} characters long", MAX_FORMULA_LEN)
     try:
         toks = tokenize(body)
     except LexError as e:
@@ -84,13 +90,14 @@ def _describe(t: Token) -> str:
 
 def _significant_spaces(toks: List[Token]) -> List[Token]:
     """Keeps a space token only where it is the intersection operator: between the end of an
-    operand and the start of another."""
+    operand and the start of another. An error literal counts as an operand: deleting the cells of
+    one side of ``A1:B2 D1:E2`` leaves ``A1:B2 #REF!``, which must read back."""
     out: List[Token] = []
     for i, t in enumerate(toks):
         if t[0] == "space":
-            prev_end = bool(out) and out[-1][0] in ("word", "rparen", "struct")
+            prev_end = bool(out) and out[-1][0] in ("word", "rparen", "struct", "error")
             nxt = toks[i + 1] if i + 1 < len(toks) else None
-            next_start = nxt is not None and nxt[0] in ("word", "sheet", "lparen", "func")
+            next_start = nxt is not None and nxt[0] in ("word", "sheet", "lparen", "func", "error")
             if prev_end and next_start:
                 out.append(t)
             continue
@@ -100,13 +107,13 @@ def _significant_spaces(toks: List[Token]) -> List[Token]:
 
 def _word_is_cols(w: str) -> Optional[Tuple[int, bool]]:
     a = w.startswith("$")
-    c = letters_to_col(w.lstrip("$"))
+    c = letters_to_col(w[1:] if a else w)  # one $ at most: $$A is no column (Excel)
     return None if c is None else (c, a)
 
 
 def _word_is_row(w: str) -> Optional[Tuple[int, bool]]:
     a = w.startswith("$")
-    s = w.lstrip("$")
+    s = w[1:] if a else w
     if not s.isdigit() or not s.isascii():
         return None
     n = int(s)
@@ -172,6 +179,7 @@ class _Parser:
         if self.depth > MAX_DEPTH:
             raise self.err("formula is nested too deeply")
         lhs = self.prefix(allow_union)
+        nested = 1
         while True:
             t = self.peek()
             if t[0] == "op" and t[1] == "%":
@@ -179,11 +187,20 @@ class _Parser:
                     break
                 self.next()
                 lhs = Unary("%", lhs)
+                # Each postfix `%` nests one more level, and so does each call of a result.
+                nested += 1
+                self.depth += 1
+                if self.depth > MAX_DEPTH:
+                    raise self.err("formula is nested too deeply")
                 continue
             if t[0] == "lparen" and isinstance(lhs, (Call, Invoke, Paren, Name)):
                 # Invoking a LAMBDA result.
                 self.next()
                 lhs = Invoke(lhs, tuple(self.args()))
+                nested += 1
+                self.depth += 1
+                if self.depth > MAX_DEPTH:
+                    raise self.err("formula is nested too deeply")
                 continue
             if t[0] == "trim":
                 bp = PRECEDENCE[":"]
@@ -202,7 +219,7 @@ class _Parser:
             self.next()
             rhs = self.expr(bp + 1, allow_union)
             lhs = _combine(op, lhs, rhs)
-        self.depth -= 1
+        self.depth -= nested
         return lhs
 
     def args(self) -> List[Expr]:
@@ -400,6 +417,7 @@ def parse_struct(table: str, body: str) -> StructRef:
     """Parses the inside of ``Table[...]``. Raises ``ValueError`` on malformed text."""
     specifiers: List[str] = []
     cols: List[str] = []
+    raw = body
     body = body.strip()
 
     def unescape(s: str) -> str:
@@ -442,7 +460,8 @@ def parse_struct(table: str, body: str) -> StructRef:
         elif item(body) is not None:
             specifiers.append(item(body))  # type: ignore[arg-type]
         elif body:
-            cols.append(column(body))
+            # The column keeps the spaces at its edges: `Table1[Qty ]` names `Qty `.
+            cols.append(column(raw))
     else:
         parts: List[str] = []
         depth = 0

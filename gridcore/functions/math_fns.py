@@ -111,7 +111,7 @@ def _sumproduct(args, ctx):
 @fn("SUMIF", 2, 3, M, (False, True, False), "SUMIF(range, criteria, [sum_range])", "Adds the cells specified by a given condition or criteria.")
 def _sumif(args, ctx):
     rng = as_array(args[0].value)
-    crit = Criterion.parse(args[1].value)
+    crit = Criterion.parse_arg(args[1].value)
     src = as_array(args[2].value) if len(args) > 2 else rng
     total = 0.0
     for i, v in enumerate(rng.data):
@@ -133,7 +133,7 @@ def _ifs_mask(args, start: int) -> List[bool]:
         rng = as_array(args[i].value)
         if rng.rows != first.rows or rng.cols != first.cols:
             raise XlError(CellError.VALUE)
-        crit = Criterion.parse(args[i + 1].value)
+        crit = Criterion.parse_arg(args[i + 1].value)
         for j, v in enumerate(rng.data):
             if mask[j] and not crit.matches(v):
                 mask[j] = False
@@ -158,7 +158,7 @@ def ifs_values(args, target_index: int) -> List[float]:
     return out
 
 
-@fn("SUMIFS", 3, VAR, M, (False, False, True, False, True), "SUMIFS(sum_range, criteria_range1, criteria1, …)", "Adds the cells specified by a given set of conditions or criteria.")
+@fn("SUMIFS", 3, VAR, M, (False, False, True, False, True), "SUMIFS(sum_range, criteria_range1, criteria1, …)", "Adds the cells specified by a given set of conditions or criteria.", repeat=2)
 def _sumifs(args, ctx):
     return _f(math.fsum(ifs_values(args, 0)))
 
@@ -180,11 +180,18 @@ def _round_dir(x: float, d: int, up: bool) -> float:
     a = abs(x)
     if d > 300:
         return x
-    y = a * (10.0 ** d) if d >= 0 else a / (10.0 ** -d)
+    if d >= 0:
+        y = a * (10.0 ** d)
+    else:
+        # Past 10^308 every finite number is a fraction of the unit: toward zero it is 0, away
+        # from zero 10^309 and more, which no number holds (#NUM!).
+        y = a / (10.0 ** -d) if d > -309 else 0.5
     if not math.isfinite(y):
         return x
     y = to_sig_digits(y, 15)
     y = math.ceil(y) if up else math.floor(y)
+    if y == 0:
+        return 0.0
     r = y / (10.0 ** d) if d >= 0 else y * (10.0 ** -d)
     return -r if x < 0 else r
 
@@ -603,16 +610,40 @@ def _atan2(args, ctx):
 
 # ---------------------------------------------------------------- numerals and bases
 
-_ROMAN = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+_NUMERALS = [(1000, "M"), (500, "D"), (100, "C"), (50, "L"), (10, "X"), (5, "V"), (1, "I")]
+# How much larger than I, X or C, and than V or L, the numeral after it may be when it is
+# subtracted, by form 0 (classic) to 4 (simplified). These limits give Excel's numerals for every
+# number and form (IC and XM from form 2, VD and VM from form 3, ID and IM from form 4).
+_ROMAN_IXC = (10, 10, 100, 100, 1000)
+_ROMAN_VL = (0, 20, 20, 200, 200)
+
+
+def _roman_tokens(form: int) -> List[tuple]:
+    out = list(_NUMERALS)
+    for big, b in _NUMERALS:
+        for small, s in _NUMERALS:
+            if 2 * small >= big:  # VX, LC and DM would be V, L and D
+                continue
+            limit = (_ROMAN_IXC if s in "IXC" else _ROMAN_VL)[form]
+            if big // small <= limit:
+                out.append((big - small, s + b))
+    return sorted(out, reverse=True)
+
+
+_ROMAN = [_roman_tokens(f) for f in range(5)]
 
 
 @fn("ROMAN", 1, 2, M, S, "ROMAN(number, [form])", "Converts an Arabic numeral to roman, as text.")
 def _roman(args, ctx):
     n = int(num(args, 0))
-    if n < 0 or n > 3999:
+    form = 0
+    if has(args, 1):
+        f = args[1].value
+        form = (0 if f else 4) if isinstance(f, bool) else int(num(args, 1))
+    if n < 0 or n > 3999 or not 0 <= form <= 4:
         raise XlError(CellError.VALUE)
     out = []
-    for v, s in _ROMAN:
+    for v, s in _ROMAN[form]:
         while n >= v:
             out.append(s)
             n -= v

@@ -95,7 +95,9 @@ def write_sheet(wb, si: int, selected: bool, out) -> Tuple[str, Rels]:
     overrides: Dict[Tuple[int, int], str] = {}
     tables = []
     for t in sheet.tables:
-        if t.range.height > (1 if t.header_row else 0) + (1 if t.totals_row else 0) or (t.header_row and not t.totals_row):
+        # Only a table with a data row: Excel finds one without (a header row alone, or a header
+        # and a total row) damaged. ReflexGrid's own tables always have one.
+        if t.range.height > (1 if t.header_row else 0) + (1 if t.totals_row else 0):
             cols = _table_columns(t)
             tables.append((t, cols))
             if t.header_row:
@@ -310,7 +312,7 @@ def write_sheet(wb, si: int, selected: bool, out) -> Tuple[str, Rels]:
             if not t:
                 continue
             tl = t.lower()
-            external = "://" in t or tl.startswith("mailto:") or t.startswith("\\\\") or tl.startswith("file:")
+            external = h.external or "://" in t or tl.startswith("mailto:") or t.startswith("\\\\") or tl.startswith("file:")
             x = [f'<hyperlink ref="{a1(*c)}"']
             if external:
                 if "#" in t and not t.startswith("#"):

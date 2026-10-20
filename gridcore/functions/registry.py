@@ -73,11 +73,17 @@ class FnSpec:
     signature: str
     description: str
     impl: Impl
+    # Past ``scalar_args``, its last ``repeat`` kinds repeat in turn (the range/criteria pairs of
+    # COUNTIFS, SUMIFS…); otherwise the last kind repeats.
+    repeat: int = 0
 
     def is_scalar_arg(self, i: int) -> bool:
-        if i < len(self.scalar_args):
-            return self.scalar_args[i]
-        return self.scalar_args[-1] if self.scalar_args else False
+        k = self.scalar_args
+        if i < len(k):
+            return k[i]
+        if 0 < self.repeat <= len(k):
+            return k[len(k) - self.repeat + (i - len(k)) % self.repeat]
+        return k[-1] if k else False
 
     def accepts(self, n: int) -> bool:
         return self.min_args <= n <= self.max_args and n <= 255
@@ -95,11 +101,12 @@ def fn(
     signature: str,
     description: str,
     volatile: bool = False,
+    repeat: int = 0,
 ):
     """Decorator registering a worksheet function."""
 
     def deco(impl: Impl) -> Impl:
-        REGISTRY[name] = FnSpec(name, min_args, max_args, category, volatile, tuple(scalar_args), signature, description, impl)
+        REGISTRY[name] = FnSpec(name, min_args, max_args, category, volatile, tuple(scalar_args), signature, description, impl, repeat)
         return impl
 
     return deco
@@ -118,6 +125,7 @@ def alias(name: str, target: str, description: Optional[str] = None, category: O
         t.signature.replace(target, name, 1),
         description or t.description,
         t.impl,
+        t.repeat,
     )
 
 

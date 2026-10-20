@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..calc import evaluate_expr
 from ..core.addr import RangeRef
-from ..core.date import datetime_from_serial, now_serial
+from ..core.date import datetime_from_serial, now_serial, serial_in_system
 from ..core.value import Array, CellError, compare, display, to_bool, XlError
 from ..formula import ParseError, parse
 from ..formula.adjust import shift_relative
@@ -169,7 +169,7 @@ class CfCache:
         self.si = si
         self.sh = wb.sheet(si)
         self.stats: Dict[int, _Stats] = {}
-        self.today = math.floor(now_serial())
+        self.today = math.floor(serial_in_system(wb.date_system, now_serial()))
 
     def _stats(self, idx: int, cf: CondFormat) -> _Stats:
         st = self.stats.get(idx)

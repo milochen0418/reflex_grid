@@ -4,11 +4,13 @@ sparklines and floating objects."""
 from __future__ import annotations
 
 import base64
+import re
 import struct
 from dataclasses import replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, parse_cell
+from ..formula import ParseError, Ref, parse
 from ..formula.printer import quote_sheet
 from ..model.cell import Cell, Formula
 from ..model.features import CHART_KINDS, Anchor, Chart, Comment, Hyperlink, Image, Series, Sparkline, Table, TableColumn
@@ -62,6 +64,14 @@ def insert_table(s: Session, p: Dict[str, Any]):
     if any(m.intersects(rng) for m in sh.merges):
         raise EngineError("A table can't overlap a range that contains merged cells.")
     header = p_bool(p, "header") if "header" in p else (guess_header(sh, rng, d.wb) or all(isinstance(sh.value((rng.r0, c)), str) for c in range(rng.c0, rng.c1 + 1)))
+    if header and rng.height == 1:
+        # A table has a row of data under its headers: Excel takes the row below (empty or not),
+        # and finds a table without one damaged.
+        if rng.r1 + 1 >= MAX_ROWS:
+            raise EngineError("A table needs a row of data under its headers.")
+        rng = RangeRef(rng.r0, rng.c0, rng.r1 + 1, rng.c1)
+        if any(t.range.intersects(rng) for t in sh.tables) or any(m.intersects(rng) for m in sh.merges):
+            raise EngineError("A table can't overlap another table or a range that contains merged cells.")
     style = p_str(p, "style", "TableStyleMedium2")
     if style not in TABLE_STYLE_NAMES and style != "None":
         raise EngineError(f"unknown table style `{style}`")
@@ -83,8 +93,9 @@ def insert_table(s: Session, p: Dict[str, Any]):
         cols: List[TableColumn] = []
         for i in range(r.width):
             rc = (r.r0, r.c0 + i)
-            text = value_text(wb, sm, rc).replace("\n", " ").strip() if (header and sm.value(rc) is not None) else ""
-            base = text or f"Column{i + 1}"
+            # A header keeps spaces at its edges, as in Excel (`Qty ` is not `Qty`).
+            text = value_text(wb, sm, rc).replace("\n", " ") if (header and sm.value(rc) is not None) else ""
+            base = text if text.strip() else f"Column{i + 1}"
             name_i, k = base, 2
             while name_i.lower() in {c.name.lower() for c in cols}:
                 name_i = f"{base}{k}"
@@ -316,6 +327,8 @@ def resize_table(s, p):
     rng = RangeRef.parse(str(need(p, "range", "table.resize")))
     if rng is None or rng.r0 != t.range.r0 or rng.c0 > t.range.c1 or rng.c1 < t.range.c0:
         raise EngineError("The headers must remain in the same row, and the resulting table range must overlap the original table.")
+    if rng.height <= (1 if t.header_row else 0) + (1 if t.totals_row else 0):
+        raise EngineError("A table needs at least one row of data.")
 
     def fn(ctx, sm, tt):
         cols = list(tt.columns[: rng.width])
@@ -625,11 +638,12 @@ def insert_hyperlink(s, p):
     if target.startswith("#"):
         target = target[1:]
     text = p.get("text")
+    external = not _place_in_workbook(d.wb, si, target)
 
     def f(ctx):
         wb = ctx.wb
         sm = ctx.sheet_mut(si)
-        sm.hyperlinks[at] = Hyperlink(target, p_str(p, "tooltip"))
+        sm.hyperlinks[at] = Hyperlink(target, p_str(p, "tooltip"), external)
         cell = sm.cell(at)
         sid = sm.style_id(at)
         st = wb.styles.get(sid)
@@ -644,6 +658,26 @@ def insert_hyperlink(s, p):
 
     edit(s, f)
     return None
+
+
+def _place_in_workbook(wb, si: int, target: str) -> bool:
+    """Whether a link's address is a place in this workbook (a reference such as ``Sheet2!A1`` or
+    ``B5``, a defined name or a table), as Excel's Insert Hyperlink tells them from a web page or
+    another file (``Source.xlsx``, ``..\\Reports\\Q1.xlsx``)."""
+    try:
+        resolve_reference(wb, si, target)
+        return True
+    except EngineError:
+        pass
+    try:
+        return isinstance(parse(target), Ref)
+    except ParseError:
+        return False
+
+
+# Link addresses that open in the browser; any other scheme (javascript:, data:, file:…) is refused.
+_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]+):")
+_OPEN_SCHEMES = ("http", "https", "mailto")
 
 
 @command("insert.removeHyperlink", "Remove Hyperlinks", menu=("Home", "Editing", "Clear"), params="{range?}")
@@ -687,9 +721,17 @@ def follow_hyperlink(s, p):
                 target = v if isinstance(v, str) else None
     if not target:
         raise EngineError("There's no link in this cell.")
-    low = target.lower()
-    if low.startswith(("http://", "https://", "mailto:", "ftp://", "file://")) or ("." in target and "!" not in target and "/" in target):
-        return {"url": target}
+    t = target.strip()
+    m = _SCHEME.match(t)
+    # `B5:C9` is a range in this workbook, not a link with the scheme `B5`.
+    if m is not None and not _place_in_workbook(d.wb, si, t):
+        if m.group(1).lower() in _OPEN_SCHEMES:
+            return {"url": t}
+        raise EngineError("ReflexGrid opens only web (http, https) and e-mail (mailto) links.")
+    if t.lower().startswith("www.") or (hl is None and "." in t and "!" not in t and "/" in t):
+        return {"url": "http://" + t}
+    if hl is not None and hl.external:
+        raise EngineError(f"`{t}` is a link to a file, which ReflexGrid can't open.")
     loc = target[1:] if target.startswith("#") else target
     tsi, rng = resolve_reference(d.wb, si, loc if "!" in loc or d.wb.table(loc) else loc)
     _activate(s, tsi)

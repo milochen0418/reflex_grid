@@ -23,7 +23,7 @@ dynamic arrays, an "every action is a command" API, and a sandboxed VBA interpre
 - **Excel files in, Excel files out**: reads and writes Office Open XML (`.xlsx`) — formulas with Excel's
   file spellings (`_xlfn.` prefixes, dynamic-array metadata, structured references), cached values, styles,
   and the features listed below. CSV/TSV import and export too.
-- **A real calculation engine**: 478 worksheet functions, dynamic arrays that spill (`FILTER`, `SORT`,
+- **A real calculation engine**: 479 worksheet functions, dynamic arrays that spill (`FILTER`, `SORT`,
   `UNIQUE`, `SEQUENCE`…), `LET`/`LAMBDA`/`MAP`/`REDUCE`, structured table references, 3-D references,
   legacy array formulas, iterative calculation, incremental recalculation.
 - **The Excel way of working**: ribbon, name box and formula bar, in-cell editing (IME friendly), fill handle,
@@ -68,10 +68,10 @@ forms included, or when you want a spreadsheet engine you can script from Python
 
 | Area | What you get |
 |---|---|
-| Editing | Enter/Tab/Shift navigation, F2, Alt+Enter line breaks, Ctrl+Enter (fill selection), Ctrl+Shift+Enter (array formula), formula point mode (click or arrow keys to insert references), F4 to toggle `$`, function autocomplete and argument hints, coloured reference highlights |
+| Editing | Enter/Tab/Shift navigation, F2, Alt+Enter line breaks, Ctrl+Enter (fill selection), Ctrl+Shift+Enter (array formula), formula point mode (click cells or column and row headers, or use the arrow keys, to insert references), F4 to toggle `$`, function autocomplete and argument hints, coloured reference highlights |
 | Selection | Ranges, multi-ranges (Ctrl+click), whole rows/columns, Ctrl+Arrow jumps, Ctrl+A, Go To / Go To Special |
-| Clipboard | Copy/Cut/Paste between cells (formulas adjust), from/to other apps (TSV), Paste Special (values, formulas, formats, transpose, skip blanks, add/subtract/multiply/divide, column widths) |
-| Fill | Fill handle series (numbers, dates, months, weekdays, `Item 1`…), Ctrl+drag to copy, Fill Down/Right/Up/Left, Series |
+| Clipboard | Copy/Cut/Paste between cells (formulas adjust; Enter pastes the copied cells), from/to other apps (TSV), Paste Special (values, formulas, formats, transpose, skip blanks, add/subtract/multiply/divide, column widths) |
+| Fill | Fill handle series (numbers, dates, times, months, weekdays, quarters, ordinals, `Item 1`…), double-click the handle to fill down beside the data, Ctrl+drag to copy, Fill Down/Right/Up/Left, Series |
 | Structure | Insert/delete rows, columns and cells; move blocks; hide/unhide; row heights and column widths (AutoFit); merge (& center / across) — formulas, names, merges, rules, tables, filters, notes, links and charts follow |
 | Formatting | Fonts, sizes, bold/italic/underline/strike, super/subscript, font & fill colours (theme colours with tints), borders (presets and styles), alignment, wrap, shrink, indent, rotation, number formats (General, number, currency, accounting, dates, times, percent, fraction, scientific, text, custom codes with sections/colours/conditions), cell styles gallery, Format Painter |
 | Conditional formatting | Highlight rules, top/bottom, above/below average, duplicates, text, dates occurring, formulas, data bars, colour scales, icon sets; rules manager |
@@ -270,7 +270,7 @@ back only your own changes. The server saves the workbook as `.xlsx` (`.xlsm` wi
 [Working together](#working-together).
 
 **Can I calculate Excel formulas in Python without Excel?**
-Yes. openpyxl reads and writes formulas but doesn't calculate them; gridcore does, with 478 functions, dynamic
+Yes. openpyxl reads and writes formulas but doesn't calculate them; gridcore does, with 479 functions, dynamic
 arrays that spill, `LET`/`LAMBDA`, structured references and incremental recalculation. Use `Session` (above)
 or `poetry run python -m gridcore.cli eval '=SUM(1,2)'`.
 
@@ -287,9 +287,9 @@ lists the macro limits.
 
 ## 中文簡介
 
-**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：478 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。MIT 授權。示範影片：[中文](https://youtu.be/OvGv0PB3UKU)、[英文](https://youtu.be/Zl0tysSTTOI)，約 3 分鐘；[全部影片](https://milochen0418.github.io/reflex_grid/#videos)。
+**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：479 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。MIT 授權。示範影片：[中文](https://youtu.be/OvGv0PB3UKU)、[英文](https://youtu.be/Zl0tysSTTOI)，約 3 分鐘；[全部影片](https://milochen0418.github.io/reflex_grid/#videos)。
 
-**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：478 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。MIT 许可。演示视频：[中文](https://youtu.be/OvGv0PB3UKU)、[英文](https://youtu.be/Zl0tysSTTOI)，约 3 分钟；[全部视频](https://milochen0418.github.io/reflex_grid/#videos)。
+**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：479 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。MIT 许可。演示视频：[中文](https://youtu.be/OvGv0PB3UKU)、[英文](https://youtu.be/Zl0tysSTTOI)，约 3 分钟；[全部视频](https://milochen0418.github.io/reflex_grid/#videos)。
 
 ## Tests
 
@@ -313,7 +313,7 @@ gridcore/                 the spreadsheet engine (no UI dependencies)
   core/                   addresses, values and errors, dates, typed-input parsing
   numfmt/                 number-format codes: parsing and rendering
   formula/                lexer, Pratt parser, AST, printer, reference adjustment
-  functions/              the worksheet function library (478 functions)
+  functions/              the worksheet function library (479 functions)
   model/                  workbook, sheets, copy-on-write cell store, styles, features
   calc/                   evaluator, dependency graph, recalculation, dynamic arrays
   xlsx/                   XLSX and CSV readers/writers; vbaProject.bin (cfb.py, ovba.py), UserForm designs

@@ -191,9 +191,11 @@ class Comment:
 
 @dataclass(frozen=True)
 class Hyperlink:
-    # URL, `mailto:`, or an in-workbook location like `Sheet2!A1`.
+    # URL, `mailto:`, another file (`Source.xlsx`), or an in-workbook location like `Sheet2!A1`.
     target: str
     tooltip: Optional[str] = None
+    # Outside this workbook (a web page or another file): files keep it as a relationship.
+    external: bool = False
 
 
 # ---------------------------------------------------------------- filter

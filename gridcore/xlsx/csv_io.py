@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 
-from ..core.addr import MAX_COLS, MAX_ROWS
+from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef
 from ..core.date import DateSystem
 from ..core.parse import parse_input
 from ..model.cell import Cell
@@ -133,19 +133,56 @@ def read_csv(data: bytes, delimiter: Optional[str] = None, parse_values: bool = 
     return wb
 
 
-def write_csv(sheet: Sheet, cell_text: Callable[[tuple], str], delimiter: str = ",") -> bytes:
+# A CSV is capped: two cells far apart (A1 and XFD1048576) would make gigabytes of commas.
+MAX_CSV_BYTES = 512 * 1024 * 1024
+
+
+class CsvTooLarge(ValueError):
+    """The CSV would be bigger than :data:`MAX_CSV_BYTES`."""
+
+
+def write_csv(sheet: Sheet, cell_text: Callable[[tuple], str], delimiter: str = ",", limit: int = MAX_CSV_BYTES) -> bytes:
     """The sheet from A1 to its last used cell as CSV, as Excel saves it (CRLF line ends, UTF-8
-    with BOM so Excel reads Unicode)."""
+    with BOM so Excel reads Unicode). Only cells that hold something are formatted, so a sparse
+    sheet is quick; raises :class:`CsvTooLarge` past ``limit`` (before anything is built when the
+    delimiters alone would pass it)."""
     u = sheet.used_range()
     if u is None:
         return b""
+    rows, cols = u.r1 + 1, u.c1 + 1
+
+    def too_large(size: int) -> CsvTooLarge:
+        return CsvTooLarge(
+            f"the CSV would be at least {size / 2 ** 20:,.0f} MiB ({rows:,} rows by {cols:,} columns), over the limit of "
+            f"{limit // 2 ** 20:,} MiB; clear the cells far from the data, or copy a smaller range"
+        )
+
+    least = rows * (cols + 1)  # every row has its delimiters and a CRLF
+    if least > limit:
+        raise too_large(least)
+    filled: Dict[int, Set[int]] = {}
+    for (r, c), cell in sheet.cells.iter_range(RangeRef(0, 0, u.r1, u.c1)):
+        if cell.value is not None or cell.formula is not None:
+            filled.setdefault(r, set()).add(c)
+    for r, c in sheet.spill:
+        filled.setdefault(r, set()).add(c)
+    blank = delimiter * (cols - 1)
     lines = []
-    for r in range(0, u.r1 + 1):
-        fields = []
-        for c in range(0, u.c1 + 1):
-            t = cell_text((r, c))
-            if delimiter in t or '"' in t or "\n" in t or "\r" in t:
-                t = '"' + t.replace('"', '""') + '"'
-            fields.append(t)
-        lines.append(delimiter.join(fields))
+    size = 0
+    for r in range(rows):
+        cs = filled.get(r)
+        if cs:
+            fields = [""] * cols
+            for c in cs:
+                t = cell_text((r, c))
+                if delimiter in t or '"' in t or "\n" in t or "\r" in t:
+                    t = '"' + t.replace('"', '""') + '"'
+                fields[c] = t
+            line = delimiter.join(fields)
+        else:
+            line = blank
+        size += len(line) + 2
+        if size > limit:
+            raise too_large(size)
+        lines.append(line)
     return ("﻿" + "\r\n".join(lines) + "\r\n").encode("utf-8")

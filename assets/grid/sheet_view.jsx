@@ -216,8 +216,12 @@ function drawEdge(ctx, spec, horizontal, at, from, to) {
   ctx.globalAlpha = 1;
 }
 
-// References in formula text, for colour highlighting while editing.
-const REF_RE = /(?:'[^']+'|[A-Za-z_][A-Za-z0-9_.]*)?!?\$?[A-Za-z]{1,3}\$?\d{1,7}(?::\$?[A-Za-z]{1,3}\$?\d{1,7})?/g;
+// How far browsers scroll a box (they stop a little past 15 million px).
+const SCROLL_CAP = 15_000_000;
+
+// References in formula text, for colour highlighting while editing: cells and ranges, whole columns
+// (C:C) and whole rows (4:4).
+const REF_RE = /(?:'[^']+'|[A-Za-z_][A-Za-z0-9_.]*)?!?(?:\$?[A-Za-z]{1,3}\$?\d{1,7}(?::\$?[A-Za-z]{1,3}\$?\d{1,7})?|\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}(?![A-Za-z0-9_(])|\$?\d{1,7}:\$?\d{1,7}(?![0-9]))/g;
 function formulaRefs(text) {
   if (!text || text[0] !== "=") return [];
   const out = [];
@@ -233,17 +237,31 @@ function formulaRefs(text) {
     if (after === "(") continue;
     if (s.includes("!")) continue; // other sheets are not drawn
     const parts = s.split(":");
+    const col = (t) => {
+      let c = 0;
+      for (const ch of t.toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64);
+      return c - 1;
+    };
     const p = (t) => {
       const mm = /^\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(t);
-      if (!mm) return null;
-      let c = 0;
-      for (const ch of mm[1].toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64);
-      return [parseInt(mm[2], 10) - 1, c - 1];
+      return mm ? [parseInt(mm[2], 10) - 1, col(mm[1])] : null;
     };
-    const a = p(parts[0]);
-    const b = parts[1] ? p(parts[1]) : a;
-    if (!a || !b || a[1] >= MAXC || b[1] >= MAXC) continue;
-    out.push({ start: m.index, end: m.index + s.length, range: norm(a, b) });
+    const cs = parts.map((t) => /^\$?([A-Za-z]{1,3})$/.exec(t));
+    const rs = parts.map((t) => /^\$?(\d+)$/.exec(t));
+    let range = null;
+    if (parts.length === 2 && cs[0] && cs[1]) {
+      const c0 = col(cs[0][1]), c1 = col(cs[1][1]);
+      if (c0 < MAXC && c1 < MAXC) range = [0, Math.min(c0, c1), MAXR - 1, Math.max(c0, c1)];
+    } else if (parts.length === 2 && rs[0] && rs[1]) {
+      const r0 = parseInt(rs[0][1], 10) - 1, r1 = parseInt(rs[1][1], 10) - 1;
+      if (r0 >= 0 && r1 >= 0 && r0 < MAXR && r1 < MAXR) range = [Math.min(r0, r1), 0, Math.max(r0, r1), MAXC - 1];
+    } else {
+      const a = p(parts[0]);
+      const b = parts[1] ? p(parts[1]) : a;
+      if (a && b && a[1] < MAXC && b[1] < MAXC) range = norm(a, b);
+    }
+    if (!range) continue;
+    out.push({ start: m.index, end: m.index + s.length, range });
   }
   return out;
 }
@@ -427,8 +445,26 @@ export function SheetView(props) {
   ext.c = Math.max(ext.c, (g.usedCols || 0) + 12, mainC1 + 8, sel.active[1] + 8);
   ext.r = Math.min(ext.r, MAXR);
   ext.c = Math.min(ext.c, MAXC);
-  const totalH = Math.min(mainY + (rows.start(ext.r) - rows.start(fr)) * z + 2, 15_000_000);
-  const totalW = Math.min(mainX + (cols.start(ext.c) - cols.start(fc)) * z + 2, 15_000_000);
+  // Browsers can't scroll much past 15 million px (750,000 default rows at 100%). A sheet taller
+  // than that scrolls its first half one to one and the rest of its rows squeezed into the other
+  // half, so every row up to 1,048,576 can be reached; scroll.top is in sheet pixels either way.
+  const extH = mainY + (rows.start(ext.r) - rows.start(fr)) * z + 2;
+  const fullH = mainY + (rows.start(MAXR) - rows.start(fr)) * z + 2;
+  const squeezed = fullH > SCROLL_CAP && extH - view.h > SCROLL_CAP / 2;
+  const totalH = squeezed ? SCROLL_CAP : Math.min(extH, SCROLL_CAP);
+  const totalW = Math.min(mainX + (cols.start(ext.c) - cols.start(fc)) * z + 2, SCROLL_CAP);
+  const vmap = useMemo(() => {
+    if (!squeezed) return { toSheet: (s) => s, toScroll: (t) => t };
+    const half = SCROLL_CAP / 2;
+    const dom = Math.max(SCROLL_CAP - view.h - half, 1);
+    const sheet = Math.max(fullH - view.h - half, 1);
+    return {
+      toSheet: (s) => (s <= half ? s : half + ((s - half) * sheet) / dom),
+      toScroll: (t) => (t <= half ? t : half + ((t - half) * dom) / sheet),
+    };
+  }, [squeezed, fullH, view.h]);
+  const vmapRef = useRef(vmap);
+  vmapRef.current = vmap;
 
   const hit = useCallback(
     (x, y) => {
@@ -476,6 +512,16 @@ export function SheetView(props) {
     return [r0, c0, r1, c1];
   }, []);
 
+  // A range's box in pane coordinates, cut a few pixels outside the pane: browsers can't lay out a box
+  // millions of pixels tall (a whole column, a selection down to row 1,048,576), and what lies outside
+  // the pane doesn't show anyway.
+  const paneBox = (rc, p, grow) => {
+    const x0 = rc.x - p.x - 1, y0 = rc.y - p.y - 1;
+    const l = Math.max(x0, -8), t = Math.max(y0, -8);
+    const r = Math.min(x0 + rc.w + grow, p.w + 8), b = Math.min(y0 + rc.h + grow, p.h + 8);
+    return { left: l, top: t, width: Math.max(r - l, 0), height: Math.max(b - t, 0) };
+  };
+
   // ------------------------------------------------------------ sizing, scrolling
 
   useLayoutEffect(() => {
@@ -495,9 +541,9 @@ export function SheetView(props) {
     const el = scrollerRef.current;
     if (!el || prev === z) return;
     const k = z / prev;
-    const top = el.scrollTop * k, left = el.scrollLeft * k;
+    const top = scroll.top * k, left = el.scrollLeft * k;
     requestAnimationFrame(() => {
-      el.scrollTop = top;
+      el.scrollTop = vmapRef.current.toScroll(top);
       el.scrollLeft = left;
     });
   }, [z]);
@@ -505,7 +551,7 @@ export function SheetView(props) {
   const onScroll = useCallback(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    setScroll({ top: el.scrollTop, left: el.scrollLeft });
+    setScroll({ top: vmapRef.current.toSheet(el.scrollTop), left: el.scrollLeft });
     setMenu(null);
   }, []);
 
@@ -530,7 +576,8 @@ export function SheetView(props) {
     (r, c) => {
       const el = scrollerRef.current;
       if (!el) return;
-      let top = el.scrollTop,
+      const now = vmapRef.current.toSheet(el.scrollTop);
+      let top = now,
         left = el.scrollLeft;
       if (r >= fr) {
         const y0 = (rows.start(r) - rows.start(fr)) * z;
@@ -547,12 +594,14 @@ export function SheetView(props) {
       const ext = extentRef.current;
       if (r + 20 > ext.r) ext.r = Math.min(MAXR, r + 60);
       if (c + 8 > ext.c) ext.c = Math.min(MAXC, c + 12);
-      if (top !== el.scrollTop || left !== el.scrollLeft) {
-        // The spacer may need to grow first.
-        requestAnimationFrame(() => {
-          el.scrollTop = top;
+      if (top !== now || left !== el.scrollLeft) {
+        // The spacer may need to grow first (and the squeezed scrolling start): once more if so.
+        const go = (again) => {
+          el.scrollTop = vmapRef.current.toScroll(top);
           el.scrollLeft = left;
-        });
+          if (again && Math.abs(vmapRef.current.toSheet(el.scrollTop) - top) > 4 * z) requestAnimationFrame(() => go(false));
+        };
+        requestAnimationFrame(() => go(true));
       }
     },
     [fr, fc, rows, cols, z, mainH, mainW]
@@ -560,7 +609,20 @@ export function SheetView(props) {
 
   // ------------------------------------------------------------ server state sync
 
+  // A chart or picture this tab just inserted is selected, as in Excel: Delete then removes it,
+  // not the data it was made from.
+  const selObjRef = useRef(null);
+  useEffect(() => {
+    const so = ui && ui.selectObject;
+    if (!so || selObjRef.current === so.n) return;
+    selObjRef.current = so.n;
+    setObjSel(so.id);
+  }, [ui]);
+
   const reopenedRef = useRef(0);
+  // The next selection from the server extends the current one (Ctrl+Shift+Arrow): reveal its moving
+  // end, not the anchor, as Excel does.
+  const revealEndRef = useRef(false);
   useEffect(() => {
     if (!ui || !ui.selection) return;
     // Someone renaming this sheet keeps its place and drops its old name: not another sheet.
@@ -587,8 +649,12 @@ export function SheetView(props) {
       const same = cur.active[0] === s.active[0] && cur.active[1] === s.active[1] && JSON.stringify(cur.ranges) === JSON.stringify(s.ranges);
       if (!same && !dragRef.current) {
         setSel({ active: s.active, anchor: s.anchor || s.active, ranges: s.ranges });
-        ensureVisible(s.active[0], s.active[1]);
+        const g0 = s.ranges[s.ranges.length - 1];
+        const an = s.anchor || s.active;
+        if (revealEndRef.current && g0) ensureVisible(an[0] === g0[2] ? g0[0] : g0[2], an[1] === g0[3] ? g0[1] : g0[3]);
+        else ensureVisible(s.active[0], s.active[1]);
       }
+      revealEndRef.current = false;
     }
     setPending((p) => {
       const n = {};
@@ -1187,6 +1253,7 @@ export function SheetView(props) {
           return;
         }
         if (mod) {
+          revealEndRef.current = e.shiftKey;
           cmd("selection.move", { dr, dc, jump: true, extend: e.shiftKey });
           return;
         }
@@ -1212,6 +1279,14 @@ export function SheetView(props) {
       }
       if (k === "Enter" || k === "Tab") {
         e.preventDefault();
+        // Enter while cells are marked as copied pastes them into the selection and ends copy mode,
+        // as in Excel.
+        if (k === "Enter" && !e.shiftKey && !mod && !e.altKey && ui && ui.clipboard) {
+          lastClipRef.current = null;
+          send("paste", {});
+          cmd("edit.clearClipboard");
+          return;
+        }
         const move = k === "Enter" ? (e.shiftKey ? "up" : "down") : e.shiftKey ? "left" : "right";
         moveAfter(move);
         syncSelSoon();
@@ -1238,7 +1313,7 @@ export function SheetView(props) {
             const [r, c] = step(s.active[0], s.active[1], d * visRows, 0);
             selectCell(r, c);
             const el = scrollerRef.current;
-            if (el) el.scrollTop = Math.max(0, el.scrollTop + d * visRows * (g.defaultRowHeight || 20) * z);
+            if (el) el.scrollTop = Math.max(0, vmapRef.current.toScroll(vmapRef.current.toSheet(el.scrollTop) + d * visRows * (g.defaultRowHeight || 20) * z));
           }
           syncSelSoon();
         }
@@ -1564,6 +1639,17 @@ export function SheetView(props) {
           return;
         }
       }
+      // ... and a column or row header inserts the whole column (C:C) or row (4:4), as in Excel;
+      // dragging across headers extends it (C:E).
+      if (editing && editing.text && editing.text[0] === "=" && (r < 0) !== (c < 0)) {
+        const axis = r < 0 ? "cols" : "rows";
+        const g0 = axis === "cols" ? [0, c, MAXR - 1, c] : [r, 0, r, MAXC - 1];
+        if (pointTo(g0)) {
+          pointRef.current = { ...pointRef.current, anchor: [g0[0], g0[1]], cur: [g0[0], g0[1]] };
+          dragRef.current = { kind: "point", axis, anchor: axis === "cols" ? c : r };
+          return;
+        }
+      }
       if (editing) commit("none");
       setObjSel(null);
       kbdRef.current && kbdRef.current.focus({ preventScroll: true });
@@ -1572,6 +1658,13 @@ export function SheetView(props) {
       if (selRect && r >= 0 && c >= 0 && s.ranges.length === 1) {
         const hx = selRect.x + selRect.w, hy = selRect.y + selRect.h;
         if (Math.abs(x - hx) <= 5 && Math.abs(y - hy) <= 5) {
+          if (ev.detail === 2) {
+            // Double-clicking the handle fills down as far as the data next to it goes.
+            dragRef.current = null;
+            setDrag(null);
+            cmd("edit.autoFillDown", { range: rangeA1(s.ranges[0]) });
+            return;
+          }
           dragRef.current = { kind: "fill", source: s.ranges[0], target: s.ranges[0], alt: mod };
           setDrag({ ...dragRef.current });
           return;
@@ -1631,7 +1724,7 @@ export function SheetView(props) {
       setSel(ns);
       if (!dragRef.current) syncSel(ns);
     },
-    [localPoint, headerBoundary, hit, pointTo, commit, selRect, cellMap, send, mergeAt, expandMerges, setSel, syncSel, cols, rows, fr, fc, mainR0, mainC0, ui, beginEdit, cellText]
+    [localPoint, headerBoundary, hit, pointTo, commit, selRect, cellMap, send, cmd, mergeAt, expandMerges, setSel, syncSel, cols, rows, fr, fc, mainR0, mainC0, ui, beginEdit, cellText]
   );
 
   useEffect(() => {
@@ -1661,6 +1754,11 @@ export function SheetView(props) {
       let [r, c] = hit(Math.max(x, RW + 1), Math.max(y, HH + 1));
       r = Math.max(0, r);
       c = Math.max(0, c);
+      if (d.kind === "point" && d.axis) {
+        const g0 = d.axis === "cols" ? [0, Math.min(d.anchor, c), MAXR - 1, Math.max(d.anchor, c)] : [Math.min(d.anchor, r), 0, Math.max(d.anchor, r), MAXC - 1];
+        pointTo(g0);
+        return;
+      }
       if (d.kind === "point") {
         const g0 = norm(d.anchor, [r, c]);
         pointTo(g0);
@@ -1877,7 +1975,20 @@ export function SheetView(props) {
       const st = styleOf(e.s) || {};
       const text = pend ? pend.text : e.t;
       item.text = text;
-      if (!text || m || st.wr || (e.n && !pend) || e.x && e.x.icon) continue;
+      if (text && !m && !st.wr && st.ha === "centerContinuous") {
+        // Center Across Selection: the text (a number too) centres over the empty cells to its
+        // right that are also Center Across Selection, without a merge.
+        let c1 = c;
+        while (c1 + 1 < MAXC && c1 + 1 <= (c < fc ? fc - 1 : MAXC - 1) && !occupied(r, c1 + 1)) {
+          const n = cellMap.get(key(r, c1 + 1));
+          const s = n ? n.s : rowStyles[String(r)] !== undefined ? rowStyles[String(r)] : colStyles[String(c1 + 1)];
+          if ((styleOf(s) || {}).ha !== "centerContinuous") break;
+          c1++;
+        }
+        if (c1 !== c) item.span = [c, c1];
+        continue;
+      }
+      if (!text || m || st.wr || st.sh || (e.n && !pend) || e.x && e.x.icon) continue;
       const fs = (st.fs || 11) * (96 / 72) * z;
       const font = `${st.i ? "italic " : ""}${st.b ? "700 " : "400 "}${fs}px ${fontFamily(st.ff)}`;
       const width = textWidth(text, font) + 6 * z;
@@ -1900,7 +2011,7 @@ export function SheetView(props) {
       if (c0 !== c || c1 !== c) item.span = [c0, c1];
     }
     return out;
-  }, [panes, cellMap, pending, mergeAt, merges, rows, styleOf, z, cw, fc, fontTick]);
+  }, [panes, cellMap, pending, mergeAt, merges, rows, styleOf, z, cw, fc, fontTick]); // row and column styles come with cellMap's data
 
   useLayoutEffect(() => {
     const cv = canvasRef.current;
@@ -1992,18 +2103,38 @@ export function SheetView(props) {
         ctx.fillRect(x, y, 1, h);
       }
       // Borders.
+      const sidesOf = (e) => {
+        const st = styleOf(e.s) || {};
+        const tx = e.tx || {};
+        const x = e.x || {};
+        return { bt: x.bt || st.bt || tx.bt, bb: x.bb || st.bb || tx.bb, bl: x.bl || st.bl || tx.bl, br: x.br || st.br || tx.br };
+      };
       for (const it of layout) {
         if (it.pane !== p.key) continue;
         const e = it.e;
         const st = styleOf(e.s) || {};
-        const tx = e.tx || {};
-        const x = e.x || {};
-        const sides = {
-          bt: x.bt || st.bt || tx.bt,
-          bb: x.bb || st.bb || tx.bb,
-          bl: x.bl || st.bl || tx.bl,
-          br: x.br || st.br || tx.br,
-        };
+        if (it.m) {
+          // A merged area's edges are drawn from the cells along them, where Excel keeps them (its
+          // right border on the right column's cells, its bottom one on the bottom row's).
+          const m = it.m;
+          const at = (r, c) => cellMap.get(key(r, c)) || (r === m[0] && c === m[1] ? e : null);
+          for (let c = m[1]; c <= m[3]; c++) {
+            const x0 = Math.round(cx(c)) - 1, x1 = Math.round(cx(c) + cw(c));
+            const t = at(m[0], c), b = at(m[2], c);
+            const ts = t && sidesOf(t).bt, bs = b && sidesOf(b).bb;
+            if (ts) drawEdge(ctx, ts, true, Math.round(ry(m[0])) - 1, x0, x1);
+            if (bs) drawEdge(ctx, bs, true, Math.round(ry(m[2]) + rh(m[2])) - 1, x0, x1);
+          }
+          for (let r = m[0]; r <= m[2]; r++) {
+            const y0 = Math.round(ry(r)) - 1, y1 = Math.round(ry(r) + rh(r));
+            const l = at(r, m[1]), rr = at(r, m[3]);
+            const ls = l && sidesOf(l).bl, rs = rr && sidesOf(rr).br;
+            if (ls) drawEdge(ctx, ls, false, Math.round(cx(m[1])) - 1, y0, y1);
+            if (rs) drawEdge(ctx, rs, false, Math.round(cx(m[3]) + cw(m[3])) - 1, y0, y1);
+          }
+          if (!st.dd && !st.du) continue;
+        }
+        const sides = it.m ? {} : sidesOf(e);
         if (!sides.bt && !sides.bb && !sides.bl && !sides.br && !st.dd && !st.du) continue;
         const rc = it.m ? rectOf(it.m) : { x: cx(it.c), y: ry(it.r), w: cw(it.c), h: rh(it.r) };
         const L = Math.round(rc.x) - 1, T = Math.round(rc.y) - 1, R = Math.round(rc.x + rc.w) - 1, B = Math.round(rc.y + rc.h) - 1;
@@ -2070,7 +2201,14 @@ export function SheetView(props) {
       }
       const pad = 3 * z;
       let shown = text;
-      if (e.n && text && !it.pend && !wrap) {
+      // Shrink to Fit: a smaller font instead of spilling over or showing ###.
+      let fsShown = fs;
+      if (st.sh && !wrap && text && !it.span) {
+        const avail = rc.w - 2 * pad - 1;
+        const tw = textWidth(text, font);
+        if (tw > avail && avail > 0) fsShown = Math.max(1, (fs * avail) / tw);
+      }
+      if (e.n && text && !it.pend && !wrap && fsShown === fs) {
         const avail = rc.w - 3;
         if (textWidth(text, font) * EXCEL_DIGIT_FIT > avail) {
           const hw = textWidth("#", font) || 7;
@@ -2096,7 +2234,7 @@ export function SheetView(props) {
         overflow: "hidden",
         fontStyle: italic ? "italic" : "normal",
         fontWeight: bold ? 700 : 400,
-        fontSize: fs + "px",
+        fontSize: fsShown + "px",
         fontFamily: family,
         color,
         textDecoration: deco || undefined,
@@ -2212,7 +2350,7 @@ export function SheetView(props) {
         const cg = clipToPane(g0, p);
         if (!cg) return;
         const rc = rectOf(cg);
-        out.push(<div key={`pr${q.id}:${i}`} className="rg-peer-range" style={{ position: "absolute", left: rc.x - p.x - 1, top: rc.y - p.y - 1, width: rc.w + 1, height: rc.h + 1, border: `1px solid ${q.color}`, background: q.color + "1F", boxSizing: "border-box", pointerEvents: "none" }} />);
+        out.push(<div key={`pr${q.id}:${i}`} className="rg-peer-range" style={{ position: "absolute", ...paneBox(rc, p, 1), border: `1px solid ${q.color}`, background: q.color + "1F", boxSizing: "border-box", pointerEvents: "none" }} />);
       });
     }
     const groups = new Map();
@@ -2263,7 +2401,7 @@ export function SheetView(props) {
       if (multi) out.push(<div key={`sf${i}`} style={{ position: "absolute", left: rc.x - p.x, top: rc.y - p.y, width: rc.w, height: rc.h, background: SEL_FILL, pointerEvents: "none" }} />);
       if (isCur && s.ranges.length === 1) {
         const full = rectOf(g0);
-        out.push(<div key={`sb${i}`} className="rg-selection" style={{ position: "absolute", left: full.x - p.x - 1, top: full.y - p.y - 1, width: full.w + 1, height: full.h + 1, border: `2px solid ${ACCENT}`, boxSizing: "border-box", pointerEvents: "none" }} />);
+        out.push(<div key={`sb${i}`} className="rg-selection" style={{ position: "absolute", ...paneBox(full, p, 1), border: `2px solid ${ACCENT}`, boxSizing: "border-box", pointerEvents: "none" }} />);
       }
     });
     // Active cell (white, with its own border inside a multi-cell selection).
@@ -2291,10 +2429,10 @@ export function SheetView(props) {
     if (ui && ui.clipboard && ui.clipboard.sheet === sheetIndex) {
       const cg = clipToPane(ui.clipboard.range, p);
       if (cg) {
-        const rc = rectOf(ui.clipboard.range);
+        const bx = paneBox(rectOf(ui.clipboard.range), p, 2);
         out.push(
-          <svg key="marquee" style={{ position: "absolute", left: rc.x - p.x - 1, top: rc.y - p.y - 1, width: rc.w + 2, height: rc.h + 2, pointerEvents: "none", overflow: "visible" }}>
-            <rect x={1} y={1} width={Math.max(rc.w - 1, 1)} height={Math.max(rc.h - 1, 1)} fill="none" stroke={ACCENT} strokeWidth={2} strokeDasharray="5 3" className="rg-marquee" />
+          <svg key="marquee" style={{ position: "absolute", ...bx, pointerEvents: "none", overflow: "visible" }}>
+            <rect x={1} y={1} width={Math.max(bx.width - 3, 1)} height={Math.max(bx.height - 3, 1)} fill="none" stroke={ACCENT} strokeWidth={2} strokeDasharray="5 3" className="rg-marquee" />
           </svg>
         );
       }
@@ -2304,7 +2442,7 @@ export function SheetView(props) {
       const sg = ui.spill.slice(2);
       if (clipToPane(sg, p)) {
         const rc = rectOf(sg);
-        out.push(<div key="spill" style={{ position: "absolute", left: rc.x - p.x - 1, top: rc.y - p.y - 1, width: rc.w + 1, height: rc.h + 1, border: "1px dashed #2F6FDB", boxSizing: "border-box", pointerEvents: "none" }} />);
+        out.push(<div key="spill" style={{ position: "absolute", ...paneBox(rc, p, 1), border: "1px dashed #2F6FDB", boxSizing: "border-box", pointerEvents: "none" }} />);
       }
     }
     // Formula references while editing.
@@ -2314,7 +2452,7 @@ export function SheetView(props) {
         if (!cg) return;
         const rc = rectOf(ref.range);
         const color = REF_COLORS[i % REF_COLORS.length];
-        out.push(<div key={`ref${i}`} style={{ position: "absolute", left: rc.x - p.x - 1, top: rc.y - p.y - 1, width: rc.w + 1, height: rc.h + 1, border: `2px solid ${color}`, background: color + "14", boxSizing: "border-box", pointerEvents: "none" }} />);
+        out.push(<div key={`ref${i}`} style={{ position: "absolute", ...paneBox(rc, p, 1), border: `2px solid ${color}`, background: color + "14", boxSizing: "border-box", pointerEvents: "none" }} />);
       });
     }
     // Drag previews.
@@ -2322,7 +2460,7 @@ export function SheetView(props) {
       const g0 = drag.kind === "fill" ? drag.target : [drag.to[0], drag.to[1], drag.to[0] + drag.source[2] - drag.source[0], drag.to[1] + drag.source[3] - drag.source[1]];
       if (clipToPane(g0, p)) {
         const rc = rectOf(g0);
-        out.push(<div key="dragp" style={{ position: "absolute", left: rc.x - p.x - 1, top: rc.y - p.y - 1, width: rc.w + 1, height: rc.h + 1, border: `2px dashed ${drag.kind === "fill" ? "#5F6B76" : ACCENT}`, boxSizing: "border-box", pointerEvents: "none" }} />);
+        out.push(<div key="dragp" style={{ position: "absolute", ...paneBox(rc, p, 1), border: `2px dashed ${drag.kind === "fill" ? "#5F6B76" : ACCENT}`, boxSizing: "border-box", pointerEvents: "none" }} />);
       }
     }
     return out;
@@ -2553,7 +2691,13 @@ export function SheetView(props) {
           <input
             id="rg-namebox"
             value={nameEdit !== null ? nameEdit : nameBoxValue}
-            onFocus={(e) => { setNameEdit(nameBoxValue); setTimeout(() => e.target.select(), 0); }}
+            onFocus={(e) => {
+              setNameEdit(nameBoxValue);
+              // Only while it still has the focus: select() would take it back from the grid after
+              // a quick Enter, and what is typed next would land in the name box.
+              const el = e.target;
+              setTimeout(() => { if (document.activeElement === el) el.select(); }, 0);
+            }}
             onChange={(e) => setNameEdit(e.target.value)}
             onBlur={() => setNameEdit(null)}
             onKeyDown={(e) => {
@@ -2679,7 +2823,8 @@ export function SheetView(props) {
                   </div>
                 );
               })()}
-              {inputMsg && (
+              {inputMsg && !(dropdownBtn && listOpen) && (
+                // Hidden while the cell's list is open, which takes the same place.
                 <div className="rg-input-msg" style={{ position: "absolute", left: activeRect.x + 12, top: activeRect.y + activeRect.h + 6, maxWidth: 240, background: "#FFFFE1", border: "1px solid #A0A0A0", padding: "4px 6px", font: "12px 'Segoe UI', system-ui, sans-serif", zIndex: 7, pointerEvents: "none" }}>
                   {inputMsg.title && <div style={{ fontWeight: 600 }}>{inputMsg.title}</div>}
                   <div style={{ whiteSpace: "pre-wrap" }}>{inputMsg.message}</div>

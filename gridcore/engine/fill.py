@@ -4,10 +4,11 @@ lists) and the Series command."""
 from __future__ import annotations
 
 import math
+import re
 from typing import List, Optional, Tuple
 
 from ..core.addr import RangeRef
-from ..core.date import MONTHS, WEEKDAYS, DateSystem, datetime_from_serial, days_in_month, serial_from_ymd
+from ..core.date import MONTHS, WEEKDAYS, DateSystem, datetime_from_serial, days_in_month, max_serial, serial_from_ymd
 from ..formula.adjust import shift_relative
 from ..model.cell import Cell, Formula
 from ..numfmt import parse as parse_fmt
@@ -34,23 +35,41 @@ def _round15(x: float) -> float:
     return (math.floor(y + 0.5) if y >= 0 else -math.floor(-y + 0.5)) / p
 
 
+def _digit(ch: str) -> bool:
+    return ch.isdigit() and ch.isascii()
+
+
 def _split_num(t: str) -> Optional[Tuple[str, int, str, int]]:
-    """``Item 007`` → ("Item ", 7, "", 3)."""
-    end = None
-    for i in range(len(t) - 1, -1, -1):
-        if t[i].isdigit() and t[i].isascii():
-            end = i
-            break
-    if end is None:
+    """The number AutoFill counts on: the one the text starts with (``1st Period``, ``1 to 5``),
+    else the one it ends with (``Item 007`` → ("Item ", 7, "", 3)). A number inside the text
+    (``a1b``, ``Item 5th``) is copied as it is (Excel)."""
+    if t and _digit(t[0]):
+        start = end = 0
+        while end + 1 < len(t) and _digit(t[end + 1]):
+            end += 1
+    elif t and _digit(t[-1]):
+        start = end = len(t) - 1
+        while start > 0 and _digit(t[start - 1]):
+            start -= 1
+    else:
         return None
-    start = end
-    while start > 0 and t[start - 1].isdigit() and t[start - 1].isascii():
-        start -= 1
     digits = t[start:end + 1]
     if len(digits) > 15:
         return None
     width = len(digits) if digits.startswith("0") and len(digits) > 1 else 1
     return t[:start], int(digits), t[end + 1:], width
+
+
+# Ordinal numbers continue as ordinals: 1st Period, 2nd Period, 3rd Period.
+_ORDINAL = re.compile(r"^(st|nd|rd|th)(?![a-z])", re.IGNORECASE)
+# Quarters wrap after 4 (Q3, Q4, Q1), however they are spelled.
+_QUARTER = ("q", "qtr", "quarter")
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
 
 
 def _add_months(sys: DateSystem, serial: float, months: int) -> Optional[float]:
@@ -81,6 +100,9 @@ class Pattern:
             first, last = nums[0], nums[-1]
             is_date = parse_fmt(fmt).is_date() and not parse_fmt(fmt).is_time_only()
             if len(nums) == 1:
+                if parse_fmt(fmt).is_time_only():
+                    # A time steps by an hour (9:00, 10:00, 11:00).
+                    return Pattern("linear", last=last, first=first, step=1 / 24)
                 return Pattern("linear", last=last, first=first, step=1.0) if is_date else Pattern()
             if is_date:
                 a, b = datetime_from_serial(sys, first), datetime_from_serial(sys, nums[1])
@@ -106,9 +128,18 @@ class Pattern:
                     lower = t0.lower() == t0
                     return Pattern("list", lst=lst, last=idx[-1], first=idx[0], step=step, upper=upper, lower=lower)
             parts = [_split_num(t) for t in texts]
-            if all(p is not None for p in parts) and all(p[0] == parts[0][0] and p[2] == parts[0][2] for p in parts):
-                step = parts[1][1] - parts[0][1] if len(parts) >= 2 else 1
-                return Pattern("textnum", prefix=parts[0][0], suffix=parts[0][2], last=parts[-1][1], first=parts[0][1], step=step, width=parts[0][3])
+            if all(p is not None for p in parts):
+                ordinal = all(_ORDINAL.match(p[2]) for p in parts)
+                # 1st Period, 2nd Period: the same text once the ordinal ending is taken off.
+                key = [(p[0], p[2][2:] if ordinal else p[2]) for p in parts]
+                if all(k == key[0] for k in key):
+                    step = parts[1][1] - parts[0][1] if len(parts) >= 2 else 1
+                    prefix, suffix = key[0]
+                    wrap = prefix.strip().lower() in _QUARTER and suffix == "" and all(1 <= p[1] <= 4 for p in parts)
+                    return Pattern(
+                        "textnum", prefix=prefix, suffix=suffix, last=parts[-1][1], first=parts[0][1], step=step,
+                        width=parts[0][3], ordinal=ordinal, wrap=4 if wrap else 0,
+                    )
         return Pattern()
 
     def alternate(self, cells: List[Optional[Cell]]) -> "Pattern":
@@ -125,8 +156,10 @@ class Pattern:
             return _round15(base + self.step * k * sign)
         if self.kind == "textnum":
             base = self.last if forward else self.first
-            n = abs(base + self.step * k * sign)
-            return f"{self.prefix}{str(n).zfill(self.width)}{self.suffix}"
+            n = base + self.step * k * sign
+            n = (n - 1) % self.wrap + 1 if self.wrap else abs(n)
+            end = _ordinal(n) + self.suffix if self.ordinal else self.suffix
+            return f"{self.prefix}{str(n).zfill(self.width)}{end}"
         if self.kind == "list":
             ln = len(self.lst)
             base = self.last if forward else self.first
@@ -175,6 +208,11 @@ def fill(ctx, sheet: int, src: RangeRef, target: RangeRef, mode: str = "series")
                 pattern = pattern.alternate([c for _, c in src_cells])
         else:
             pattern = Pattern()
+        # Cells without a common pattern continue in runs of neighbours of one kind, as Excel's
+        # AutoFill does: 1, 2, x, 5 → 3, 4, x, 6; Product 1, On backorder → Product 2, On backorder.
+        runs: Optional[List[Tuple[Pattern, int, int]]] = None
+        if mode == "series" and pattern.kind == "copy" and n > 1:
+            runs = _runs([c for _, c in src_cells], wb)
         for k, t in enumerate(targets):
             step = k + 1
             idx = k % len(src_cells)
@@ -196,7 +234,12 @@ def fill(ctx, sheet: int, src: RangeRef, target: RangeRef, mode: str = "series")
                 else:
                     writes.append((t, Cell(None, Formula(scell.formula.text), style)))
                 continue
-            v = pattern.value(step, forward, wb.date_system)
+            if runs is not None:
+                run, j, m = runs[idx if forward else n - 1 - idx]
+                r = k // n + 1  # the how-many-th copy of the source this target is
+                v = run.value(m * (r - 1) + j + 1 if forward else m * r - j, forward, wb.date_system)
+            else:
+                v = pattern.value(step, forward, wb.date_system)
             if v is None:
                 v = scell.value
             writes.append((t, Cell(v, None, style)))
@@ -207,6 +250,49 @@ def fill(ctx, sheet: int, src: RangeRef, target: RangeRef, mode: str = "series")
         else:
             sm.set_cell(c, cell)
         ctx.touch(sheet, c)
+
+
+def _run_kind(c: Optional[Cell]) -> Optional[tuple]:
+    """What makes neighbouring source cells one run: numbers; names of one list (Mon, Tue); texts
+    around a number with the same words (Item 1, Item 3)."""
+    if c is None or c.formula is not None:
+        return None
+    v = c.value
+    if isinstance(v, float):
+        return ("num",)
+    if isinstance(v, str):
+        low = v.lower()
+        for i, lst in enumerate(_lists()):
+            if low in (x.lower() for x in lst):
+                return ("list", i)
+        p = _split_num(v)
+        if p is not None:
+            ordinal = bool(_ORDINAL.match(p[2]))
+            return ("textnum", p[0], p[2][2:] if ordinal else p[2], ordinal)
+    return None
+
+
+def _runs(cells: List[Optional[Cell]], wb) -> List[Tuple[Pattern, int, int]]:
+    """For each source cell of a source without one pattern: the pattern of its run, its place in
+    the run and the run's length. A number alone counts on by 1."""
+    out: List[Tuple[Pattern, int, int]] = []
+    i = 0
+    while i < len(cells):
+        kind = _run_kind(cells[i])
+        j = i + 1
+        while kind is not None and j < len(cells) and _run_kind(cells[j]) == kind:
+            j += 1
+        run = cells[i:j]
+        if kind is None:
+            p = Pattern()
+        else:
+            fmt = wb.styles.get(run[0].style).num_fmt
+            p = Pattern.detect(run, [], wb.date_system, fmt)
+            if p.kind == "copy" and kind == ("num",) and len(run) == 1:
+                p = Pattern("linear", last=run[0].value, first=run[0].value, step=1.0)
+        out.extend((p, k, len(run)) for k in range(len(run)))
+        i = j
+    return out
 
 
 def series(ctx, sheet: int, rng: RangeRef, rows: bool, kind: str, step: float, stop: Optional[float], unit: str = "day") -> None:
@@ -221,27 +307,54 @@ def series(ctx, sheet: int, rng: RangeRef, rows: bool, kind: str, step: float, s
         if first is None or not isinstance(first.value, float):
             continue
         v = first.value
-        for c in cells[1:]:
+        for i, c in enumerate(cells[1:], 1):
+            prev = v
             if kind == "growth":
                 v = v * step
             elif kind == "date":
+                # Months and years count from the first date: Jan 31, Feb 28, Mar 31.
                 if unit == "month":
-                    v = _add_months(wb.date_system, v, int(step)) or v
+                    v = _add_months(wb.date_system, first.value, int(step) * i) or v
                 elif unit == "year":
-                    v = _add_months(wb.date_system, v, int(step) * 12) or v
+                    v = _add_months(wb.date_system, first.value, int(step) * 12 * i) or v
                 elif unit == "weekday":
-                    k = int(step)
-                    d = 1 if k > 0 else -1
-                    for _ in range(abs(k)):
-                        v += d
-                        while (int(v) + 6) % 7 in (0, 6):
-                            v += d
+                    v = _add_weekdays(wb.date_system, v, int(step))
                 else:
                     v = v + step
             else:
                 v = _round15(v + step)
-            if stop is not None and ((step >= 0 and v > stop) or (step < 0 and v < stop)):
+            # The stop value bounds the series in the direction it runs (a falling growth too).
+            if stop is not None and ((v >= prev and v > stop) or (v < prev and v < stop)):
                 break
             ex = sh.cell(c)
             sm.set_cell(c, Cell(v, None, ex.style if ex is not None else first.style))
             ctx.touch(sheet, c)
+
+
+def _add_weekdays(sys: DateSystem, v: float, k: int) -> float:
+    """``v`` moved by ``k`` weekdays (Saturdays and Sundays skipped), in whole weeks where it can, so
+    a huge step can't keep the server busy."""
+    from .session import EngineError
+
+    off = 6 if sys is DateSystem.D1900 else 5
+
+    def weekend(x: float) -> bool:
+        return (int(x) + off) % 7 in (0, 6)
+
+    d = 1 if k > 0 else -1
+    steps = abs(k)
+    if steps:
+        # The first step lands on a weekday; from there five weekdays are a week.
+        v += d
+        while weekend(v):
+            v += d
+        steps -= 1
+    weeks, rest = divmod(steps, 5)
+    v += d * 7 * weeks
+    for _ in range(rest):
+        v += d
+        while weekend(v):
+            v += d
+    if not 0 <= v <= max_serial(sys):
+        raise EngineError("The weekday series runs past the supported date range.")
+    return v

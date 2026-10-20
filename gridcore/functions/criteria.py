@@ -6,9 +6,17 @@ from functools import lru_cache
 from typing import List, Optional, Tuple
 
 from ..core.parse import parse_number_text
-from ..core.value import Array, CellError, Value, compare_numbers, compare_text
+from ..core.value import Array, CellError, Value, XlError, compare_numbers, compare_text, fold
 
 _OPS = (">=", "<=", "<>", "=", ">", "<")
+
+# Excel's limit on a text criterion of COUNTIF, SUMIF, AVERAGEIF and the *IFS functions, in UTF-16
+# code units (as Excel counts text).
+MAX_CRITERION_UNITS = 255
+
+
+def _utf16_len(s: str) -> int:
+    return len(s) + sum(1 for c in s if ord(c) > 0xFFFF)
 
 
 def _cmp_op(op: str, o: int) -> bool:
@@ -51,6 +59,17 @@ class Criterion:
             return Criterion("=", "error", v)
         return _parse_text(str(v))
 
+    @staticmethod
+    def parse_arg(v: Value) -> "Criterion":
+        """The criteria argument of COUNTIF, SUMIF, AVERAGEIF and the *IFS functions: a text
+        criterion longer than 255 UTF-16 units is #VALUE!, however many criteria pairs there are
+        (Excel 16 for Mac)."""
+        if isinstance(v, Array):
+            v = v.data[0] if v.data else None
+        if isinstance(v, str) and len(v) > MAX_CRITERION_UNITS // 2 and _utf16_len(v) > MAX_CRITERION_UNITS:
+            raise XlError(CellError.VALUE)
+        return Criterion.parse(v)
+
     def matches(self, v: Value) -> bool:
         if isinstance(v, Array):
             v = v.data[0] if v.data else None
@@ -65,7 +84,8 @@ class Criterion:
             if op == "<>":
                 return not blank
             if isinstance(v, str):
-                return _cmp_op(op, compare_text(v, ""))
+                # A bare "<=" or ">=" matches no empty text (Excel 365).
+                return v != "" and _cmp_op(op, compare_text(v, ""))
             return False
         if k == "number":
             if isinstance(v, bool):
@@ -89,7 +109,7 @@ class Criterion:
             return op == "<>"
         # text
         if op in ("=", "<>"):
-            m = isinstance(v, str) and _match(self.pattern, v.lower(), True) is not None
+            m = isinstance(v, str) and _match(self.pattern, fold(v), True) is not None
             return m if op == "=" else not m
         if isinstance(v, str):
             return _cmp_op(op, compare_text(v, self.operand))
@@ -143,13 +163,13 @@ def _tokenize(pattern: str) -> tuple:
             if n is None:
                 out.append("~")
             else:
-                out.extend(n.lower())
+                out.append(fold(n))
         elif c == "*":
             out.append(_STAR)
         elif c == "?":
             out.append(_ANY)
         else:
-            out.extend(c.lower())
+            out.append(fold(c))
     return tuple(out)
 
 
@@ -184,14 +204,14 @@ def _match(p: tuple, t: str, whole: bool) -> Optional[int]:
 
 def wildcard_match(pattern: str, text: str) -> bool:
     """Case-insensitive whole-text match with ``*``, ``?`` and ``~`` escapes."""
-    return _match(_tokenize(pattern), text.lower(), True) is not None
+    return _match(_tokenize(pattern), fold(text), True) is not None
 
 
 def wildcard_find(pattern: str, text: str, start: int) -> Optional[int]:
     """SEARCH-style find: index of the first position at or after ``start`` where the pattern
     matches."""
     p = _tokenize(pattern)
-    t = text.lower()
+    t = fold(text)
     if not p:
         return start if start <= len(t) else None
     for i in range(start, len(t)):
@@ -202,7 +222,7 @@ def wildcard_find(pattern: str, text: str, start: int) -> Optional[int]:
 
 def wildcard_find_span(pattern: str, text: str, start: int) -> Optional[Tuple[int, int]]:
     p = _tokenize(pattern)
-    t = text.lower()
+    t = fold(text)
     for i in range(start, len(t) + 1):
         n = _match(p, t[i:], False)
         if n is not None:
@@ -216,7 +236,7 @@ def lookup_equal(needle: Value, hay: Value, wild: bool) -> bool:
     if tn is str and th is str:
         if wild:
             return wildcard_match(needle, hay)  # type: ignore[arg-type]
-        return needle.lower() == hay.lower()  # type: ignore[union-attr]
+        return fold(needle) == fold(hay)  # type: ignore[arg-type]
     if tn is float and th is float:
         return compare_numbers(needle, hay) == 0  # type: ignore[arg-type]
     if tn is bool and th is bool:

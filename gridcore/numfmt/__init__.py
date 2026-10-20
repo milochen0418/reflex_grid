@@ -14,7 +14,7 @@ from ..core.value import Array, CellError, XlError, Value, scalar
 from . import render
 from .builtin import builtin_format, builtin_id
 from .decimal import format_general_fit
-from .parse import Section, is_calendar, parse_sections
+from .parse import Section, is_calendar, parse_sections, validate
 
 GENERAL_WIDTH = 11
 OVERFLOW = "########"
@@ -74,10 +74,11 @@ SPECIAL_CODES = ("00000", "00000-0000", "[<=9999999]###-####;(###) ###-####", "0
 class NumberFormat:
     """A parsed number format code."""
 
-    __slots__ = ("code", "general", "sections", "num_sections", "text_section")
+    __slots__ = ("code", "general", "sections", "num_sections", "text_section", "valid")
 
     def __init__(self, code: str):
         self.code = code
+        self.valid = validate(code)  # whether Excel takes it (TEXT() is #VALUE! otherwise)
         trimmed = code.strip()
         if not trimmed or trimmed.lower() == "general" or trimmed == "checkbox":
             self.general = True
@@ -218,12 +219,15 @@ class NumberFormat:
         elif sec.kind == "general":
             out = render.render_general(sec, abs(n), width - 1 if minus else width)
         elif sec.kind == "date":
-            out = None if minus else render.render_date(sec, abs(n), sys)
+            # A 1904 workbook shows a negative date or time with a minus sign (-1/2/1904, -6:00);
+            # a 1900 one can't show it (Excel).
+            out = None if minus and sys is not DateSystem.D1904 else render.render_date(sec, abs(n), sys)
         else:
             out = render.render_number(sec, abs(n))
         if out is None:
             return Formatted(OVERFLOW, sec.color, None, True), True
-        if minus and sec.kind != "text":
+        if minus and sec.kind != "text" and not out.zero:
+            # A negative number that rounds to 0.00 shows 0.00, not -0.00 (Excel).
             out.prepend("-")
         return Formatted(out.text, sec.color, out.fill, True), False
 
@@ -275,6 +279,8 @@ def text_function(v: Value, code: str, sys: DateSystem = DateSystem.D1900) -> st
     x = scalar(v)
     if isinstance(x, CellError):
         raise XlError(x)
+    if not fmt.valid:
+        raise XlError(CellError.VALUE)
     if x is None:
         n = 0.0
     elif isinstance(x, bool):

@@ -69,6 +69,9 @@ AREAS: List[Tuple[str, Tuple[str, ...], str]] = [
     ("Engine and .xlsx files", ("test_engine", "test_engine_more"),
      "Commands end to end: editing, recalculation, undo, clipboard, structure, formatting, sort and "
      "filter, tables, names, `.xlsx` round trips"),
+    ("Bugs fixed in GridCraft", ("test_gridcraft_issues",),
+     "Issues that [GridCraft](https://github.com/storytold/gridcraft), whose design gridcore follows, fixed "
+     "against Excel 365's answers: functions, number formats, recalculation, `.xlsx` files, fills, filters and links"),
     ("Editing together", ("test_collab", "test_books"),
      "Several people on one workbook, undo that takes back only your own changes, the shared "
      "workbook store"),

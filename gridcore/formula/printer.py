@@ -120,6 +120,9 @@ def struct_ref(s: StructRef) -> str:
     if s.col_start is None and s.col_end is None and len(s.specifiers) == 1:
         return out + f"[{s.specifiers[0]}]"
     if s.col_start is not None and s.col_end is None and not s.specifiers:
+        if s.col_start != s.col_start.strip():
+            # Spaces at the edges of a column name: the double-bracket form, as Excel writes it.
+            return out + f"[[{esc(s.col_start)}]]"
         return out + f"[{esc(s.col_start)}]"
     if s.col_start is not None and s.col_end is None and this_row:
         if simple_col(s.col_start):
@@ -167,7 +170,15 @@ def _write(out: List[str], e: Expr, r1c1) -> None:
     elif t is Ref:
         out.append(range_r1c1(e, r1c1) if r1c1 is not None else range_a1(e))
     elif t is Name:
-        out.append(e.name)
+        n = e.name
+        if "!" in n:
+            # A sheet-scoped name keeps its sheet bare (`My Sheet!Total`): quote it as references do.
+            sh, bare = n.rsplit("!", 1)
+            if len(sh) > 1 and sh.startswith("'") and sh.endswith("'"):
+                sh = sh[1:-1].replace("''", "'")
+            out.append(quote_sheet(sh) + "!" + bare)
+        else:
+            out.append(n)
     elif t is StructRef:
         out.append(struct_ref(e))
     elif t is Unary:
@@ -202,7 +213,7 @@ def _write(out: List[str], e: Expr, r1c1) -> None:
         out.append(e.op)
         _write(out, e.right, r1c1)
     elif t is Call:
-        out.append(e.name)
+        out.append("_xludf." + e.name[7:] if e.name.startswith("_XLUDF.") else e.name)
         out.append("(")
         for i, a in enumerate(e.args):
             if i:

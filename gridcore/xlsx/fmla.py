@@ -43,7 +43,7 @@ def struct_ref_file(s: StructRef, table: Optional[str]) -> str:
         parts.append(col(s.col_start))
     if not parts:
         return name + "[]"
-    if len(parts) == 1:
+    if len(parts) == 1 and not (s.col_start is not None and s.col_start != s.col_start.strip()):
         return name + parts[0]
     return name + "[" + ",".join(parts) + "]"
 
@@ -99,6 +99,25 @@ def _prefix_params(e: Expr, scope: List[str]) -> Expr:
     return e
 
 
+# Where a function takes a function: files write a worksheet function passed by name with
+# ``_xleta.`` (``GROUPBY(A2:A9,B2:B9,_xleta.SUM)``); -1 is the last argument.
+_FUNCTION_ARGS = {"BYROW": 1, "BYCOL": 1, "MAP": -1, "REDUCE": 2, "SCAN": 2, "MAKEARRAY": 2, "GROUPBY": 2, "PIVOTBY": 3}
+ETA_PREFIX = "_xleta."
+
+
+def _eta_args(x: Call) -> tuple:
+    from ..calc.eval import is_worksheet_function
+
+    pos = _FUNCTION_ARGS.get(x.name)
+    if pos is None or not x.args:
+        return x.args
+    i = pos if pos >= 0 else len(x.args) + pos
+    a = x.args[i] if 0 <= i < len(x.args) else None
+    if not isinstance(a, Name) or a.name.lower().startswith(PARAM_PREFIX) or not is_worksheet_function(a.name):
+        return x.args
+    return x.args[:i] + (Name(ETA_PREFIX + a.name.upper()),) + x.args[i + 1:]
+
+
 def expr_to_file(e: Expr, table: Optional[str] = None) -> str:
     e = _prefix_params(e, [])
 
@@ -107,7 +126,8 @@ def expr_to_file(e: Expr, table: Optional[str] = None) -> str:
             return Name(struct_ref_file(x, table))
         if isinstance(x, Call):
             n = file_function_name(x.name)
-            return Call(n, x.args) if n is not None else x
+            args = _eta_args(x)
+            return Call(n if n is not None else x.name, args) if n is not None or args is not x.args else x
         if isinstance(x, Unary):
             if x.op == "#":
                 if isinstance(x.expr, Err):
@@ -139,6 +159,8 @@ def from_file(text: str) -> str:
 
     def f(x: Expr) -> Expr:
         if isinstance(x, Name):
+            if x.name[: len(ETA_PREFIX)].lower() == ETA_PREFIX:
+                return Name(x.name[len(ETA_PREFIX):])
             return Name(_strip_param_prefix(x.name))
         if isinstance(x, Call):
             return Call(_strip_param_prefix(x.name), x.args)

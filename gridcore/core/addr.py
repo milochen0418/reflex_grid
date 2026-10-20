@@ -213,7 +213,7 @@ class RangeRef(NamedTuple):
             x, y = parse_cell(a), parse_cell(b)
             if x is not None and y is not None:
                 return RangeRef.of(x, y)
-            sa, sb = a.strip().lstrip("$"), b.strip().lstrip("$")
+            sa, sb = (t[1:] if t.startswith("$") else t for t in (a.strip(), b.strip()))  # one $ at most
             ca, cb = letters_to_col(sa), letters_to_col(sb)
             if ca is not None and cb is not None:
                 return RangeRef.cols(min(ca, cb), max(ca, cb))

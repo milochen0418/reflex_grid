@@ -236,7 +236,8 @@ def _mirr(args, ctx):
     n = len(flows)
     pos = math.fsum(cf * (1 + rr) ** (n - 1 - i) for i, cf in enumerate(flows) if cf > 0)
     neg = math.fsum(cf / (1 + fr) ** i for i, cf in enumerate(flows) if cf < 0)
-    if pos == 0 or neg == 0 or n < 2:
+    # Only a missing negative flow is an error: with no positive one MIRR is -1 (Excel 365).
+    if neg == 0 or n < 2:
         raise XlError(CellError.DIV0)
     return _f((pos / -neg) ** (1.0 / (n - 1)) - 1)
 

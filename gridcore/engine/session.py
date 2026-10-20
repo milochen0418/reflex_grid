@@ -122,6 +122,7 @@ class Ctx:
         self.changed: List[Tuple[int, int, int]] = []
         self.structural = False
         self.recalc = False  # recalculate everything, even in manual mode (F9)
+        self.rows_shown = False  # rows were hidden or shown: SUBTOTAL and AGGREGATE look again
         self.unprotected: Set[str] = set()  # protected sheets this edit may change anyway (macros)
         self.moved = False
         self.sel = sel
@@ -282,8 +283,9 @@ def finish_edit(d: DocState, ctx: Ctx) -> None:
             d.calc.rebuild(wb)
         else:
             d.calc.recalc_all(wb)
-    elif ctx.changed:
-        d.calc.cells_changed(wb, ctx.changed)
+    elif ctx.changed or ctx.rows_shown:
+        changed = ctx.changed + d.calc.hidden_row_readers(wb) if ctx.rows_shown else ctx.changed
+        d.calc.cells_changed(wb, changed)
     rows = set(ctx.fit_rows)
     if len(ctx.changed) <= 20000:
         rows.update((k[0], k[1]) for k in ctx.changed)

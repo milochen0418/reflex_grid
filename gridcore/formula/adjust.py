@@ -9,7 +9,6 @@ from typing import List, Optional, Sequence
 from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef
 from ..core.value import CellError
 from .ast import Err, Expr, Name, Ref
-from .printer import quote_sheet
 
 
 def _shift_line(v: int, absolute: bool, d: int, mx: int) -> Optional[int]:
@@ -261,12 +260,13 @@ def rename_sheet(e: Expr, old: str, new: str) -> Expr:
         if isinstance(x, Name):
             n = x.name
             head, rest = n[: len(old)], n[len(old):]
+            # Names keep their sheet bare, as the parser does; the printer quotes it.
             if head.lower() == ol and rest.startswith("!"):
-                return Name(quote_sheet(new) + rest)
+                return Name(new + rest)
             if n.startswith("'") and "!" in n:
                 q, rest2 = n.rsplit("!", 1)
                 if q.strip("'").replace("''", "'").lower() == ol:
-                    return Name(quote_sheet(new) + "!" + rest2)
+                    return Name(new + "!" + rest2)
         return x
 
     return e.map(f)

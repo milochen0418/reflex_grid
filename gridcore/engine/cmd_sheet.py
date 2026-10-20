@@ -78,6 +78,24 @@ def _insert_lines(s: Session, p: Dict[str, Any], axis: str):
     return None
 
 
+def _keep_table_rows(sh, spans: List[tuple]) -> tuple:
+    """Deleting every data row of a table keeps the first of them, emptied, as Excel does (a table
+    without a data row is a damaged file to Excel): the spans to delete, bottom-up, and the table
+    cells to empty first."""
+    out, empty = [], []
+    for at, count in spans:
+        pieces = [(at, at + count - 1)]
+        for t in sh.tables:
+            data = t.data_range()
+            if not t.header_row or data is None or not (at <= data.r0 and data.r1 <= at + count - 1) or at <= t.range.r0 < at + count:
+                continue
+            keep = data.r0
+            pieces = [q for a, b in pieces for q in (((keep + 1, b), (a, keep - 1)) if a <= keep <= b else ((a, b),)) if q[0] <= q[1]]
+            empty.append(RangeRef(keep, t.range.c0, keep, t.range.c1))
+        out.extend((a, b - a + 1) for a, b in sorted(pieces, reverse=True))
+    return out, empty
+
+
 def _delete_lines(s: Session, p: Dict[str, Any], axis: str):
     d = s.doc()
     si = param_sheet(s, p)
@@ -87,8 +105,18 @@ def _delete_lines(s: Session, p: Dict[str, Any], axis: str):
     for at, count in spans:
         rng = RangeRef.rows(at, at + count - 1) if axis == "rows" else RangeRef.cols(at, at + count - 1)
         check_arrays(sh, rng)
+    empty: List[RangeRef] = []
+    if axis == "rows":
+        spans, empty = _keep_table_rows(sh, spans)
 
     def f(ctx):
+        for rng in empty:
+            sm = ctx.sheet_mut(si)
+            for rc in rng.cells():
+                cell = sm.cell(rc)
+                if cell is not None and (cell.value is not None or cell.formula is not None):
+                    sm.set_cell(rc, Cell(None, None, cell.style))
+                    ctx.touch(si, rc)
         for at, count in spans:
             shift_lines(ctx, si, axis, at, count, False)
         sm = ctx.wb.sheet(si)

@@ -528,6 +528,13 @@ def spill_anchors_near(sh, rcs: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     return out
 
 
+def _no_content(sh, rc: Tuple[int, int]) -> bool:
+    """No value and no formula: an empty cell, or one that only keeps a format, which doesn't block
+    a spill."""
+    cell = sh.cell(rc)
+    return cell is None or (cell.value is None and cell.formula is None)
+
+
 def _formula_expr(wb, k: Key) -> Optional[Expr]:
     s = wb.sheet(k[0])
     if s is None:
@@ -583,6 +590,18 @@ class Calc:
                 sm.spill_ranges = {}
         self._run(wb, list(self.graph.nodes), full=True)
 
+    def hidden_row_readers(self, wb) -> List[Key]:
+        """The formulas whose result depends on which rows are hidden: SUBTOTAL and AGGREGATE."""
+        out: List[Key] = []
+        for k in self.graph.nodes:
+            sh = wb.sheet(k[0])
+            cell = sh.cell((k[1], k[2])) if sh is not None else None
+            if cell is not None and cell.formula is not None:
+                t = cell.formula.text.upper()
+                if "SUBTOTAL(" in t or "AGGREGATE(" in t:
+                    out.append(k)
+        return out
+
     def cells_changed(self, wb, changed: Iterable[Key]) -> None:
         """Updates the graph for cells whose content changed and recalculates their dependents."""
         changed = list(dict.fromkeys(changed))
@@ -621,7 +640,7 @@ class Calc:
                 continue
             seeds.extend((si, r, c) for r, c in spill_anchors_near(sh, rcs))
             for rc in rcs:
-                if not sh.cells.has(rc):
+                if _no_content(sh, rc):
                     e0 = emptied.get(si)
                     emptied[si] = rc if e0 is None else (max(e0[0], rc[0]), max(e0[1], rc[1]))
         for si, end in emptied.items():
@@ -635,9 +654,9 @@ class Calc:
             if sh is not None:
                 r = sh.spill_ranges.get((k[1], k[2]))
                 if r is not None:
-                    seeds.extend((k[0], rr, cc) for i, (rr, cc) in enumerate(r.cells()) if i < 65536)
+                    seeds.extend(self.graph.dependents_of_range(k[0], r))
         for si, r in cleared:
-            seeds.extend((si, rr, cc) for i, (rr, cc) in enumerate(r.cells()) if i < 65536)
+            seeds.extend(self.graph.dependents_of_range(si, r))
         self._run(wb, seeds, full=False)
 
     def _closure(self, seeds: Iterable[Key]) -> Tuple[List[Key], Dict[Key, Set[Key]]]:
@@ -748,7 +767,7 @@ class Calc:
                     blocked = (
                         end[0] >= MAX_ROWS
                         or end[1] >= MAX_COLS
-                        or any(rc != anchor for rc, _ in sm.cells.iter_range(rng))
+                        or any(rc != anchor and (c.value is not None or c.formula is not None) for rc, c in sm.cells.iter_range(rng))
                         or any(rc in sm.spill for rc in rng.cells() if rc != anchor)
                         or any(m.intersects(rng) for m in sm.merges)
                         or any(t.range.contains(anchor) for t in sm.tables)

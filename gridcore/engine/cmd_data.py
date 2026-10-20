@@ -440,9 +440,20 @@ def apply_filter(ctx, si: int, rng: RangeRef, criteria: List[Tuple[int, FilterCr
             shown += 1
             if info.hidden:
                 sm.set_row(r, replace(info, hidden=False))
+                ctx.rows_shown = True
         elif not info.hidden:
             sm.set_row(r, replace(info, hidden=True))
+            ctx.rows_shown = True
     return shown
+
+
+def _show_filtered_rows(ctx, sm, rng: RangeRef) -> None:
+    """Shows the hidden rows of a filter's range when the filter goes or loses its criteria."""
+    for r in range(rng.r0, rng.r1 + 1):
+        info = sm.row_info(r)
+        if info.hidden:
+            sm.set_row(r, replace(info, hidden=False))
+            ctx.rows_shown = True
 
 
 def _filter_owner(sh, a):
@@ -473,10 +484,7 @@ def toggle_filter(s: Session, p: Dict[str, Any]):
             tt.filter_button = on
             if not on and tt.filter:
                 tt.filter = []
-                for r in range(tt.range.r0, tt.range.r1 + 1):
-                    info = sm.row_info(r)
-                    if info.hidden:
-                        sm.set_row(r, replace(info, hidden=False))
+                _show_filtered_rows(ctx, sm, tt.range)
 
         edit(s, ft)
         return {"on": on, "table": t.name}
@@ -485,14 +493,14 @@ def toggle_filter(s: Session, p: Dict[str, Any]):
         if sh.autofilter is None:
             return {"on": False}
         rng = sh.autofilter.range
+        # A filter with no criteria has hidden no row: rows hidden by hand stay hidden.
+        filtered = bool(sh.autofilter.criteria)
 
         def off(ctx):
             sm = ctx.sheet_mut(si)
             sm.autofilter = None
-            for r in range(rng.r0, rng.r1 + 1):
-                info = sm.row_info(r)
-                if info.hidden:
-                    sm.set_row(r, replace(info, hidden=False))
+            if filtered:
+                _show_filtered_rows(ctx, sm, rng)
 
         edit(s, off)
         return {"on": False}
@@ -587,14 +595,13 @@ def clear_filter(s: Session, p: Dict[str, Any]):
     def f(ctx):
         sm = ctx.sheet_mut(si)
         o = next(t for t in sm.tables if t.name == tname) if is_table else sm.autofilter
+        filtered = bool(o.filter if is_table else o.criteria)
         if is_table:
             o.filter = []
         else:
             o.criteria = []
-        for r in range(o.range.r0, o.range.r1 + 1):
-            info = sm.row_info(r)
-            if info.hidden:
-                sm.set_row(r, replace(info, hidden=False))
+        if filtered:
+            _show_filtered_rows(ctx, sm, o.range)
 
     edit(s, f)
     return None

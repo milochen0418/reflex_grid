@@ -13,7 +13,7 @@ Each layer only imports the ones before it.
 | core | `gridcore/core` | `RangeRef` and A1 addresses (1,048,576 × 16,384), values (`None`, `float`, `str`, `bool`, `CellError`, `Array`), Excel comparison and coercion rules, the 1900/1904 date systems (including the Lotus 1900 leap-year bug), parsing what people type (`50%`, `$1,200`, `3/14/2026`, `1 1/2`) |
 | numfmt | `gridcore/numfmt` | Number-format codes: sections, conditions, colours, dates/times, fractions, scientific, `*` fill and `_` padding; General formatting that fits a column width |
 | formula | `gridcore/formula` | Lexer, Pratt parser into a frozen-dataclass AST (refs, ranges, structured refs, arrays, `@`, `#` spill, `.:` trim), printer (A1 and R1C1), reference adjustment for copy, insert/delete, move, sheet rename/delete |
-| functions | `gridcore/functions` | The registry (arity, argument kinds, signature, description) and 478 functions with Excel's array lifting |
+| functions | `gridcore/functions` | The registry (arity, argument kinds, signature, description) and 479 functions with Excel's array lifting |
 | model | `gridcore/model` | `Workbook` → `Sheet` → copy-on-write `CellStore`; interned immutable `Style`s; tables, conditional formats, validation, notes, links, filters, charts, pictures, sparklines, print settings, protection, defined names |
 | calc | `gridcore/calc` | The evaluator (references stay lazy, special forms such as `IF`, `LET`, `LAMBDA`, `OFFSET`, `INDIRECT`) and `Calc`: a dependency graph indexed by cell, row block, tall and wide ranges; dirty closure + topological order; spills and `#SPILL!`; cycles (`#CIRC!` or iterative calculation) |
 | xlsx | `gridcore/xlsx` | Streaming XLSX reader and writer (ElementTree), styles/theme/drawing/chart/comment parts, CSV/TSV, VBA projects (`cfb.py` compound files, `ovba.py` the `vbaProject.bin` format, `oforms.py` UserForm designs) |
@@ -123,6 +123,10 @@ exactly puts its epoch back, so earlier transitions become undoable again.
   and borders are drawn on a canvas; text, selection, the other people's selections (with name tags),
   change highlights, editor, notes and objects are DOM. The view is
   virtualised: only visible cells render, and it asks the server for the cells around the visible window.
+  Browsers can't scroll a box much past 15 million px (row 750,000 at 100%): a sheet taller than that
+  scrolls its first half one to one and the rest of its rows squeezed into the other half (`vmap` maps
+  scroll offsets to sheet pixels), and boxes as tall as a whole column are cut to the pane before they
+  are laid out (`paneBox`).
   Typing goes into a hidden textarea placed over the active cell, which becomes the in-cell editor — so IME
   input (e.g. Chinese) composes in place.
 - **Charts** (`assets/grid/sheet_charts.jsx`): an SVG renderer for the chart kinds the engine

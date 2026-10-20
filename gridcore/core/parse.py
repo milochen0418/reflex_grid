@@ -53,6 +53,14 @@ def parse_number_text(s: str) -> Optional[float]:
     return None if r is None else r[0]
 
 
+def parse_number_text_in(s: str, sys: DateSystem) -> Optional[float]:
+    """:func:`parse_number_text` with dates read in the date system ``sys``."""
+    if sys is DateSystem.D1900:
+        return parse_number_text(s)
+    r = _parse_numeric(s.strip(), sys)
+    return None if r is None else r[0]
+
+
 def _parse_numeric(t: str, sys: DateSystem) -> Optional[tuple[float, Optional[str]]]:
     if not t:
         return None
@@ -266,6 +274,38 @@ def _valid_ymd(sys: DateSystem, y: int, m: int, d: int) -> Optional[float]:
 
 
 _SEP_RE = re.compile(r"[/\-.]")
+# Month-name dates as Excel (en-US) reads them: "Mar 4, 2026" (the comma after the day, then a
+# space; one after the month may be there too), "4 Mar 2026" (no comma), "Mar 26", "4 Mar".
+# "Mar 4 2026", "Mar 4,2026" and "4 Mar, 26" stay text (Excel 16 for Mac).
+_MDY_RE = re.compile(r"^([A-Za-z]+)\s*,?\s+(\d{1,2})\s*,\s+(\d{1,4})$")
+_DMY_RE = re.compile(r"^(\d{1,2})\s+([A-Za-z]+)\s+(\d{1,4})$")
+_MN_RE = re.compile(r"^([A-Za-z]+)\s+(\d{1,4})$")
+_NM_RE = re.compile(r"^(\d{1,2})\s+([A-Za-z]+)$")
+
+
+def _year_text(y: str) -> Optional[int]:
+    """A typed year: two digits or fewer (26 is 2026, 99 is 1999) or four."""
+    if len(y) <= 2:
+        return _two_digit_year(int(y), y)
+    return int(y) if len(y) == 4 else None
+
+
+def _month_number(sys: DateSystem, mo: int, n: str) -> Optional[tuple[float, str]]:
+    """``Mar 26``: the 26th of March this year. When the number can't be a day of the month
+    (``Mar 32``, ``Feb 29`` in 2026) it is the year: the first of March 1932 (Excel)."""
+    cy = current_year()
+    if 1 <= int(n) <= days_in_month_in(sys, cy, mo):
+        v = _valid_ymd(sys, cy, mo, int(n))
+        return None if v is None else (v, "d-mmm")
+    y = _year_text(n)
+    v = None if y is None else _valid_ymd(sys, y, mo, 1)
+    return None if v is None else (v, "mmm-yy")
+
+
+def _day_month(sys: DateSystem, d: str, mo: int) -> Optional[tuple[float, str]]:
+    """``4 Mar``: the 4th of March this year (no year when the day doesn't exist: 32 Mar is text)."""
+    v = _valid_ymd(sys, current_year(), mo, int(d))
+    return None if v is None else (v, "d-mmm")
 
 
 def _parse_date(t: str, sys: DateSystem) -> Optional[tuple[float, str]]:
@@ -300,32 +340,27 @@ def _parse_date(t: str, sys: DateSystem) -> Optional[tuple[float, str]]:
             if 1 <= m <= 12 and len(b) == 4:
                 s = _valid_ymd(sys, d, m, 1)
                 return None if s is None else (s, "mmm-yy")
-        d, mo = _num(a), month_from_name(b)
-        if d is not None and mo is not None:
-            s = _valid_ymd(sys, current_year(), mo, d)
-            return None if s is None else (s, "d-mmm")
-        mo, y = month_from_name(a), _num(b)
-        if mo is not None and y is not None:
-            y = _two_digit_year(y, b)
-            s = _valid_ymd(sys, y, mo, 1)
-            return None if s is None else (s, "mmm-yy")
-    # "Mar 4, 2026" / "March 4 2026" / "4 March 2026"
-    words = [w for w in re.split(r"[ ,]", t) if w]
-    if len(words) == 2:
-        # "Jan 2024": the first of the month.
-        mo, y = month_from_name(words[0]), _num(words[1])
-        if mo is not None and y is not None and len(words[1]) == 4:
-            s = _valid_ymd(sys, y, mo, 1)
-            return None if s is None else (s, "mmm-yy")
-    if len(words) == 3:
-        mo, d, y = month_from_name(words[0]), _num(words[1]), _num(words[2])
-        if mo is not None and d is not None and y is not None:
-            s = _valid_ymd(sys, y, mo, d)
-            return None if s is None else (s, "d-mmm-yy")
-        d, mo, y = _num(words[0]), month_from_name(words[1]), _num(words[2])
-        if d is not None and mo is not None and y is not None:
-            s = _valid_ymd(sys, y, mo, d)
-            return None if s is None else (s, "d-mmm-yy")
+        if "." not in t:  # Mar.26 is text, Mar-26 and Mar/26 are dates (Excel)
+            if a.isdigit() and a.isascii() and len(a) <= 2 and (mo := month_from_name(b)) is not None:
+                return _day_month(sys, a, mo)
+            if b.isdigit() and b.isascii() and (mo := month_from_name(a)) is not None:
+                return _month_number(sys, mo, b)
+    m = _MDY_RE.match(t)
+    if m is not None and (mo := month_from_name(m.group(1))) is not None:
+        y = _year_text(m.group(3))
+        v = None if y is None else _valid_ymd(sys, y, mo, int(m.group(2)))
+        return None if v is None else (v, "d-mmm-yy")
+    m = _DMY_RE.match(t)
+    if m is not None and (mo := month_from_name(m.group(2))) is not None:
+        y = _year_text(m.group(3))
+        v = None if y is None else _valid_ymd(sys, y, mo, int(m.group(1)))
+        return None if v is None else (v, "d-mmm-yy")
+    m = _MN_RE.match(t)
+    if m is not None and (mo := month_from_name(m.group(1))) is not None:
+        return _month_number(sys, mo, m.group(2))
+    m = _NM_RE.match(t)
+    if m is not None and (mo := month_from_name(m.group(2))) is not None:
+        return _day_month(sys, m.group(1), mo)
     return None
 
 

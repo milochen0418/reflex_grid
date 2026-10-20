@@ -74,6 +74,13 @@ def var_p(x: Sequence[float]) -> float:
     return devsq(x) / len(x)
 
 
+def midpoint(a: float, b: float) -> float:
+    """``(a + b) / 2`` without overflowing on its way: MEDIAN(1E+308, 1E+308) is 1E+308."""
+    if abs(a) <= 8.98846567431158e307 and abs(b) <= 8.98846567431158e307:
+        return (a + b) / 2.0
+    return a / 2.0 + b / 2.0
+
+
 def median(v: List[float]) -> float:
     if not v:
         raise XlError(CellError.NUM)
@@ -81,7 +88,7 @@ def median(v: List[float]) -> float:
     n = len(s)
     if n % 2:
         return s[n // 2]
-    return (s[n // 2 - 1] + s[n // 2]) / 2.0
+    return midpoint(s[n // 2 - 1], s[n // 2])
 
 
 def modes(v: Sequence[float]) -> List[float]:
@@ -114,12 +121,9 @@ def mode_numbers(args: List[Arg]) -> List[float]:
             out.append(v)
         elif isinstance(v, CellError):
             raise XlError(v)
-        elif isinstance(v, str) or v is None:
+        elif v is None:
             raise XlError(CellError.VALUE)
-        elif isinstance(v, bool) and a.from_ref:
-            continue
-        else:
-            out.append(to_number(v))
+        # Text (numeric text too) and logical values given as arguments don't count (Excel 365).
     return out
 
 
@@ -307,11 +311,11 @@ def _countblank(args, ctx):
 @fn("COUNTIF", 2, 2, ST, (False, True), "COUNTIF(range, criteria)", "Counts the number of cells within a range that meet the given criteria.")
 def _countif(args, ctx):
     rng = as_array(args[0].value)
-    crit = Criterion.parse(args[1].value)
+    crit = Criterion.parse_arg(args[1].value)
     return float(sum(1 for v in rng.data if crit.matches(v)))
 
 
-@fn("COUNTIFS", 2, VAR, ST, (False, True), "COUNTIFS(criteria_range1, criteria1, …)", "Counts the number of cells within a range that meet multiple criteria.")
+@fn("COUNTIFS", 2, VAR, ST, (False, True), "COUNTIFS(criteria_range1, criteria1, …)", "Counts the number of cells within a range that meet multiple criteria.", repeat=2)
 def _countifs(args, ctx):
     if len(args) % 2:
         raise XlError(CellError.VALUE)
@@ -321,7 +325,7 @@ def _countifs(args, ctx):
         rng = as_array(args[i].value)
         if rng.rows != first.rows or rng.cols != first.cols:
             raise XlError(CellError.VALUE)
-        crit = Criterion.parse(args[i + 1].value)
+        crit = Criterion.parse_arg(args[i + 1].value)
         for j, v in enumerate(rng.data):
             if mask[j] and not crit.matches(v):
                 mask[j] = False
@@ -344,7 +348,7 @@ def _averagea(args, ctx):
 @fn("AVERAGEIF", 2, 3, ST, (False, True, False), "AVERAGEIF(range, criteria, [average_range])", "Returns the average of all the cells in a range that meet a given criteria.")
 def _averageif(args, ctx):
     rng = as_array(args[0].value)
-    crit = Criterion.parse(args[1].value)
+    crit = Criterion.parse_arg(args[1].value)
     src = as_array(args[2].value) if len(args) > 2 else rng
     vals = []
     for i, v in enumerate(rng.data):
@@ -358,14 +362,14 @@ def _averageif(args, ctx):
     return mean(vals)
 
 
-@fn("AVERAGEIFS", 3, VAR, ST, (False, False, True), "AVERAGEIFS(average_range, criteria_range1, criteria1, …)", "Returns the average of all cells that meet multiple criteria.")
+@fn("AVERAGEIFS", 3, VAR, ST, (False, False, True), "AVERAGEIFS(average_range, criteria_range1, criteria1, …)", "Returns the average of all cells that meet multiple criteria.", repeat=2)
 def _averageifs(args, ctx):
     from .math_fns import ifs_values
 
     return mean(ifs_values(args, 0))
 
 
-@fn("MINIFS", 3, VAR, ST, (False, False, True), "MINIFS(min_range, criteria_range1, criteria1, …)", "Returns the minimum value among cells specified by a given set of conditions.")
+@fn("MINIFS", 3, VAR, ST, (False, False, True), "MINIFS(min_range, criteria_range1, criteria1, …)", "Returns the minimum value among cells specified by a given set of conditions.", repeat=2)
 def _minifs(args, ctx):
     from .math_fns import ifs_values
 
@@ -373,7 +377,7 @@ def _minifs(args, ctx):
     return min(v) if v else 0.0
 
 
-@fn("MAXIFS", 3, VAR, ST, (False, False, True), "MAXIFS(max_range, criteria_range1, criteria1, …)", "Returns the maximum value among cells specified by a given set of conditions.")
+@fn("MAXIFS", 3, VAR, ST, (False, False, True), "MAXIFS(max_range, criteria_range1, criteria1, …)", "Returns the maximum value among cells specified by a given set of conditions.", repeat=2)
 def _maxifs(args, ctx):
     from .math_fns import ifs_values
 
@@ -1436,7 +1440,9 @@ def _fisherinv(args, ctx):
 @fn("PROB", 3, 4, ST, (False, False, True, True), "PROB(x_range, prob_range, lower_limit, [upper_limit])", "Returns the probability that values in a range are between two limits.")
 def _prob(args, ctx):
     xs, ps = paired_numbers(args[0].value, args[1].value)
-    if any(p < 0 or p > 1 for p in ps) or abs(math.fsum(ps) - 1) > 1e-9:
+    # Excel checks only that the probabilities add up to 1 (to 15 digits): 0 and even -0.1 with
+    # 1.1 pass, 1.00000000000001 doesn't (Excel 16 for Mac).
+    if abs(math.fsum(ps) - 1) > 5e-15:
         raise XlError(CellError.NUM)
     lo = num(args, 2)
     hi = num(args, 3) if has(args, 3) else lo

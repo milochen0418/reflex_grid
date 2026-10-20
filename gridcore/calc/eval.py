@@ -12,7 +12,7 @@ import math
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef, col_to_letters
-from ..core.value import Array, CellError, Value, XlError, compare, scalar, to_bool, to_number, to_text
+from ..core.value import Array, CellError, Value, XlError, compare, scalar, to_bool, to_number, to_number_in, to_text
 from ..formula import (
     ArrayLit,
     Binary,
@@ -42,6 +42,10 @@ MAX_CELLS = 16_000_000
 # for data to come) stop at the sheet's used range.
 FULL_SIZE_CELLS = 16_384
 MAX_DEPTH = 400
+# The argument of GROUPBY and PIVOTBY that takes a function (a worksheet function by its name).
+_FUNCTION_ARG = {"GROUPBY": 2, "PIVOTBY": 3}
+# Operators whose left-nested chains are evaluated in a loop (reference operators keep recursing).
+_CHAINED = frozenset(("+", "-", "*", "/", "^", "&", "=", "<>", "<", ">", "<=", ">="))
 
 
 # Worksheet functions defined outside the function library (VBA Functions of the workbook's
@@ -384,11 +388,12 @@ class Evaluator:
                 return x
             return scalar(x)
         v = self.value(e.expr)
+        sys = self.host.wb.date_system
         if op == "-":
-            return _map_unary(v, lambda n: -n, False)
+            return _map_unary(v, lambda n: -n, False, sys)
         if op == "+":
-            return _map_unary(v, lambda n: n, True)
-        return _map_unary(v, lambda n: n / 100.0, False)
+            return _map_unary(v, lambda n: n, True, sys)
+        return _map_unary(v, lambda n: n / 100.0, False, sys)
 
     def implicit_intersect(self, a: Area) -> Optional[Tuple[int, int]]:
         r = a.rng
@@ -445,7 +450,20 @@ class Evaluator:
             if isinstance(y, CellError):
                 return y
             return CellError.VALUE
-        return binary_values(op, self.value(e.left), self.value(e.right))
+        sys = self.host.wb.date_system
+        if op in _CHAINED and isinstance(e.left, Binary) and e.left.op in _CHAINED:
+            # A long chain such as A1+A2+…+A2000 nests one level per operator: its left spine is
+            # walked in a loop, so it stays within the depth limit as in Excel (8,192 characters).
+            chain = []
+            x: Expr = e
+            while isinstance(x, Binary) and x.op in _CHAINED:
+                chain.append(x)
+                x = x.left
+            acc = self.value(x)
+            for b in reversed(chain):
+                acc = binary_values(b.op, acc, self.value(b.right), sys)
+            return acc
+        return binary_values(op, self.value(e.left), self.value(e.right), sys)
 
     # ------------------------------------------------------------ calls
 
@@ -484,7 +502,12 @@ class Evaluator:
         evaluated: List[Arg] = []
         criteria_shape = None
         resizes = len(args) == 3 and name in ("SUMIF", "AVERAGEIF")
+        fpos = _FUNCTION_ARG.get(name)
         for i, a in enumerate(args):
+            if i == fpos and isinstance(a, Name) and self.is_function_name(a.name):
+                # GROUPBY(…, SUM): the function by its name.
+                evaluated.append(Arg(a.name.upper(), False))
+                continue
             ev = self.eval(a)
             if resizes:
                 if i == 0:
@@ -565,7 +588,10 @@ class Evaluator:
         return _agg_value(name, self.area_value(a), True)
 
     def apply_lambda(self, l: Lambda, args: Sequence[Expr]):
-        if len(args) > len(l.params):
+        # One argument position per parameter: ``(1,)`` leaves the second omitted, ``(1)`` is
+        # #VALUE! (Excel); ``f()`` of a one-parameter LAMBDA counts as one empty position.
+        n = len(args)
+        if n > len(l.params) or (n < len(l.params) and not (n == 0 and len(l.params) == 1)):
             return CellError.VALUE
         bound = []
         for i, p in enumerate(l.params):
@@ -584,11 +610,25 @@ class Evaluator:
         finally:
             self.env = saved
 
-    def lambda_arg(self, e: Optional[Expr]) -> Optional[Lambda]:
+    def lambda_arg(self, e: Optional[Expr], arity: int = 1) -> Optional[Lambda]:
+        """The function argument of MAP, REDUCE, BYROW…: a LAMBDA, or a worksheet function by its
+        name (``BYROW(A1:B9, SUM)``) taking ``arity`` arguments."""
         if e is None:
             return None
         v = self.eval(e)
-        return v if isinstance(v, Lambda) else None
+        if isinstance(v, Lambda):
+            return v
+        if isinstance(e, Name) and self.is_function_name(e.name):
+            params = [f"\x00{i}" for i in range(arity)]
+            return Lambda(params, Call(e.name.upper(), tuple(Name(p) for p in params)), [])
+        return None
+
+    def is_function_name(self, n: str) -> bool:
+        """``n`` names a worksheet function, and no LET variable or defined name."""
+        nl = n.lower()
+        if "!" in n or any(k.lower() == nl for k, _ in self.env) or self.host.wb.name(n, self.sheet) is not None:
+            return False
+        return is_worksheet_function(n)
 
     def trim_lines(self, a: Area) -> RangeRef:
         if a.rng.is_full_cols() or a.rng.is_full_rows():
@@ -878,6 +918,7 @@ def _sf_indirect(ev: Evaluator, name: str, args):
             a1 = to_bool(scalar(ev.value(args[1])))
         except XlError:
             a1 = True
+    conv = None
     if not a1:
         conv = r1c1_to_a1(t, ev.at)
         if conv is not None:
@@ -885,6 +926,9 @@ def _sf_indirect(ev: Evaluator, name: str, args):
     try:
         e = parse(t)
     except ParseError:
+        return CellError.REF
+    if isinstance(e, Ref) and not a1 and conv is None:
+        # A1-style text when R1C1 is asked for; a defined name still resolves (Excel 365).
         return CellError.REF
     if isinstance(e, (Ref, Name, StructRef)):
         r = ev.eval(e)
@@ -942,7 +986,10 @@ def _index_one(ev: Evaluator, src, row: int, col: int, area_n: int, two_args: bo
     if row < 0 or col < 0:
         return CellError.VALUE
     if isinstance(src, RefVal):
-        idx = max(area_n - 1, 0)
+        if area_n < 1:
+            # An area number below 1 (0.5 counts as 0) is #VALUE!; past the last area, #REF! (Excel).
+            return CellError.VALUE
+        idx = area_n - 1
         if idx >= len(src.areas):
             return CellError.REF
         a = src.areas[idx]
@@ -1086,7 +1133,7 @@ def _sf_trimrange(ev: Evaluator, name: str, args):
 def _sf_subtotal(ev: Evaluator, name: str, args):
     from ..functions.stat import aggregate_values, aggregate_values_k
 
-    if len(args) < 2:
+    if len(args) < (3 if name == "AGGREGATE" else 2):
         return CellError.VALUE
     try:
         code = int(ev.arg_num(args, 0, 0.0))
@@ -1107,7 +1154,8 @@ def _sf_subtotal(ev: Evaluator, name: str, args):
     skip_hidden = options in (1, 3, 5, 7)
     skip_filtered = name == "SUBTOTAL"
     skip_errors = options in (2, 3, 6, 7)
-    skip_nested = options <= 3
+    # SUBTOTAL leaves out nested SUBTOTAL and AGGREGATE cells whatever its function number.
+    skip_nested = name == "SUBTOTAL" or options <= 3
     values: List[Value] = []
     k = None
     refs = rest
@@ -1137,6 +1185,10 @@ def _sf_subtotal(ev: Evaluator, name: str, args):
                     if skip_errors and isinstance(v, CellError):
                         continue
                     values.append(v)
+        elif name == "SUBTOTAL" or func <= 13:
+            # These take references only: AGGREGATE(9,0,{1,2}) is #VALUE! (Excel refuses such a
+            # SUBTOTAL as it is typed); only the array form (14-19) takes an array.
+            return x if isinstance(x, CellError) else CellError.VALUE
         elif isinstance(x, Array):
             values.extend(v for v in x.data if not (skip_errors and isinstance(v, CellError)))
         elif isinstance(x, Lambda):
@@ -1211,7 +1263,7 @@ def _sf_higher_order(ev: Evaluator, name: str, args):
     if name == "MAP":
         if len(args) < 2:
             return CellError.VALUE
-        l = ev.lambda_arg(args[-1])
+        l = ev.lambda_arg(args[-1], len(args) - 1)
         if l is None:
             return CellError.VALUE
         arrays = [_as_arr(ev.value(a)) for a in args[:-1]]
@@ -1230,7 +1282,7 @@ def _sf_higher_order(ev: Evaluator, name: str, args):
             return CellError.VALUE
         acc = ev.value(args[0])
         arr = _as_arr(ev.value(args[1]))
-        l = ev.lambda_arg(args[2])
+        l = ev.lambda_arg(args[2], 2)
         if l is None or len(l.params) != 2:
             return CellError.VALUE
         scan = []
@@ -1262,7 +1314,7 @@ def _sf_higher_order(ev: Evaluator, name: str, args):
             return x.error
         if rows < 1 or cols < 1 or rows * cols > MAX_CELLS:
             return CellError.VALUE
-        l = ev.lambda_arg(args[2])
+        l = ev.lambda_arg(args[2], 2)
         if l is None or len(l.params) != 2:
             return CellError.VALUE
         out = []
@@ -1395,6 +1447,12 @@ def cell_format_code(code: str) -> str:
     return f"F{decimals(c)}"
 
 
+def is_worksheet_function(name: str) -> bool:
+    """A built-in worksheet function's name (functions are passed by name to GROUPBY, BYROW…)."""
+    u = name.upper()
+    return freg.lookup(u) is not None or u in _SPECIAL
+
+
 def r1c1_to_a1(s: str, at: Tuple[int, int]) -> Optional[str]:
     """Converts an R1C1 reference text to A1 (for INDIRECT(…, FALSE))."""
     if "!" in s:
@@ -1447,15 +1505,15 @@ def r1c1_to_a1(s: str, at: Tuple[int, int]) -> Optional[str]:
 # ------------------------------------------------------------------ operators
 
 
-def _map_unary(v: Value, f: Callable[[float], float], plus: bool) -> Value:
+def _map_unary(v: Value, f: Callable[[float], float], plus: bool, sys=None) -> Value:
     if isinstance(v, Array):
-        return Array(v.rows, v.cols, [_map_unary(x, f, plus) for x in v.data])
+        return Array(v.rows, v.cols, [_map_unary(x, f, plus, sys) for x in v.data])
     if isinstance(v, CellError):
         return v
     if plus and isinstance(v, str):
         return v
     try:
-        n = f(to_number(v))
+        n = f(to_number_in(v, sys))
     except XlError as x:
         return x.error
     if not math.isfinite(n):
@@ -1501,26 +1559,27 @@ def zip3(c: Array, t: Value, f: Value, g) -> Value:
     return Array(rows, cols, data)
 
 
-def _num_or_err(v: Value):
+def _num_or_err(v: Value, sys=None):
     t = type(v)
     if t is float:
         return v
     try:
-        return to_number(v)
+        return to_number_in(v, sys)
     except XlError as x:
         return x.error
 
 
-def binary_scalar(op: str, a: Value, b: Value) -> Value:
+def binary_scalar(op: str, a: Value, b: Value, sys=None) -> Value:
+    """``a op b`` for scalars; ``sys`` is the date system date text is read in."""
     if isinstance(a, CellError):
         return a
     if isinstance(b, CellError):
         return b
     if op in ("+", "-", "*", "/", "^"):
-        x = a if type(a) is float else _num_or_err(a)
+        x = a if type(a) is float else _num_or_err(a, sys)
         if isinstance(x, CellError):
             return x
-        y = b if type(b) is float else _num_or_err(b)
+        y = b if type(b) is float else _num_or_err(b, sys)
         if isinstance(y, CellError):
             return y
         if op == "+":
@@ -1569,10 +1628,10 @@ def binary_scalar(op: str, a: Value, b: Value) -> Value:
     return CellError.VALUE
 
 
-def binary_values(op: str, x: Value, y: Value) -> Value:
+def binary_values(op: str, x: Value, y: Value, sys=None) -> Value:
     if not isinstance(x, Array) and not isinstance(y, Array):
-        return binary_scalar(op, x, y)
-    return zip2(x, y, lambda a, b: binary_scalar(op, a, b))
+        return binary_scalar(op, x, y, sys)
+    return zip2(x, y, lambda a, b: binary_scalar(op, a, b, sys))
 
 
 def _ev_shape(ev) -> Optional[Tuple[int, int]]:

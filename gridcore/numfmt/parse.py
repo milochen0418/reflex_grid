@@ -156,6 +156,128 @@ def _starts_with_ci(cs: str, i: int, pat: str) -> bool:
     return cs[i:i + len(pat)].lower() == pat
 
 
+# ---------------------------------------------------------------- what Excel accepts
+
+MAX_CODE_LEN = 255
+
+
+def _bracket_kind(content: str) -> Optional[str]:
+    """What a ``[…]`` tag is to Excel: colour, condition, currency/locale, DBNum, elapsed time, or
+    None when Excel refuses it ([xyz], [0], [Purple], [Color57], [ENG], [d], [])."""
+    lc = content.lower()
+    if lc in COLORS or (lc.startswith("color") and lc[5:].strip().isdigit() and 1 <= int(lc[5:].strip()) <= 56):
+        return "color"
+    if lc[:1] in ("<", ">", "="):
+        return "cond" if _parse_cond(lc) is not None else None
+    if lc.startswith("$"):
+        return "locale"
+    if lc in ("dbnum1", "dbnum2", "dbnum3", "dbnum4"):
+        return "dbnum"
+    if lc and lc[0] in "hms" and all(ch == lc[0] for ch in lc):
+        return "elapsed"
+    return None
+
+
+def _section_ok(toks: List[tuple]) -> bool:
+    kinds = [t[0] for t in toks]
+    if kinds.count("color") > 1 or kinds.count("elapsed") > 1 or kinds.count("exp") > 1:
+        return False
+    digits = [i for i, k in enumerate(kinds) if k == "digit"]
+    is_date = "date" in kinds or "elapsed" in kinds
+    if "exp" in kinds:
+        e = kinds.index("exp")
+        if "digit" not in kinds[:e] or "digit" not in kinds[e + 1:]:
+            return False
+    if "at" in kinds and (digits or is_date or "exp" in kinds):
+        return False
+    if "general" in kinds and digits:
+        return False
+    if is_date:
+        if "exp" in kinds or "percent" in kinds:
+            return False
+        for i in digits:
+            # Only 0s straight after a point: the fraction of a second (ss.00, hh.0).
+            j = i - 1
+            while j >= 0 and toks[j] == ("digit", "0"):
+                j -= 1
+            if toks[i][1] != "0" or j < 0 or kinds[j] != "point":
+                return False
+    return True
+
+
+def validate(code: str) -> bool:
+    """Whether Excel takes ``code`` as a number format (Format Cells, TEXT), as Excel 16 for Mac
+    answers: at most 255 characters and 4 sections; every ``[`` closed and a tag it knows; nothing
+    left dangling after ``\\ _ *`` or an open quote; a lowercase ``e``, or an ``E`` without its
+    sign, is the era year, a date code; digit placeholders don't mix with dates (but for 0s after a
+    point, the fraction of a second), nor with ``@`` or ``General``; one exponent, with digits on
+    both sides. (Displaying a cell never fails: :func:`tokenize` reads any code.)"""
+    if len(code) > MAX_CODE_LEN:
+        return False
+    sections: List[List[tuple]] = []
+    toks: List[tuple] = []
+    i, n = 0, len(code)
+    while i < n:
+        c = code[i]
+        if c == '"':
+            j = code.find('"', i + 1)
+            if j < 0:
+                return False
+            toks.append(("lit",))
+            i = j + 1
+            continue
+        if c in "\\_*":
+            if i + 1 >= n:
+                return False
+            toks.append(("lit",))
+            i += 2
+            continue
+        if c == "[":
+            j = code.find("]", i + 1)
+            if j < 0:
+                return False
+            kind = _bracket_kind(code[i + 1:j])
+            if kind is None:
+                return False
+            toks.append((kind,))
+            i = j + 1
+            continue
+        if c == ";":
+            sections.append(toks)
+            toks = []
+            if len(sections) >= MAX_SECTIONS:
+                return False
+            i += 1
+            continue
+        if c in "0#?":
+            toks.append(("digit", c))
+        elif c == ".":
+            toks.append(("point",))
+        elif c == "%":
+            toks.append(("percent",))
+        elif c == "@":
+            toks.append(("at",))
+        elif c == "E" and i + 1 < n and code[i + 1] in "+-":
+            toks.append(("exp",))
+            i += 2
+            continue
+        elif c in "gG" and _starts_with_ci(code, i, "general"):
+            toks.append(("general",))
+            i += 7
+            continue
+        elif c in "aA" and (_starts_with_ci(code, i, "am/pm") or _starts_with_ci(code, i, "a/p")):
+            toks.append(("lit",))  # AM/PM goes with numbers too ("0 AM/PM")
+            i += 5 if _starts_with_ci(code, i, "am/pm") else 3
+            continue
+        elif c in "yYmMdDhHsSeE":
+            toks.append(("date",))
+        else:
+            toks.append(("lit",))
+        i += 1
+    sections.append(toks)
+    return all(_section_ok(t) for t in sections)
+
+
 class _Raw:
     __slots__ = ("toks", "color", "cond", "currency")
 

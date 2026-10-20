@@ -5,19 +5,21 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Tuple
 
-from ..core.date import MONTHS, WEEKDAYS, DateSystem, datetime_from_serial
+from ..core.date import MONTHS, WEEKDAYS, DateSystem, datetime_from_serial, max_serial
 from .decimal import decimal_digits, fixed, fixed_from_digits, format_general_fit
 from .parse import Section, is_calendar, literal_text
 
 
 class Out:
-    """Text being built plus the first repeat-fill position."""
+    """Text being built plus the first repeat-fill position; ``zero`` is set when every digit a
+    number section shows is 0 (a negative number then shows no minus sign)."""
 
-    __slots__ = ("text", "fill")
+    __slots__ = ("text", "fill", "zero")
 
     def __init__(self) -> None:
         self.text = ""
         self.fill: Optional[Tuple[str, int]] = None
+        self.zero = False
 
     def push(self, s: str) -> None:
         self.text += s
@@ -67,7 +69,7 @@ def _pad(n: int, w: int) -> str:
 
 def render_date(sec: Section, v: float, sys: DateSystem) -> Optional[Out]:
     """Renders a date/time. ``None`` when the serial is outside the supported range."""
-    if not math.isfinite(v) or not 0.0 <= v < 2_958_466.0:
+    if not math.isfinite(v) or not 0.0 <= v < max_serial(sys) + 1.0:
         return None
     sub_digits = 0
     for t in sec.toks:
@@ -233,9 +235,10 @@ def _digit_indices(toks: List[tuple], lo: int, hi: int) -> List[int]:
 def render_number(sec: Section, v: float) -> Out:
     """Renders a non-negative number through a number section."""
     x = abs(v)
-    if sec.percent > 0:
+    # In a scientific section a % or a trailing comma doesn't scale the number (Excel).
+    if sec.percent > 0 and not sec.exp:
         x *= 100.0 ** min(sec.percent, 20)
-    if sec.scale > 0:
+    if sec.scale > 0 and not sec.exp:
         x /= 1000.0 ** min(sec.scale, 110)
     if not math.isfinite(x):
         x = 1.7976931348623157e308
@@ -244,6 +247,7 @@ def render_number(sec: Section, v: float) -> Out:
     pieces = [""] * n
     before = [""] * (n + 1)
     lits: List[Optional[str]] = []
+    zero = False
     if sec.fraction:
         lits = [None] * n
         _render_fraction(sec, x, pieces, lits)
@@ -258,7 +262,9 @@ def render_number(sec: Section, v: float) -> Out:
             exp_idx = _digit_indices(toks, exp + 1, n)
             step = max(len(int_idx), 1)
             if x == 0.0:
-                e, int_s, frac_s = 0, "", "0" * len(frac_idx)
+                # Zero shows a 0 in each integer placeholder of an all-# mantissa (Excel).
+                hashes = not any(toks[i] == ("digit", "0") for i in int_idx)
+                e, int_s, frac_s = 0, "0" * len(int_idx) if hashes else "", "0" * len(frac_idx)
             else:
                 digits, xe = decimal_digits(x)
                 e = xe - (xe % step)
@@ -271,19 +277,18 @@ def render_number(sec: Section, v: float) -> Out:
             if not int_s and all(ch == "0" for ch in frac_s):
                 e = 0
             head = "E" if upper else "e"
-            if e < 0:
-                head += "-"
-            elif plus:
-                head += "+"
+            sign = "-" if e < 0 else ("+" if plus else "")
             width = min(sum(1 for i in exp_idx if toks[i] == ("digit", "0")), 20)
             edigits = str(abs(e)).zfill(width)
             if exp_idx:
+                # The sign goes before the exponent digits, after a literal that follows the E.
                 pieces[exp] = head
-                pieces[exp_idx[0]] = edigits
+                pieces[exp_idx[0]] = sign + edigits
             else:
-                pieces[exp] = head + edigits
+                pieces[exp] = head + sign + edigits
         else:
             int_s, frac_s = fixed(x, len(frac_idx))
+        zero = exp is None and not any(c in "123456789" for c in int_s + frac_s)
         _fill_int(toks, int_idx, int_s, sec.thousands, False, pieces)
         if not int_idx and int_s:
             p = point if point is not None else exp
@@ -293,6 +298,7 @@ def render_number(sec: Section, v: float) -> Out:
         if point is not None:
             pieces[point] = "."
     out = Out()
+    out.zero = zero
     for i, t in enumerate(toks):
         out.push(before[i])
         k = t[0]

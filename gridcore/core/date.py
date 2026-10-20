@@ -112,14 +112,24 @@ def serial_from_ymd(sys: DateSystem, year: int, month: int, day: int) -> Optiona
     else:
         first = first - UNIX_1904_01_01
     serial = first + day - 1
-    if not 0 <= serial <= 2_958_465:
+    if not 0 <= serial <= max_serial(sys):
         return None
     return float(serial)
 
 
+def serial_in_system(sys: DateSystem, serial_1900: float) -> float:
+    """A 1900-system serial (what the clock gives) in the date system ``sys``."""
+    return serial_1900 - 1462 if sys is DateSystem.D1904 else serial_1900
+
+
+def max_serial(sys: DateSystem) -> int:
+    """The serial of 9999-12-31, the last date Excel shows."""
+    return 2_958_465 if sys is DateSystem.D1900 else 2_957_003
+
+
 def datetime_from_serial(sys: DateSystem, serial: float) -> Optional[DateTime]:
     """Date/time from a serial. ``None`` for negative or too-large serials."""
-    if not isinstance(serial, (int, float)) or not math.isfinite(serial) or not 0.0 <= serial < 2_958_466.0:
+    if not isinstance(serial, (int, float)) or not math.isfinite(serial) or not 0.0 <= serial < max_serial(sys) + 1.0:
         return None
     day = math.floor(serial)
     frac_ms = int(math.floor((serial - day) * 86_400_000.0 + 0.5))

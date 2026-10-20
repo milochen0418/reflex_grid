@@ -157,6 +157,8 @@ def udf(ev, name: str, args: Sequence[Any]) -> Any:
     if p is None or p.unreadable:
         return None
     rt = runtime_for(p)
+    if name.upper().startswith("_XLUDF."):
+        name = name[7:]
     proc = rt.udf(name)
     if proc is None:
         return None

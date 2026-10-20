@@ -17,7 +17,7 @@ import random
 import re
 import secrets
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import reflex as rx
 
@@ -62,6 +62,18 @@ _EVENT_ARGS = {
     "KeyPress": "ByVal KeyAscii As MSForms.ReturnInteger",
     "QueryClose": "Cancel As Integer, CloseMode As Integer",
 }
+
+
+def _object_ids(s: Session) -> Set[int]:
+    sh = s.doc().sheet
+    return {o.id for o in sh.charts} | {o.id for o in sh.images}
+
+
+def _select_new_object(s: Session, before: Set[int]) -> Optional[Dict[str, Any]]:
+    """``ui.selectObject`` after this tab inserted a chart or picture: the grid selects it, so
+    Delete then removes the object, not the data under the selection (as in Excel)."""
+    new = _object_ids(s) - before
+    return {"selectObject": {"n": secrets.token_hex(4), "id": min(new)}} if new else None
 
 
 def _rng(g) -> str:
@@ -696,12 +708,13 @@ class GridState(rx.State):
             return None
         out = None
         with book.act(view) as s:
+            before = _object_ids(s)
             try:
                 out = self._command(entry, cid, dict(params or {}))
             except EngineError as ex:
                 out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
             pending = self._macro_pending(s)
-            self._refresh(entry, book, view)
+            self._refresh(entry, book, view, None, _select_new_object(s, before) if cid in ("insert.chart", "insert.picture") else None)
         self._publish(room, book)
         self._focus()
         return _both(out, pending)
@@ -905,13 +918,14 @@ class GridState(rx.State):
         out = None
         pictures = [(await f.read(), f.name or f.filename or "picture") for f in files[:1]]
         with book.act(view) as s:
+            before = _object_ids(s)
             for data, name in pictures:
                 try:
                     self._run(s, "insert.picture", {"data": data, "name": name})
                 except EngineError as ex:
                     out = rx.toast.error(str(ex), position="bottom-center")
             self.dialog = ""
-            self._refresh(entry, book, view)
+            self._refresh(entry, book, view, None, _select_new_object(s, before))
         self._publish(room, book)
         self._focus()
         return out
@@ -1210,6 +1224,7 @@ class GridState(rx.State):
         out = None
         failed = False
         with book.act(view) as s:
+            before = _object_ids(s)
             try:
                 out, keep_open = self._dialog_action(s, name, action, d)
             except EngineError as ex:
@@ -1222,7 +1237,7 @@ class GridState(rx.State):
                     self.dlg_error = ""
                     self._focus()
             pending = self._macro_pending(s)
-            self._refresh(entry, book, view)
+            self._refresh(entry, book, view, None, _select_new_object(s, before) if name == "insertChart" else None)
         self._publish(room, book)
         return _both(None if failed else out, pending)
 

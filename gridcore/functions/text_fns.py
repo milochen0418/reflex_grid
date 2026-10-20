@@ -8,9 +8,9 @@ import unicodedata
 import urllib.parse
 from typing import List, Optional
 
-from ..core.parse import parse_number_text
+from ..core.parse import parse_number_text_in
 from ..core.value import Array, CellError, Value, XlError, number_to_text, scalar, to_text
-from .criteria import wildcard_find
+from .criteria import fold, wildcard_find
 from .registry import MAX_TEXT, A, Arg, Ctx, S, VAR, fn
 from .util import array_val, as_array, boolean, has, int_, num, opt_int, opt_num, round_half_away, text
 
@@ -110,14 +110,29 @@ for _n, _t in (("LEFTB", "LEFT"), ("RIGHTB", "RIGHT"), ("MIDB", "MID")):
     _alias(_n, _t)
 
 
+# Excel changes the case of each letter into one letter (Excel 16 for Mac): UPPER("straße") is
+# STRAßE, LOWER("İ") is i, and a letter whose upper case is two letters (ŉ, ﬀ) stays as it is.
+def _upper1(c: str) -> str:
+    u = c.upper()
+    return u if len(u) == 1 else c
+
+
+def _lower1(c: str) -> str:
+    return c.lower()[0]
+
+
 @fn("LOWER", 1, 1, T, S, "LOWER(text)", "Converts text to lowercase.")
 def _lower(args, ctx):
-    return text(args, 0).lower()
+    t = text(args, 0)
+    low = t.lower()
+    return low if len(low) == len(t) else "".join(_lower1(c) for c in t)
 
 
 @fn("UPPER", 1, 1, T, S, "UPPER(text)", "Converts text to uppercase.")
 def _upper(args, ctx):
-    return text(args, 0).upper()
+    t = text(args, 0)
+    u = t.upper()
+    return u if len(u) == len(t) else "".join(_upper1(c) for c in t)
 
 
 @fn("PROPER", 1, 1, T, S, "PROPER(text)", "Capitalizes the first letter in each word of a text value.")
@@ -127,7 +142,7 @@ def _proper(args, ctx):
     prev_letter = False
     for c in t:
         if c.isalpha():
-            out.append(c.lower() if prev_letter else c.upper())
+            out.append(_lower1(c) if prev_letter else _upper1(c))
             prev_letter = True
         else:
             out.append(c)
@@ -193,7 +208,8 @@ def _rept(args, ctx):
 def _find(args, ctx):
     needle, hay = text(args, 0), text(args, 1)
     start = int(opt_num(args, 2, 1.0)) if has(args, 2) else 1
-    if start < 1 or start > len(hay) + (1 if needle == "" else 0):
+    # FIND may start just past the end (FIND("","abc",4) is 4); SEARCH may not (Excel 16 for Mac).
+    if start < 1 or start > len(hay) + 1:
         raise XlError(CellError.VALUE)
     i = hay.find(needle, start - 1)
     if i < 0:
@@ -205,7 +221,8 @@ def _find(args, ctx):
 def _search(args, ctx):
     needle, hay = text(args, 0), text(args, 1)
     start = int(opt_num(args, 2, 1.0)) if has(args, 2) else 1
-    if start < 1 or start > len(hay) + (1 if needle == "" else 0):
+    # Not past the end, so nothing is found in empty text: SEARCH("","") is #VALUE!.
+    if start < 1 or start > len(hay):
         raise XlError(CellError.VALUE)
     i = wildcard_find(needle, hay, start - 1)
     if i is None:
@@ -268,7 +285,7 @@ def _value(args, ctx):
         raise XlError(CellError.VALUE)
     if v is None:
         return 0.0
-    n = parse_number_text(to_text(v))
+    n = parse_number_text_in(to_text(v), ctx.date_system)
     if n is None:
         raise XlError(CellError.VALUE)
     return n
@@ -332,6 +349,10 @@ def _dollar(args, ctx):
     return f"(${body})" if round_half_away(n, d) < 0 else f"${body}"
 
 
+# An older name of DOLLAR that Excel still calculates.
+_alias2("USDOLLAR", "DOLLAR", None, "Compatibility")
+
+
 @fn("T", 1, 1, T, S, "T(value)", "Converts its arguments to text.")
 def _t(args, ctx):
     v = scalar(args[0].value)
@@ -352,14 +373,32 @@ def _delims(v: Value) -> List[str]:
 
 def _find_delim(t: str, delims: List[str], start: int, nocase: bool) -> Optional[tuple]:
     best = None
-    hay = t.lower() if nocase else t
+    hay = fold(t) if nocase else t
     for d in delims:
         if d == "":
             continue
-        i = hay.find(d.lower() if nocase else d, start)
+        i = hay.find(fold(d) if nocase else d, start)
         if i >= 0 and (best is None or i < best[0]):
             best = (i, len(d))
     return best
+
+
+def _split_points_from_end(t: str, delims: List[str], nocase: bool) -> List[tuple]:
+    """The delimiters of ``t`` found searching from its end, as a negative instance_num of
+    TEXTBEFORE/TEXTAFTER does (``aa`` in ``aaa`` is the last two letters), in text order."""
+    hay = fold(t) if nocase else t
+    ds = sorted({fold(d) if nocase else d for d in delims if d != ""}, key=len, reverse=True)
+    pts = []
+    end = len(hay)
+    while end > 0:
+        d = next((d for d in ds if len(d) <= end and hay.startswith(d, end - len(d))), None)
+        if d is None:
+            end -= 1
+            continue
+        pts.append((end - len(d), len(d)))
+        end -= len(d)
+    pts.reverse()
+    return pts
 
 
 def _text_split_points(t: str, delims: List[str], nocase: bool) -> List[tuple]:
@@ -384,7 +423,7 @@ def _before_after(args, after: bool):
         raise XlError(CellError.VALUE)
     if all(d == "" for d in delims):
         return t if (n > 0) != after else ""
-    pts = _text_split_points(t, delims, nocase)
+    pts = _text_split_points(t, delims, nocase) if n > 0 else _split_points_from_end(t, delims, nocase)
     if match_end:
         if n > 0:
             pts = pts + [(len(t), 0)]

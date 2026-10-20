@@ -238,9 +238,10 @@ def read_xlsx(data: bytes) -> Tuple[Workbook, List[str]]:
         except XlsxError:
             x = None
         if x is not None:
+            # Properties keep their text as written, spaces at the edges too.
             def get(n: str) -> str:
                 c = child(x, n)
-                return (c.text or "").strip() if c is not None else ""
+                return (c.text or "") if c is not None else ""
 
             wb.props.title = get("title")
             wb.props.subject = get("subject")
@@ -255,7 +256,7 @@ def read_xlsx(data: bytes) -> Tuple[Workbook, List[str]]:
             x = None
         if x is not None:
             c = child(x, "Company")
-            wb.props.company = (c.text or "").strip() if c is not None else ""
+            wb.props.company = (c.text or "") if c is not None else ""
     vr = _find_rel(wb_rels, "vbaProject")
     if vr is not None:
         _read_vba(cx, wb, vr.target)

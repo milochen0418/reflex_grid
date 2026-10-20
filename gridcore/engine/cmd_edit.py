@@ -140,6 +140,10 @@ def cell_set(s: Session, p: Dict[str, Any]):
     arr = array_at(sh, at)
     if arr is not None and not arr.is_single() and not array:
         raise EngineError("You can't change part of an array.")
+    old = sh.cell(at)
+    if text == "" and not array and (old is None or (old.value is None and old.formula is None)):
+        # Nothing to clear (Backspace, then Enter): no edit, so no empty undo step.
+        return {"cell": a1(*at), "value": display(sh.value(at))}
 
     def f(ctx):
         wb = ctx.wb
@@ -608,7 +612,8 @@ def undo(s: Session, p: Dict[str, Any]):
         if not d.undo:
             break
         h = d.undo.pop()
-        d.redo.append(HistoryEntry(h.label, d.wb, d.selection.copy(), d.wb.active_sheet))
+        # Redo selects the cells of the step again, not wherever the selection was at undo time.
+        d.redo.append(HistoryEntry(h.label, d.wb, h.selection.copy(), d.wb.active_sheet))
         d.wb = h.wb
         d.selection = h.selection
         label = h.label
@@ -627,7 +632,7 @@ def redo(s: Session, p: Dict[str, Any]):
         if not d.redo:
             break
         h = d.redo.pop()
-        d.undo.append(HistoryEntry(h.label, d.wb, d.selection.copy(), d.wb.active_sheet))
+        d.undo.append(HistoryEntry(h.label, d.wb, h.selection.copy(), d.wb.active_sheet))
         d.wb = h.wb
         d.selection = h.selection
         label = h.label
@@ -1162,6 +1167,39 @@ def auto_fill(s: Session, p: Dict[str, Any]):
 
     edit(s, f)
     return {"range": target.a1()}
+
+
+@command("edit.autoFillDown", "AutoFill to Adjacent Data", params="{range?} (double-clicking the fill handle)")
+def auto_fill_down(s: Session, p: Dict[str, Any]):
+    """Double-clicking the fill handle: AutoFill the selection down as far as the longer run of data
+    under it in the columns either side goes, stopping above cells that hold something (Excel 16
+    for Mac, double-clicked)."""
+    d = s.doc()
+    si = param_sheet(s, p)
+    src = param_range(s, p) if p.get("range") else d.selection.current()
+    sh = d.wb.sheet(si)
+
+    def has(r: int, c: int) -> bool:
+        cell = sh.cell((r, c))
+        return cell is not None and (cell.value is not None or cell.formula is not None)
+
+    end = None
+    for c in (src.c0 - 1, src.c1 + 1):
+        if 0 <= c < MAX_COLS and src.r1 + 1 < MAX_ROWS and has(src.r1 + 1, c):
+            e = src.r1 + 1
+            while e + 1 < MAX_ROWS and has(e + 1, c):
+                e += 1
+            end = e if end is None else max(end, e)
+    if end is None:
+        return {"range": src.a1()}
+    for r in range(src.r1 + 1, end + 1):
+        if any(has(r, c) for c in range(src.c0, src.c1 + 1)):
+            end = r - 1
+            break
+    if end <= src.r1:
+        return {"range": src.a1()}
+    q = {k: p[k] for k in ("sheet",) if p.get(k)}
+    return auto_fill(s, {**q, "source": src.a1(), "target": RangeRef(src.r0, src.c0, end, src.c1).a1()})
 
 
 @command("edit.fillSeries", "Series…", menu=("Home", "Editing", "Fill"), params="{range?, rows?: bool, type?: linear|growth|date, step?: 1, stop?, unit?: day|weekday|month|year}")
