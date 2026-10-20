@@ -197,7 +197,8 @@ What people on a workbook share, and what is their own:
 - **Saving**: workbooks are saved on the server as `.xlsx` a moment after each change ("All changes saved").
   They live in `REFLEX_GRID_HOME` (default `~/Library/Application Support/reflex_grid` on macOS,
   `~/.local/share/reflex_grid` on Linux), as `books/<id>.xlsx` plus `books/<id>.json` (title, creator,
-  times); a workbook with macros is `books/<id>.xlsm`.
+  times); a workbook with macros is `books/<id>.xlsm`. Installed from the re_ddns App Store, they are saved
+  in its shared collection instead ([below](#with-re_ddns-sign-in-and-calls)).
 
 ## With re_ddns: sign-in and calls
 
@@ -215,6 +216,13 @@ install a few apps by hand and they work.
 
 Apps on re_ddns open each other in dialogs through **DDNS Intents** (a call is the intent `call.join`); this
 video explains the idea: [DDNS Intent](https://www.youtube.com/watch?v=Y5YKXsWkrxg).
+
+On re_ddns each workbook is also a file in its shared collection `spreadsheets`: one item per workbook,
+`spreadsheets/by-app/grid/<id>/book.xlsx` (`book.xlsm` with macros) under the host's collections folder
+(`/Users/Shared/re-ddns/collections` by default), saved there as it is edited. Workbooks therefore survive
+reinstalling the app, the App Store's **Storage** page lists them, and other apps given the collection can
+read them. Links and editing together work as without re_ddns; a workbook deleted on the Storage page while
+people are on it is shown to them as deleted.
 
 ## FAQ
 

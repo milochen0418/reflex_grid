@@ -8,6 +8,11 @@ has macros) plus ``<id>.json``
 ``~/.local/share/reflex_grid``) elsewhere: outside the project, so saving never triggers a hot
 reload.
 
+Installed from re_ddns's App Store, the app is given the shared collection ``spreadsheets``
+(re_ddns's Owned Collections) and each book is an item of it instead:
+``<collection>/by-app/<app>/<id>/book.xlsx`` (``book.xlsm`` with macros), with the title,
+creator and sheet names in the item's manifest. See :class:`ItemBookStore`.
+
 An open book is a :class:`Book` (a :class:`gridcore.engine.SharedBook`): everyone on it edits
 the same workbook in memory, and changes are written back ``SAVE_DELAY`` seconds after they
 happen, in a background thread.
@@ -17,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import errno
 import json
 import os
 import re
@@ -25,6 +31,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -33,13 +40,23 @@ from gridcore.engine.samples import SAMPLES, new_sample
 from gridcore.model.workbook import Workbook
 from gridcore.xlsx import write_xlsx
 
+try:  # on re_ddns: the books as items of a shared collection (ItemBookStore)
+    from reflex_ddns_auth.collections import Collection, ItemNotFound
+except ImportError:
+    Collection = ItemNotFound = None
+
 SAVE_DELAY = 1.5
 # Books nobody has had open for this long are saved and dropped from memory.
 IDLE_CLOSE = 15 * 60
 DEFAULT_TITLE = "Untitled workbook"
 MAX_TITLE = 120
+# The App Store gives the app this collection (its catalog entry declares it, and the install sets
+# DDNS_COLLECTIONS_ROOT); every book is then an item of it, of this kind.
+COLLECTION = "spreadsheets"
+KIND = "spreadsheet.workbook"
 
-_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+# Starts with a letter or digit: a book's id is also its item's id in a collection.
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
 # Selection colours of the people on a book (readable on white, distinct from each other);
 # blue last: your own selection is blue.
 COLORS = ["#E8710A", "#188038", "#9334E6", "#D93025", "#E52592", "#12B5CB", "#B06000", "#3949AB", "#00897B", "#1A73E8"]
@@ -64,6 +81,10 @@ def new_id() -> str:
 def clean_title(title: str) -> str:
     title = " ".join(str(title or "").split())[:MAX_TITLE]
     return title or DEFAULT_TITLE
+
+
+class BookGone(EngineError):
+    """The stored book was deleted outside the app (on re_ddns's storage page)."""
 
 
 @dataclass
@@ -120,7 +141,8 @@ class Book(SharedBook):
 
 
 class BookStore:
-    """The books on disk and the ones open in this process."""
+    """The books on disk and the ones open in this process. How books are stored is up to the
+    methods under "files"; :class:`ItemBookStore` keeps them in a shared collection instead."""
 
     def __init__(self, home: Optional[Path] = None):
         self.home = Path(home or os.environ.get("REFLEX_GRID_HOME") or default_home())
@@ -157,6 +179,44 @@ class BookStore:
         self.dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self._json(meta.id), json.dumps(asdict(meta), ensure_ascii=False, indent=1).encode("utf-8"))
 
+    def _read_meta(self, book_id: str) -> Optional[BookMeta]:
+        try:
+            return BookMeta.from_json(json.loads(self._json(book_id).read_text("utf-8")))
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _stored(self) -> List[BookMeta]:
+        """The metadata of every stored book."""
+        out = []
+        try:
+            paths = list(self.dir.glob("*.json"))
+        except OSError:
+            paths = []
+        for p in paths:
+            try:
+                out.append(BookMeta.from_json(json.loads(p.read_text("utf-8"))))
+            except (OSError, ValueError, TypeError):
+                continue
+        return out
+
+    def _read(self, book_id: str) -> Tuple[bytes, str]:
+        """The stored workbook file and its extension (OSError when it is missing)."""
+        path = self._file(book_id)
+        return path.read_bytes(), path.suffix[1:]
+
+    def _write(self, meta: BookMeta, wb: Workbook, data: bytes, new: bool = False) -> None:
+        """Stores a book's workbook file and metadata (``new``: a book not stored before)."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self._store(meta.id, wb, data)
+        self._write_meta(meta)
+
+    def _remove(self, book_id: str) -> None:
+        for p in (self._xlsx(book_id), self._xlsx(book_id, "xlsm"), self._json(book_id)):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
     def meta(self, book_id: str) -> Optional[BookMeta]:
         if not valid_id(book_id):
             return None
@@ -164,28 +224,14 @@ class BookStore:
             book = self._open.get(book_id)
             if book is not None:
                 return book.meta
-        try:
-            return BookMeta.from_json(json.loads(self._json(book_id).read_text("utf-8")))
-        except (OSError, ValueError, TypeError):
-            return None
+        return self._read_meta(book_id)
 
     def exists(self, book_id: str) -> bool:
         return valid_id(book_id) and self._json(book_id).exists()
 
     def list(self) -> List[BookMeta]:
         """Every book, most recently changed first (open ones as they are in memory)."""
-        out: Dict[str, BookMeta] = {}
-        try:
-            paths = list(self.dir.glob("*.json"))
-        except OSError:
-            paths = []
-        for p in paths:
-            try:
-                m = BookMeta.from_json(json.loads(p.read_text("utf-8")))
-            except (OSError, ValueError, TypeError):
-                continue
-            if valid_id(m.id):
-                out[m.id] = m
+        out = {m.id: m for m in self._stored() if valid_id(m.id)}
         with self._lock:
             for book_id, book in self._open.items():
                 if not book.deleted and book_id in out:
@@ -225,9 +271,7 @@ class BookStore:
         )
         data = write_xlsx(doc.wb)
         meta.size = len(data)
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self._store(book_id, doc.wb, data)
-        self._write_meta(meta)
+        self._write(meta, doc.wb, data, new=True)
         return meta
 
     def create_blank(self, creator: Optional[dict] = None, title: str = DEFAULT_TITLE, book_id: str = "") -> BookMeta:
@@ -263,12 +307,11 @@ class BookStore:
                 meta = self.create_blank(creator, book_id=book_id)
                 doc = DocState(Workbook(), meta.title)
             else:
-                path = self._file(book_id)
                 try:
-                    data = path.read_bytes()
+                    data, ext = self._read(book_id)
                 except OSError as e:
                     raise EngineError(f"The workbook file is missing: {e.strerror}")
-                doc = open_bytes(Session(), data, f"{meta.title}{path.suffix}")
+                doc = open_bytes(Session(), data, f"{meta.title}.{ext}")
                 doc.name = meta.title
             doc.saved = doc.wb
             book = Book(doc, meta)
@@ -299,10 +342,22 @@ class BookStore:
             meta.title = title
         meta.updated_at = time.time()
         with self._lock:
-            self._write_meta(meta)
+            try:
+                self._write_meta(meta)
+            except BookGone:
+                self._drop(book_id)
+                if book is not None:
+                    self._notify(book)
+                raise
         return title
 
     def delete(self, book_id: str) -> None:
+        with self._lock:
+            self._drop(book_id)
+            self._remove(book_id)
+
+    def _drop(self, book_id: str) -> Optional[Book]:
+        """Takes a deleted book out of memory for good."""
         with self._lock:
             book = self._open.pop(book_id, None)
             if book is not None:
@@ -311,11 +366,7 @@ class BookStore:
                     if book._timer is not None:
                         book._timer.cancel()
                         book._timer = None
-            for p in (self._xlsx(book_id), self._xlsx(book_id, "xlsm"), self._json(book_id)):
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
+        return book
 
     def file_bytes(self, book_id: str) -> Optional[Tuple[bytes, str]]:
         """The workbook as a file and its extension (xlsx, or xlsm with macros): as it is now
@@ -325,9 +376,8 @@ class BookStore:
             with book.lock:
                 wb = book.doc.wb
             return write_xlsx(wb), file_extension(wb)
-        path = self._file(book_id)
         try:
-            return path.read_bytes(), path.suffix[1:]
+            return self._read(book_id)
         except OSError:
             return None
 
@@ -364,12 +414,15 @@ class BookStore:
             with self._lock:
                 if book.deleted:
                     return False
-                self._store(book.key, wb, data)
                 with book.lock:
                     book.meta.size = len(data)
                     book.meta.sheets = [s.name for s in wb.sheets]
                     meta = BookMeta(**asdict(book.meta))
-                self._write_meta(meta)
+                self._write(meta, wb, data)
+        except BookGone:  # as if deleted from the workbook list: everyone on it is told
+            self._drop(book.key)
+            self._notify(book)
+            return False
         except Exception as e:  # keep the book open and editable; say so in the UI
             with book.lock:
                 book.save_error = str(e) or e.__class__.__name__
@@ -379,13 +432,17 @@ class BookStore:
             book.saved_rev = max(book.saved_rev, rev)
             if book.doc.wb is wb:
                 book.doc.saved = wb
+        self._notify(book)
+        return True
+
+    def _notify(self, book: Book) -> None:
+        """Shows everyone on the book how it is now (on the server's event loop)."""
         hook, loop = self.on_saved, book.loop
         if hook is not None and loop is not None and not loop.is_closed():
             try:
                 asyncio.run_coroutine_threadsafe(hook(book.key), loop)
             except RuntimeError:
                 pass
-        return True
 
     def flush(self) -> None:
         """Saves every open book with unsaved changes (at exit)."""
@@ -414,6 +471,90 @@ class BookStore:
         return closed
 
 
+class ItemBookStore(BookStore):
+    """The books as items of a shared collection (re_ddns's Owned Collections): book ``<id>`` is the
+    item ``spreadsheets:<app>/<id>``, a folder holding ``book.xlsx`` (``book.xlsm`` with macros),
+    with the title, creator and sheet names in its manifest. Every app given the collection reads
+    the workbooks, and the App Store's storage page lists them. A book is published once and then
+    revised in place each time it is saved, so its item always holds the workbook as it is now."""
+
+    def __init__(self, items: Any):
+        super().__init__()
+        self.items = items
+        self.dir = items.own_dir
+
+    def _item(self, book_id: str) -> Any:
+        if not valid_id(book_id):
+            return None
+        item = self.items.get(self.items.ref(book_id), remote=False)
+        return item if item is not None and item.kind == KIND else None
+
+    def _read_meta(self, book_id: str) -> Optional[BookMeta]:
+        item = self._item(book_id)
+        return _book_meta(item) if item is not None else None
+
+    def _stored(self) -> List[BookMeta]:
+        # Copies fetched from another host are that host's books, not ours.
+        return [_book_meta(i) for i in self.items.items(kind=KIND, remote=False)
+                if i.owner == self.items.app_id and not i.replica]
+
+    def exists(self, book_id: str) -> bool:
+        return self._item(book_id) is not None
+
+    def _read(self, book_id: str) -> Tuple[bytes, str]:
+        item = self._item(book_id)
+        if item is None or item.primary is None:
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), book_id)
+        return item.primary.read_bytes(), item.primary.suffix[1:]
+
+    def _write(self, meta: BookMeta, wb: Workbook, data: bytes, new: bool = False) -> None:
+        name = f"book.{file_extension(wb)}"
+        fields = dict(title=meta.title, meta=_item_meta(meta), primary=name)
+        try:
+            if new:
+                with self.items.publish(meta.id, kind=KIND, **fields) as item:
+                    with item.open(name) as fh:
+                        fh.write(data)
+            else:
+                with self.items.revise(meta.id, **fields) as rev:
+                    with rev.open(name) as fh:
+                        fh.write(data)
+                    rev.remove("book.xlsm" if name == "book.xlsx" else "book.xlsx")
+        except ItemNotFound:
+            raise BookGone("That workbook doesn't exist any more.")
+
+    def _write_meta(self, meta: BookMeta) -> None:
+        try:
+            with self.items.revise(meta.id, title=meta.title, meta=_item_meta(meta)):
+                pass
+        except ItemNotFound:
+            raise BookGone("That workbook doesn't exist any more.")
+
+    def _remove(self, book_id: str) -> None:
+        self.items.remove(book_id)
+
+
+def _item_meta(meta: BookMeta) -> dict:
+    """What an item's manifest keeps of a book's metadata in its ``meta`` (the title, the times
+    and the size are the manifest's own)."""
+    return {k: v for k, v in asdict(meta).items() if k not in ("id", "title", "created_at", "updated_at", "size")}
+
+
+def _book_meta(item: Any) -> BookMeta:
+    meta = BookMeta.from_json({**item.meta, "id": item.id, "title": item.title})
+    meta.created_at = _timestamp(item.created_at)
+    meta.updated_at = _timestamp(item.updated_at)
+    meta.size = item.bytes
+    return meta
+
+
+def _timestamp(iso: str) -> float:
+    try:
+        return datetime.fromisoformat(iso).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def file_extension(wb: Workbook) -> str:
     """xlsm for a workbook with a VBA project (Excel won't open macros in an .xlsx), else xlsx."""
     return "xlsm" if getattr(wb, "vba", None) is not None else "xlsx"
@@ -425,5 +566,15 @@ def _atomic_write(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-STORE = BookStore()
+def _make_store() -> BookStore:
+    """The books as items of the shared collection when re_ddns gave the app one, else as files in
+    ``REFLEX_GRID_HOME``."""
+    if os.environ.get("DDNS_COLLECTIONS_ROOT") and Collection is not None:
+        if hasattr(Collection, "revise"):
+            return ItemBookStore(Collection(COLLECTION))
+        print("ReflexGrid: this reflex_ddns_auth can't revise items; workbooks stay in REFLEX_GRID_HOME", file=sys.stderr)
+    return BookStore()
+
+
+STORE = _make_store()
 atexit.register(STORE.flush)

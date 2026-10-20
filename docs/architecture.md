@@ -78,7 +78,12 @@ exactly puts its epoch back, so earlier transitions become undoable again.
   `REFLEX_GRID_HOME`. `STORE.open(id)` reads one into a `Book` (a `SharedBook`) shared by every tab on it; a
   new address creates a blank book. A change schedules a save `SAVE_DELAY` seconds later on a timer thread:
   the workbook snapshot is taken under the book's lock and encoded outside it. Books nobody has open are
-  dropped from memory after `IDLE_CLOSE`.
+  dropped from memory after `IDLE_CLOSE`. On re_ddns (`DDNS_COLLECTIONS_ROOT` set) the store is an
+  `ItemBookStore`: each book is an item of the shared collection `spreadsheets` (`book.xlsx` in the item's
+  folder, the title, creator and sheet names in its manifest), published when it is created and revised in
+  place on each save. Only the storage methods differ; a book deleted outside the app (on re_ddns's storage
+  page) raises `BookGone` at its next save, which drops it and tells everyone on it, as a deletion from the
+  workbook list does.
 - **Room** (`reflex_grid/room.py`): `BookRoom`, a Reflex `SharedState`. Every tab on a book links its
   `BookRoom` to the book (`book-<id>`), so what one tab assigns there reaches all of them: the book's `rev`,
   `title`, `peers` (each tab's name, colour, sheet, selection and the cell it is typing in), the latest
