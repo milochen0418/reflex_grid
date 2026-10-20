@@ -3,6 +3,7 @@ conditional-format evaluation, tables, names, protection and XLSX round trips of
 
 import base64
 import io
+import time
 import warnings
 
 import openpyxl
@@ -430,3 +431,58 @@ def test_picture_roundtrip_and_move():
     rels = z.read("xl/drawings/_rels/drawing1.xml.rels").decode()
     assert "<xdr:pic>" in drawing and 'r:embed="rId1"' in drawing
     assert 'Target="../media/image1.png"' in rels and z.read("xl/media/image1.png") == _png(4, 2)
+
+
+# ---------------------------------------------------------------- spills and edits of many cells
+
+
+def test_spill_anchor_follows_edits_of_many_cells():
+    """A #SPILL! anchor is blocked, and freed again, by edits of many cells at once (a paste,
+    Clear) as by one cell: the look for anchors near the changed cells is one pass per edit."""
+    s = new()
+    s.run("cell.set", cell="A1", input="=SEQUENCE(5)")
+    assert [val(s, f"A{i}") for i in range(1, 6)] == [1, 2, 3, 4, 5]
+    # Pasting onto the spill range blocks the anchor.
+    s.run("edit.paste", text="x\ny\n", at="A3")
+    assert val(s, "A1") == "#SPILL!" and val(s, "A3") == "x"
+    # Pasting empty cells over the blockers frees it: one edit of several cells.
+    s.run("edit.paste", text="\n\n", at="A3")
+    assert [val(s, f"A{i}") for i in range(1, 6)] == [1, 2, 3, 4, 5]
+    # Clear over a block that sits down and right of its anchor.
+    s.run("cell.set", cell="B3", input="=SEQUENCE(1,4)")
+    assert [val(s, c + "3") for c in "BCDE"] == [1, 2, 3, 4]
+    s.run("edit.paste", text="1\t2\t3\t4\n5\t6\t7\t8\n", at="C2")
+    assert val(s, "B3") == "#SPILL!"
+    s.run("edit.clearContents", range="C2:F3")
+    assert [val(s, c + "3") for c in "BCDE"] == [1, 2, 3, 4]
+
+
+def test_spill_anchor_found_by_small_edits_on_a_big_sheet():
+    """On a sheet with many cells, a change of one or two cells looks around those cells only
+    (the other way of looking), and still finds the anchor it frees."""
+    s = new()
+    rows, cols = 100, 100
+    s.run("edit.paste", text="\n".join("\t".join("7" for _ in range(cols)) for _ in range(rows)) + "\n", at="K1")
+    s.run("cell.set", cell="A1", input="=SEQUENCE(5)")
+    s.run("cell.set", cell="A3", input="x")
+    assert val(s, "A1") == "#SPILL!"
+    s.run("cell.set", cell="A3", input="")
+    assert val(s, "A5") == 5
+    s.run("edit.paste", text="x\ny\n", at="A3")
+    assert val(s, "A1") == "#SPILL!"
+    s.run("edit.paste", text="\n\n", at="A3")
+    assert val(s, "A5") == 5
+
+
+def test_pasting_many_cells_is_fast():
+    """A paste costs about the same per cell as entering one cell: 50,000 cells took 7 seconds
+    when every pasted cell scanned its own 65×65 window for #SPILL! anchors; well under a
+    second now."""
+    s = new()
+    rows, cols = 500, 100
+    text = "\n".join("\t".join(str(r * cols + c) for c in range(cols)) for r in range(rows)) + "\n"
+    t0 = time.perf_counter()
+    s.run("edit.paste", text=text)
+    took = time.perf_counter() - t0
+    assert val(s, "CV500") == rows * cols - 1
+    assert took < 3.0, f"pasting {rows * cols} cells took {took:.1f}s"

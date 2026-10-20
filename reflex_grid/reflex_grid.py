@@ -5,6 +5,8 @@ Pages: ``/`` lists the workbooks; ``/book/<id>`` is a workbook in the classic la
 bar, ribbon, formula bar + grid, sheet tabs, status bar), shared by everyone who opens that
 address. All spreadsheet logic lives in the ``gridcore`` engine; this module only arranges the UI."""
 
+import os
+
 import reflex as rx
 from reflex.style import set_color_mode
 
@@ -111,6 +113,13 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #FFFFFF; color
 .rg-title-input:focus { background: #FFFFFF; color: #111827; border-color: #FFFFFF; }
 #manager { height: 100vh; overflow: auto; }
 """
+
+# What one event may carry over the websocket (Reflex's default is 1 MB, and a bigger event is
+# dropped without a word). A paste from another app sends its text in one event, and the engine
+# takes pastes of up to 2,000,000 cells. Set here, before the app sets up its socket, rather than
+# in rxconfig.py: a launcher that copies rxconfig.py once (re_ddns's dev mode) still hot-reloads
+# this file. An operator's own REFLEX_SOCKET_MAX_HTTP_BUFFER_SIZE wins.
+os.environ.setdefault("REFLEX_SOCKET_MAX_HTTP_BUFFER_SIZE", str(64 * 1024 * 1024))
 
 app = rx.App(
     # The theme (always light) is the RadixThemesPlugin's, in rxconfig.py.

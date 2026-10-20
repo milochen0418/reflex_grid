@@ -23,7 +23,7 @@ The `run_test.py` script should:
 | Suite | What it checks |
 |---|---|
 | `smoke_home` | A workbook loads: ribbon, formula bar, grid headers, sheet tabs, status bar, title bar (title, save status, who is here); no console errors |
-| `editing_formulas` | Typing values and formulas, recalculation, formula bar, autocomplete, AutoSum, fill handle, undo/redo, copy/paste |
+| `editing_formulas` | Typing values and formulas, recalculation, formula bar, autocomplete, AutoSum, fill handle, undo/redo, copy/paste (a block of more than 1 MB from another app, then copied and pasted again inside the sheet, and pasting after Esc) |
 | `formatting_ribbon` | Bold, fill colour, number formats, merge, borders, Format Cells dialog, column resize |
 | `sheets_data` | Sheet tabs (add/rename/switch), sort, filter dialog, tables, conditional formatting, charts from samples, dragging a chart and a picture (they move without resizing; one undo per drag) |
 | `insert_tab` | The Insert tab button by button: every chart kind of the chart menus and All Charts, sparklines of each type, links (ScreenTip on hover, Ctrl/Cmd+click), comment threads (post, reply, resolve) and notes shown on hover, a cell holding a note or a comment but not both, Insert Function, a table and a picture |

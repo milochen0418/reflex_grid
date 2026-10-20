@@ -304,6 +304,13 @@ export function SheetView(props) {
   const [ac, setAc] = useState(null); // function autocomplete {items, index, start}
   const pointRef = useRef(null); // formula point mode {start, end, anchor, cur}
   const seqRef = useRef(0);
+  // What this tab last copied in ReflexGrid: the text it put on the system clipboard and
+  // the server's token for it. On paste, a system clipboard still equal to this is our own
+  // copy, so only the token is sent, not the cells (a big block would not fit in one event).
+  const lastClipRef = useRef(null);
+  const pendingCopyRef = useRef(null);
+  const uiRef = useRef(ui);
+  uiRef.current = ui;
   const lastWindowRef = useRef(null);
   const sheetRef = useRef(sheetName);
   const sheetIdxRef = useRef(sheetIndex);
@@ -603,8 +610,15 @@ export function SheetView(props) {
       setEd({ r: err.r, c: err.c, text: err.text, mode: "edit", bar: false });
       setTimeout(() => kbdRef.current && kbdRef.current.focus(), 0);
     }
-    if (ui.clipboardText && ui.clipboardText.seq === seqRef.current && navigator.clipboard) {
-      navigator.clipboard.writeText(ui.clipboardText.text).catch(() => {});
+    if (ui.clipboardSet && ui.clipboardSet.seq === seqRef.current) {
+      const set = ui.clipboardSet;
+      // Text here means the server read the range (off-screen or big): put it on the clipboard.
+      if ("text" in set && navigator.clipboard) navigator.clipboard.writeText(set.text).catch(() => {});
+      const pc = pendingCopyRef.current;
+      const text = "text" in set ? set.text : pc ? pc.text : null;
+      const cut = pc ? pc.cut : false;
+      // Only a copy (not a cut, which is consumed when pasted) gets the paste-by-token fast path.
+      lastClipRef.current = !cut && text != null ? { text, token: set.token } : null;
     }
   }, [ui]);
 
@@ -1024,9 +1038,24 @@ export function SheetView(props) {
         e.clipboardData.setData("text/plain", text);
         e.preventDefault();
       }
+      pendingCopyRef.current = { text, cut: !!cut };
       send("copy", { cut: !!cut, text });
     },
     [selectionTsv, send]
+  );
+
+  // Paste what is on the system clipboard: our own copy by its token (the big block stays on the
+  // server), anything else as its text.
+  const sendPaste = useCallback(
+    (text) => {
+      const lc = lastClipRef.current;
+      // Only while the server still holds that copy (its marquee shows): after Esc, a pasted cut or
+      // a macro's CutCopyMode = False, the text is pasted as before.
+      const held = uiRef.current && uiRef.current.clipboard;
+      if (lc && lc.token && held && text != null && text === lc.text) send("paste", { token: lc.token });
+      else send("paste", { text });
+    },
+    [send]
   );
 
   const onPasteEvt = useCallback(
@@ -1035,11 +1064,10 @@ export function SheetView(props) {
       const cd = e.clipboardData;
       if (!cd) return;
       e.preventDefault();
-      const text = cd.getData("text/plain");
-      const html = cd.getData("text/html");
-      send("paste", { text, html: html && html.length < 2_000_000 ? html : "" });
+      // Only the text goes to the server (it pastes TSV, not an app's much bigger HTML).
+      sendPaste(cd.getData("text/plain"));
     },
-    [send]
+    [sendPaste]
   );
 
   // ------------------------------------------------------------ keyboard
@@ -1237,6 +1265,7 @@ export function SheetView(props) {
         setMenu(null);
         setListOpen(false);
         if (ui && (ui.clipboard || ui.formatPainter)) {
+          lastClipRef.current = null;
           cmd("edit.clearClipboard");
           if (ui.formatPainter) cmd("edit.cancelFormatPainter");
         }
@@ -1790,13 +1819,14 @@ export function SheetView(props) {
       if (it.id === "ui.copy" || it.id === "ui.cut") {
         const text = selectionTsv();
         if (text !== null && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+        pendingCopyRef.current = { text, cut: it.id === "ui.cut" };
         send("copy", { cut: it.id === "ui.cut", text });
         return;
       }
       if (it.id === "ui.paste") {
         if (navigator.clipboard && navigator.clipboard.readText) {
-          navigator.clipboard.readText().then((text) => send("paste", { text, html: "" })).catch(() => send("paste", { text: null, html: "" }));
-        } else send("paste", { text: null, html: "" });
+          navigator.clipboard.readText().then((text) => sendPaste(text)).catch(() => sendPaste(null));
+        } else sendPaste(null);
         return;
       }
       if (it.id === "ui.pickList") {
@@ -1805,7 +1835,7 @@ export function SheetView(props) {
       }
       cmd(it.id, it.params);
     },
-    [dialog, cmd, send, selectionTsv]
+    [dialog, cmd, send, selectionTsv, sendPaste]
   );
 
   // ------------------------------------------------------------ canvas: gridlines, fills, borders

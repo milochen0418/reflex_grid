@@ -480,6 +480,54 @@ def fit_to_range(v: Value, rng: RangeRef) -> Value:
     return Array(h, w, data)
 
 
+# A #SPILL! anchor this many rows and columns up/left of an edited cell may have been blocked or
+# unblocked by the edit.
+SPILL_REACH = 64
+
+
+def spill_anchors_near(sh, rcs: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """The spill anchors to evaluate again after the cells ``rcs`` of sheet ``sh`` changed: the
+    anchors whose spill range holds a changed cell, and the ``#SPILL!`` anchors up to
+    ``SPILL_REACH`` rows and columns up/left of one. The look for those is one pass over the
+    cells around all the changed cells, or one window per changed cell when few cells changed
+    on a big sheet; never a window per cell for every cell of a paste (a paste of 100,000 cells
+    scanned 400 million entries that way)."""
+    changed = set(rcs)
+    out: List[Tuple[int, int]] = []
+    for anchor, r in sh.spill_ranges.items():
+        if r.count() <= len(rcs):
+            hit = any(rc in changed and rc != anchor for rc in r.cells())
+        else:
+            hit = any(r.contains(rc) and rc != anchor for rc in rcs)
+        if hit:
+            out.append(anchor)
+    reach = SPILL_REACH
+    if len(rcs) * (reach + 1) ** 2 < len(sh.cells):
+        seen: Set[Tuple[int, int]] = set()
+        for rr, cc in rcs:
+            look = RangeRef(max(rr - reach, 0), max(cc - reach, 0), rr, cc)
+            for rc, cell in sh.cells.iter_range(look):
+                if cell.value is CellError.SPILL and rc not in changed and rc not in seen:
+                    seen.add(rc)
+                    out.append(rc)
+        return out
+    r0 = min(r for r, _ in rcs)
+    c0 = min(c for _, c in rcs)
+    r1 = max(r for r, _ in rcs)
+    c1 = max(c for _, c in rcs)
+    few = len(rcs) <= (reach + 1) ** 2
+    for (r, c), cell in sh.cells.iter_range(RangeRef(max(r0 - reach, 0), max(c0 - reach, 0), r1, c1)):
+        if cell.value is not CellError.SPILL or (r, c) in changed:
+            continue
+        if few:
+            near = any(r <= rr <= r + reach and c <= cc <= c + reach for rr, cc in rcs)
+        else:
+            near = any((rr, cc) in changed for rr in range(r, r + reach + 1) for cc in range(c, c + reach + 1))
+        if near:
+            out.append((r, c))
+    return out
+
+
 def _formula_expr(wb, k: Key) -> Optional[Expr]:
     s = wb.sheet(k[0])
     if s is None:
@@ -564,22 +612,18 @@ class Calc:
             return
         seeds: List[Key] = list(changed)
         emptied: Dict[int, Tuple[int, int]] = {}
+        by_sheet: Dict[int, List[Tuple[int, int]]] = {}
         for k in changed:
-            sh = wb.sheet(k[0])
+            by_sheet.setdefault(k[0], []).append((k[1], k[2]))
+        for si, rcs in by_sheet.items():
+            sh = wb.sheet(si)
             if sh is None:
                 continue
-            rc = (k[1], k[2])
-            for anchor, r in sh.spill_ranges.items():
-                if anchor != rc and r.contains(rc):
-                    seeds.append((k[0], anchor[0], anchor[1]))
-            # A #SPILL! anchor up/left of an edited cell may be blocked or unblocked now.
-            look = RangeRef(max(rc[0] - 64, 0), max(rc[1] - 64, 0), rc[0], rc[1])
-            for (r, c), cell in sh.cells.iter_range(look):
-                if (r, c) != rc and cell.value is CellError.SPILL:
-                    seeds.append((k[0], r, c))
-            if not sh.cells.has(rc):
-                e0 = emptied.get(k[0])
-                emptied[k[0]] = rc if e0 is None else (max(e0[0], rc[0]), max(e0[1], rc[1]))
+            seeds.extend((si, r, c) for r, c in spill_anchors_near(sh, rcs))
+            for rc in rcs:
+                if not sh.cells.has(rc):
+                    e0 = emptied.get(si)
+                    emptied[si] = rc if e0 is None else (max(e0[0], rc[0]), max(e0[1], rc[1]))
         for si, end in emptied.items():
             for (s, r, c) in self.graph.nodes:
                 if s == si and r <= end[0] and c <= end[1]:

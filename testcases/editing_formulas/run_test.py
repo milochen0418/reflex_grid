@@ -114,6 +114,43 @@ def body(g: Grid) -> None:
     page.keyboard.press("Enter")
     g.wait_text("H1", "你好")
     assert g.name_box() == "H2", g.name_box()
+
+    # A big block. Pasted from another app: more than Reflex's default 1 MB websocket limit, past
+    # which the paste was dropped without a word. Then copied in ReflexGrid (off-screen, so the
+    # server makes the clipboard text) and pasted elsewhere, by token: the cells don't go back.
+    rows, cols = 15000, 10
+    big = "\n".join("\t".join(f"b{r * cols + c}" for c in range(cols)) for r in range(rows)) + "\n"
+    assert len(big) > 1_000_000, len(big)
+    g.select("J1")
+    page.focus("#rg-editor")
+    page.evaluate(
+        """(text) => { const el = document.getElementById('rg-editor'); el.focus(); const dt = new DataTransfer();
+        dt.setData('text/plain', text); el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); }""",
+        big,
+    )
+    g.wait_text("J20", "b190", timeout=60)
+    g.wait_text("S20", "b199")
+    # The pasted block is selected: copy it.
+    page.focus("#rg-editor")
+    g.key("Mod+c")
+    page.wait_for_function("(n) => navigator.clipboard.readText().then((t) => t.length === n)", arg=len(big), timeout=60000, polling=250)
+    g.select("U1")
+    page.focus("#rg-editor")
+    g.key("Mod+v")
+    g.wait_text("U20", "b190", timeout=60)
+    g.select(f"AD{rows}")
+    g.wait_formula_bar(f"b{rows * cols - 1}")
+    # After Esc (the copy is cancelled), Ctrl+V still pastes what the system clipboard holds, as text.
+    g.select("J2")
+    page.focus("#rg-editor")
+    g.key("Mod+c")
+    page.wait_for_function("() => navigator.clipboard.readText().then((t) => t === 'b10\\n')", timeout=30000, polling=250)
+    page.focus("#rg-editor")
+    g.key("Escape")
+    g.select("AF1")
+    page.focus("#rg-editor")
+    g.key("Mod+v")
+    g.wait_formula_bar("b10")
     g.shot("editing")
 
 

@@ -537,11 +537,26 @@ class GridState(rx.State):
                     out = self._command(entry, str(e.get("id")), e.get("params") or {})
                 elif t == "copy":
                     r = self._run(s, "edit.cut" if e.get("cut") else "edit.copy", {"text": e.get("text")} if isinstance(e.get("text"), str) else {})
+                    # A token names this copy. When the same person pastes it again (the system
+                    # clipboard still holds it), the browser sends the token, not the cells, so a
+                    # big block need not travel back in one websocket event.
+                    token = secrets.token_hex(8)
+                    s.clip_token = token
+                    sent: Dict[str, Any] = {"seq": seq, "token": token}
                     if not isinstance(e.get("text"), str):
-                        extra["clipboardText"] = {"seq": seq, "text": r["text"]}
+                        # The range was off-screen or too big for the browser to read itself: it
+                        # gets the text to put on the system clipboard from here.
+                        sent["text"] = r["text"]
+                    extra["clipboardSet"] = sent
                 elif t == "paste":
-                    text = e.get("text")
-                    self._run(s, "edit.paste", {"text": text} if isinstance(text, str) else {})
+                    token = e.get("token")
+                    if token is not None and getattr(s, "clip_token", None) == token and s.clipboard is not None:
+                        # The system clipboard still holds this session's own copy: paste it from
+                        # the server, without the browser sending the cells back.
+                        self._run(s, "edit.paste", {})
+                    else:
+                        text = e.get("text")
+                        self._run(s, "edit.paste", {"text": text} if isinstance(text, str) else {})
                 elif t == "resize":
                     axis = e.get("axis")
                     idx = [int(i) for i in (e.get("indices") or [])][:16384]

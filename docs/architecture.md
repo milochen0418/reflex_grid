@@ -104,7 +104,10 @@ exactly puts its epoch back, so earlier transitions become undoable again.
   Each event carries a sequence number; the browser only adopts the server's selection once the server has
   processed its latest event, and never from a *passive* refresh (someone else's change, a `ping`, a scroll),
   which would undo a move it hasn't sent yet. After every event the handler publishes the book to the room
-  (only what changed is assigned, so only that is sent).
+  (only what changed is assigned, so only that is sent). A `copy` answers with a token (and, for a range the
+  browser can't read itself, the text for the system clipboard); pasting that same copy sends the token, not
+  the cells, so a block of a million cells never travels back. Anything else is pasted as its text, which
+  must fit in one websocket message: `reflex_grid.py` raises Reflex's 1 MB default to 64 MB.
 - **Presence**: each tab pings every 5 s; a tab not heard from for `PEER_IDLE` seconds is dropped. A closing
   tab says goodbye with `navigator.sendBeacon` to `POST /_reflex_grid/bye` (`api.py`, named by its client
   token), and `push()` shows the book to the others at once by publishing it from one of them: the room, a
