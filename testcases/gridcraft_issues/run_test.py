@@ -230,8 +230,15 @@ def body(g: Grid) -> None:
         t.open(g.page.url.split("/book/")[0])
         assert t.name_box() == "A1"
         box = touch.locator(".rg-scroller").bounding_box()
+        # The finger's own events (Input.dispatchTouchEvent), not Input.synthesizeScrollGesture: in headless
+        # Chromium on Linux (CI) the synthesized gesture's moves never reach the page as touchmove, so nothing
+        # scrolls; the same gesture scrolls on macOS.
         cdp = ctx.new_cdp_session(touch)
-        cdp.send("Input.synthesizeScrollGesture", {"x": box["x"] + 300, "y": box["y"] + 400, "yDistance": -300, "gestureSourceType": "touch", "speed": 800})
+        x, y = box["x"] + 300, box["y"] + 400
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        for i in range(1, 16):
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": y - 20 * i}]})
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
         touch.wait_for_function("() => document.querySelector('.rg-scroller').scrollTop > 100", timeout=8000)
         t.wait_idle(0.5)
         assert t.name_box() == "A1", t.name_box()
