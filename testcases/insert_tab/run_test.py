@@ -14,7 +14,7 @@ from _lib.grid import MOD, Grid, run  # noqa: E402
 
 CHARTS = {
     "Column": ["Clustered Column", "Stacked Column", "100% Stacked Column", "Clustered Bar", "Stacked Bar", "100% Stacked Bar"],
-    "Line": ["Line", "Stacked Line", "Line with Markers", "Area", "Stacked Area"],
+    "Line": ["Line", "Stacked Line", "Line with Markers", "Area", "Stacked Area", "100% Stacked Area"],
     "Pie": ["Pie", "Doughnut"],
     "Scatter": ["Scatter", "Scatter with Lines", "Radar"],
 }

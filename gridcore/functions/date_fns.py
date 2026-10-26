@@ -138,8 +138,13 @@ def _weekday(args, ctx):
 def _isoweek(sys: DateSystem, s: int) -> int:
     iso_wd = (weekday0(sys, s) + 6) % 7 + 1
     thursday = s - iso_wd + 4
-    y = 1900 if thursday < 1 else _dt(sys, float(thursday)).year
-    jan1 = _ymd(sys, y, 1, 1)
+    first = 1 if sys is DateSystem.D1900 else 0
+    if thursday < first:
+        # The week belongs to the year before the calendar starts: ISOWEEKNUM(1) and WEEKNUM(1,21)
+        # are 52 (Excel 16 for Mac), serial 0 of a 1904 workbook is in week 53 of 1903.
+        jan1 = first - 365
+    else:
+        jan1 = _ymd(sys, _dt(sys, float(thursday)).year, 1, 1)
     return (thursday - jan1) // 7 + 1
 
 

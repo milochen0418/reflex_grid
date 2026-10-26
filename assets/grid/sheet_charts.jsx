@@ -298,11 +298,15 @@ function XYChart({ chart, W, H, top }) {
     }
   } else {
     const acc = [];
+    // 100% stacked areas: each value as a share of its category's total.
+    const tots = [];
+    if (pct) for (let i = 0; i < nCat; i++) { let t = 0; series.forEach((s) => { const v = s.values[i]; if (typeof v === "number") t += Math.abs(v); }); tots[i] = t; }
     series.forEach((s, k) => {
       const pts = [];
       for (let i = 0; i < nCat; i++) {
         let v = s.values[i];
         if (typeof v !== "number") { pts.push(null); continue; }
+        if (pct) v = tots[i] > 0 ? v / tots[i] : 0;
         if (isStacked) { acc[i] = (acc[i] || 0) + v; v = acc[i]; }
         const x = scatter ? xscale(typeof chart.categories[i] === "number" ? chart.categories[i] : i + 1) : catPos(i);
         pts.push([x, vscale(v), s.values[i]]);

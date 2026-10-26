@@ -302,13 +302,27 @@ def _trunc(args, ctx):
     return _round_dir(num(args, 0), opt_int(args, 1, 0), False)
 
 
+# Excel 16 for Mac refuses a MOD whose quotient reaches 1.1259E+12 (MOD(1125899990000,1) is 0,
+# MOD(1125900000000,1), MOD(1.13E+12,1) and MOD(1,1E-14) are #NUM!); older Excels stopped at 2^27.
+MOD_MAX_QUOTIENT = 1.1259e12
+
+
 @fn("MOD", 2, 2, M, S, "MOD(number, divisor)", "Returns the remainder from division.")
 def _mod(args, ctx):
     n, d = num(args, 0), num(args, 1)
-    r = excel_mod(n, d)
-    if abs(r - d) < abs(d) * 1e-15:
+    if d == 0:
+        raise XlError(CellError.DIV0)
+    q = n / d
+    if not math.isfinite(q) or abs(q) >= MOD_MAX_QUOTIENT:
+        raise XlError(CellError.NUM)
+    # The exact remainder, then the sign of the divisor: MOD(-0.3,0.1) is 2.77555756156289E-17 and
+    # MOD(0.3,0.1) is 0.1 (0.0999999999999999778) in Excel, not 0 — the rounding of 0.1 shows.
+    r = math.fmod(n, d)
+    if r != 0.0 and (r < 0.0) != (d < 0.0):
+        r += d
+    if abs(r) >= abs(d):
         return 0.0
-    return r
+    return r + 0.0
 
 
 @fn("QUOTIENT", 2, 2, M, S, "QUOTIENT(numerator, denominator)", "Returns the integer portion of a division.")

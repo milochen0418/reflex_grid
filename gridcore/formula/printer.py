@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from ..core.addr import col_to_letters, parse_cell
-from ..core.value import number_to_text
+import math
+
+from ..core.addr import col_to_letters, parse_cell, sheet_needs_quotes
+from ..core.value import sci_text, trim_decimal
 from .ast import (
     TRIM_MODES,
     ArrayLit,
@@ -27,18 +29,27 @@ from .ast import (
 
 
 def needs_quotes(name: str) -> bool:
-    """Whether a sheet name needs quotes in a reference."""
-    if not name:
-        return True
-    if name[0].isdigit() or any(not (c.isalnum() or c in "_.") for c in name):
-        return True
-    if parse_cell(name) is not None or name.upper() in ("TRUE", "FALSE"):
-        return True
-    # R1C1-looking names (R, C, R1C1) are ambiguous too.
-    u = name.upper()
-    if u in ("R", "C") or (u.startswith("R") and "C" in u and u[1:].replace("C", "", 1).isdigit()):
-        return True
-    return False
+    """Whether a sheet name needs quotes in a reference (Excel's rule: :func:`sheet_needs_quotes`)."""
+    return sheet_needs_quotes(name)
+
+
+def formula_number_text(n: float) -> str:
+    """A number constant as formula text: up to 15 significant digits, scientific for very large
+    or very small magnitudes (``1E-10``, ``1E+15``, ``0.00000015``, as Excel shows typed
+    constants) — unlike ``&``, which writes a number out in full up to 20 characters. Never past
+    the largest number: 1.7976931348623157E+308 rounds to 1.79769313486232E+308 at 15 digits, which
+    no longer parses, so such a constant keeps every digit."""
+    if n == 0.0 or not math.isfinite(n):
+        return "0"
+    a = abs(n)
+    if (not (1e-9 <= a < 1e15) and round(a) != a) or a >= 1e15:
+        text = sci_text(n, 15)
+    else:
+        decimals = min(max(14 - math.floor(math.log10(a)), 0), 30)
+        text = trim_decimal(f"{n:.{decimals}f}")
+    if math.isfinite(float(text)):
+        return text
+    return repr(n).upper().replace("E+", "E+")
 
 
 def quote_sheet(name: str) -> str:
@@ -150,7 +161,7 @@ def print_a1(e: Expr) -> str:
 def _write(out: List[str], e: Expr, r1c1) -> None:
     t = type(e)
     if t is Num:
-        out.append(number_to_text(e.value))
+        out.append(formula_number_text(e.value))
     elif t is Str:
         out.append('"' + e.value.replace('"', '""') + '"')
     elif t is Bool:

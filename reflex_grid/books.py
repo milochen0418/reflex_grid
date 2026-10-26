@@ -78,6 +78,13 @@ def new_id() -> str:
     return secrets.token_hex(5)
 
 
+def _named(doc: DocState) -> DocState:
+    """The workbook knows the file it is saved as (`<title>.xlsx`), which CELL("filename") reports
+    as `[<title>.xlsx]Sheet1`, as Excel does for a saved workbook."""
+    doc.wb.file_name = f"{doc.name}.{'xlsm' if doc.wb.vba is not None else 'xlsx'}"
+    return doc
+
+
 def clean_title(title: str) -> str:
     title = " ".join(str(title or "").split())[:MAX_TITLE]
     return title or DEFAULT_TITLE
@@ -275,7 +282,7 @@ class BookStore:
         return meta
 
     def create_blank(self, creator: Optional[dict] = None, title: str = DEFAULT_TITLE, book_id: str = "") -> BookMeta:
-        return self.create(DocState(Workbook(), title), title, creator, book_id)
+        return self.create(_named(DocState(Workbook(), title)), title, creator, book_id)
 
     def create_sample(self, name: str, creator: Optional[dict] = None) -> BookMeta:
         if name not in SAMPLES:
@@ -305,7 +312,7 @@ class BookStore:
             meta = self.meta(book_id)
             if meta is None:
                 meta = self.create_blank(creator, book_id=book_id)
-                doc = DocState(Workbook(), meta.title)
+                doc = _named(DocState(Workbook(), meta.title))
             else:
                 try:
                     data, ext = self._read(book_id)
@@ -334,6 +341,7 @@ class BookStore:
             with book.lock:
                 book.meta.title = title
                 book.doc.name = title
+                _named(book.doc)
                 meta = book.meta
         else:
             meta = self.meta(book_id)

@@ -80,7 +80,9 @@ def _add_months(sys: DateSystem, serial: float, months: int) -> Optional[float]:
     y, m = total // 12, total % 12 + 1
     if not 1900 <= y <= 9999:
         return None
-    return serial_from_ymd(sys, y, m, min(d.day, days_in_month(y, m)))
+    base = serial_from_ymd(sys, y, m, min(d.day, days_in_month(y, m)))
+    # The time of day is kept: a drag of dates a month apart used to drop it.
+    return None if base is None else base + (serial - math.floor(serial))
 
 
 class Pattern:
@@ -142,6 +144,39 @@ class Pattern:
                     )
         return Pattern()
 
+    @staticmethod
+    def dates(cells: List[Optional[Cell]], unit: str, sys: DateSystem, fmt: str) -> Optional["Pattern"]:
+        """Fill Days, Fill Weekdays, Fill Months or Fill Years (``unit``: days, weekdays, months,
+        years): a source of dates — numbers in a date format, not formulas — steps by that unit,
+        one unit for a lone date, else the difference between the first two dates in that unit
+        (one unit when they fall in the same one). Fill Weekdays skips Saturday and Sunday. ``None``
+        when the source isn't dates, so the fill extends like a plain drag."""
+        f = parse_fmt(fmt)
+        if not f.is_date() or f.is_time_only() or not cells:
+            return None
+        if any(c is not None and c.formula is not None for c in cells):
+            return None
+        vals = [c.value if c is not None else None for c in cells]
+        if not all(isinstance(v, float) for v in vals):
+            return None
+        first, last = vals[0], vals[-1]
+        second = vals[1] if len(vals) > 1 else None
+        if unit == "days":
+            step = 1.0 if second is None else (float(math.floor(second) - math.floor(first)) or 1.0)
+            return Pattern("linear", last=last, first=first, step=step)
+        if unit == "weekdays":
+            step = 1 if second is None else (_weekdays_between(sys, first, second) or 1)
+            return Pattern("weekdays", last=last, first=first, step=step)
+        a = datetime_from_serial(sys, first)
+        b = datetime_from_serial(sys, second) if second is not None else None
+        if a is None or (second is not None and b is None):
+            return None
+        if unit == "years":
+            months = 12 if b is None else ((b.year - a.year) or 1) * 12
+        else:
+            months = 1 if b is None else (((b.year - a.year) * 12 + b.month - a.month) or 1)
+        return Pattern("months", last=last, first=first, months=months)
+
     def alternate(self, cells: List[Optional[Cell]]) -> "Pattern":
         """Ctrl+drag swaps copying and extending."""
         if self.kind == "copy" and len(cells) == 1 and cells[0] is not None and cells[0].formula is None and isinstance(cells[0].value, float):
@@ -172,13 +207,20 @@ class Pattern:
         if self.kind == "months":
             base = self.last if forward else self.first
             return _add_months(sys, base, self.months * k * sign)
+        if self.kind == "weekdays":
+            base = self.last if forward else self.first
+            return _add_weekdays(sys, base, self.step * k * sign)
         return None
+
+
+DATE_MODES = ("days", "weekdays", "months", "years")
 
 
 def fill(ctx, sheet: int, src: RangeRef, target: RangeRef, mode: str = "series") -> None:
     """Fills ``target`` (which contains ``src`` at one edge) from the pattern in ``src``.
     ``mode``: series, alternate (Ctrl+drag), fillseries (always a series: a single number counts
-    up, as VBA's ``xlFillSeries``), copy, formats, values."""
+    up, as VBA's ``xlFillSeries``), copy, formats, values, and days, weekdays, months, years (Fill
+    Days, Fill Weekdays, Fill Months, Fill Years for a source of dates; see :meth:`Pattern.dates`)."""
     wb = ctx.wb
     sh = wb.sheet(sheet)
     vertical = target.height != src.height or target.width == src.width
@@ -200,12 +242,14 @@ def fill(ctx, sheet: int, src: RangeRef, target: RangeRef, mode: str = "series")
         else:
             idxs = range(src.c1 + 1, target.c1 + 1) if forward else range(src.c0 - 1, target.c0 - 1, -1)
             targets = [(lane, c) for c in idxs]
-        if mode in ("series", "alternate", "fillseries"):
+        if mode in ("series", "alternate", "fillseries") or mode in DATE_MODES:
             first = src_cells[0][1]
             fmt = wb.styles.get(first.style).num_fmt if first is not None else "General"
-            pattern = Pattern.detect([c for _, c in src_cells], [], wb.date_system, fmt)
-            if mode == "alternate" or (mode == "fillseries" and pattern.kind == "copy"):
-                pattern = pattern.alternate([c for _, c in src_cells])
+            pattern = Pattern.dates([c for _, c in src_cells], mode, wb.date_system, fmt) if mode in DATE_MODES else None
+            if pattern is None:
+                pattern = Pattern.detect([c for _, c in src_cells], [], wb.date_system, fmt)
+                if mode == "alternate" or (mode == "fillseries" and pattern.kind == "copy"):
+                    pattern = pattern.alternate([c for _, c in src_cells])
         else:
             pattern = Pattern()
         # Cells without a common pattern continue in runs of neighbours of one kind, as Excel's
@@ -329,6 +373,21 @@ def series(ctx, sheet: int, rng: RangeRef, rows: bool, kind: str, step: float, s
             ex = sh.cell(c)
             sm.set_cell(c, Cell(v, None, ex.style if ex is not None else first.style))
             ctx.touch(sheet, c)
+
+
+def _weekdays_between(sys: DateSystem, a: float, b: float) -> int:
+    """How many weekdays lie after ``a`` up to and including ``b`` (negative when ``b`` comes
+    first), counting whole days."""
+    off = 6 if sys is DateSystem.D1900 else 5
+    lo, hi, sign = (math.floor(a), math.floor(b), 1) if b >= a else (math.floor(b), math.floor(a), -1)
+    days = int(hi - lo)
+    count = days // 7 * 5
+    d = lo + days // 7 * 7
+    for _ in range(days % 7):
+        d += 1
+        if (int(d) + off) % 7 not in (0, 6):
+            count += 1
+    return count * sign
 
 
 def _add_weekdays(sys: DateSystem, v: float, k: int) -> float:

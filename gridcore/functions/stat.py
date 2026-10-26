@@ -599,7 +599,11 @@ def _percentrank(args, exclusive: bool) -> float:
             r = (hi_i + frac) / (n + 1)
         else:
             r = (hi_i - 1 + frac) / (n - 1)
-    f = 10.0 ** sig
+    try:
+        f = 10.0 ** sig
+    except OverflowError:
+        # A significance past 308 is #DIV/0! in Excel 16 for Mac (10^309 can't be stored).
+        raise XlError(CellError.DIV0) from None
     return math.floor(r * f + 1e-9) / f
 
 
@@ -791,6 +795,10 @@ def _lstsq(X: List[List[float]], y: List[float]) -> List[float]:
     return [math.fsum(inv[i][j] * xty[j] for j in range(k)) for i in range(k)]
 
 
+MAX_REGRESSORS = 255
+MAX_REGRESSION_WORK = 1_000_000_000
+
+
 def _design(args, yi: int, xi: Optional[int], const: bool):
     ya = as_array(args[yi].value)
     ys = []
@@ -819,6 +827,12 @@ def _design(args, yi: int, xi: Optional[int], const: bool):
                 raise XlError(v)
             if type(v) is not float:
                 raise XlError(CellError.VALUE)
+    # The normal equations are a k×k matrix solved in O(k³): one `SEQUENCE(1,16384)` of predictors
+    # would take gigabytes and minutes, so more than MAX_REGRESSORS predictors or more than
+    # MAX_REGRESSION_WORK multiply-adds (rows × k²) is #NUM! before anything is built.
+    k = len(cols)
+    if k > MAX_REGRESSORS or n * k * k > MAX_REGRESSION_WORK:
+        raise XlError(CellError.NUM)
     X = []
     for i in range(n):
         row = [c[i] for c in cols]

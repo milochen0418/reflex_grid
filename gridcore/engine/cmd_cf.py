@@ -94,8 +94,15 @@ def _cfv(v: Any, default_kind: str) -> CfValue:
     if isinstance(v, dict):
         kind = str(v.get("kind", default_kind))
         val = v.get("value")
-        if kind == "formula" and isinstance(val, str) and val.startswith("="):
-            val = val[1:]
+        if kind == "formula":
+            # A formula that doesn't parse must never reach the workbook: Excel refuses to open a
+            # file carrying it, even in repair mode (GridCraft #1999). One leading = is dropped.
+            text = str(val if val is not None else "").strip()
+            val = text[1:] if text.startswith("=") else text
+            try:
+                parse(val)
+            except ParseError as e:
+                raise EngineError(f"There's a problem with this formula: {e}") from None
         return CfValue(kind, val)
     if v is None:
         return CfValue(default_kind)

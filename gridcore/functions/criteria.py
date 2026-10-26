@@ -177,11 +177,22 @@ def has_wildcards(pattern: str) -> bool:
     return any(t is _STAR or t is _ANY for t in _tokenize(pattern)) or "~" in pattern
 
 
-def _match(p: tuple, t: str, whole: bool) -> Optional[int]:
+# Steps one match may take before it gives up and reports no match. An honest match against
+# Excel's 32,767-character cell ceiling costs a few hundred thousand; a hostile pattern (star
+# churn: `*a*a*a*a*…b` over a text of a's) is quadratic, so it is capped instead of running for
+# minutes — quiet degradation, as with the other work caps on far-past-realistic input.
+_MAX_STEPS = 1 << 22
+
+
+def _match(p: tuple, t: str, whole: bool, budget: Optional[List[int]] = None) -> Optional[int]:
     pi = ti = 0
     star: Optional[Tuple[int, int]] = None
     np, nt = len(p), len(t)
+    steps = budget if budget is not None else [_MAX_STEPS]
     while True:
+        steps[0] -= 1
+        if steps[0] < 0:
+            return None
         if pi == np and (not whole or ti == nt):
             return ti
         tok = p[pi] if pi < np else None
@@ -207,27 +218,64 @@ def wildcard_match(pattern: str, text: str) -> bool:
     return _match(_tokenize(pattern), fold(text), True) is not None
 
 
+def _find_from(p: tuple, t: str, start: int) -> Optional[Tuple[int, int]]:
+    """The first position at or after ``start`` where ``p`` matches a prefix of ``t[i:]``, with the
+    matched length; ``None`` when ``start`` is past the text. A leading run of stars absorbs the
+    text before the rest matches, so the match starts at ``start`` (SEARCH("*b","aab") is 1 in
+    Excel); it is dropped and the first token that consumes a character anchors the scan: a literal
+    skips straight to its occurrences, so the attempts stay linear, and every attempt shares one
+    step budget, so star churn stays flat instead of quadratic."""
+    if start > len(t):
+        return None
+    skip = 0
+    while skip < len(p) and p[skip] is _STAR:
+        skip += 1
+    p = p[skip:]
+    if not p:
+        return start, len(t) - start if skip else 0
+    anys = 0
+    while anys < len(p) and p[anys] is _ANY:
+        anys += 1
+    anchor = p[anys] if anys < len(p) else None
+    budget = [_MAX_STEPS]
+    hit = None
+    if isinstance(anchor, str):
+        j = start + anys
+        while hit is None:
+            j = t.find(anchor, j)
+            if j < 0:
+                return None
+            n = _match(p, t[j - anys:], False, budget)
+            if n is not None:
+                hit = (j - anys, n)
+            elif budget[0] < 0:
+                return None
+            j += 1
+    else:
+        for i in range(start, len(t) + 1):
+            n = _match(p, t[i:], False, budget)
+            if n is not None:
+                hit = (i, n)
+                break
+            if budget[0] < 0:
+                return None
+    if hit is None:
+        return None
+    return (start, hit[0] - start + hit[1]) if skip else hit
+
+
 def wildcard_find(pattern: str, text: str, start: int) -> Optional[int]:
     """SEARCH-style find: index of the first position at or after ``start`` where the pattern
-    matches."""
-    p = _tokenize(pattern)
+    matches; ``None`` from the end of the text on (SEARCH("","abc",4) is #VALUE! in Excel 16)."""
     t = fold(text)
-    if not p:
-        return start if start <= len(t) else None
-    for i in range(start, len(t)):
-        if _match(p, t[i:], False) is not None:
-            return i
-    return None
+    if start >= len(t):
+        return None
+    hit = _find_from(_tokenize(pattern), t, start)
+    return None if hit is None else hit[0]
 
 
 def wildcard_find_span(pattern: str, text: str, start: int) -> Optional[Tuple[int, int]]:
-    p = _tokenize(pattern)
-    t = fold(text)
-    for i in range(start, len(t) + 1):
-        n = _match(p, t[i:], False)
-        if n is not None:
-            return i, n
-    return None
+    return _find_from(_tokenize(pattern), fold(text), start)
 
 
 def lookup_equal(needle: Value, hay: Value, wild: bool) -> bool:

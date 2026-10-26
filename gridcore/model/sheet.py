@@ -72,6 +72,9 @@ class Sheet:
         self.kept_xml: Dict[str, str] = {}
         # The sheet's name in VBA (its document module, e.g. ``Sheet1``); "" until it has one.
         self.code_name = ""
+        # The ``sheetId`` the file gave the sheet, written back on save so whatever refers to the
+        # sheet by its id keeps finding it; 0 for a sheet the file did not have.
+        self.sheet_id = 0
         self._row_index: Optional[_LineIndex] = None
         self._col_index: Optional[_LineIndex] = None
 

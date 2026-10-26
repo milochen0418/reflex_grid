@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from ..core.value import ERROR_LITERALS, CellError
+from ..core.value import ERROR_LITERALS, CellError, fold
 
 Token = Tuple[str, object, int, int]
 
@@ -258,7 +258,7 @@ def tokenize(src: str) -> List[Token]:
             if ch(j) == "!":
                 out.append(("sheet", (w, None), start, j + 1))
                 i = j + 1
-            elif ch(j) == ":" and _span_sheet_end(src, j) is not None:
+            elif ch(j) == ":" and _span_sheet_end(src, j) is not None and not _repeats_sheet(out, w, src[j + 1:_span_sheet_end(src, j)]):
                 k = _span_sheet_end(src, j)
                 out.append(("sheet", (w, src[j + 1:k]), start, k + 1))
                 i = k + 1
@@ -282,6 +282,15 @@ def tokenize(src: str) -> List[Token]:
         raise LexError(f"unexpected character `{c}`", start)
     out.append(("eof", None, n, n))
     return out
+
+
+def _repeats_sheet(out: List[Token], w: str, second: str) -> bool:
+    """``Sheet1!A1:Sheet1!B2``: ``A1`` ends a range whose second end repeats the sheet (in any
+    case), as Excel accepts it — not a span of sheets ``A1:Sheet1``."""
+    if not out or out[-1][0] != "sheet" or not _is_range_end(w):
+        return False
+    first = out[-1][1]
+    return isinstance(first, tuple) and first[1] is None and fold(first[0]) == fold(second)
 
 
 def _span_sheet_end(src: str, j: int) -> Optional[int]:

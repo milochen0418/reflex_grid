@@ -18,7 +18,7 @@ from .sheet_read import read_sheet
 from .styles import read_styles
 from .tables import INDEXED
 from .theme import read_theme
-from .xml import attr, attr_float, attr_int, child, flag, kids, local, path, rich_text
+from .xml import attr, attr_float, attr_int, child, flag, kids, local, path, phonetic_data, rich_text
 
 
 class ReadReport:
@@ -129,14 +129,27 @@ def read_xlsx(data: bytes) -> Tuple[Workbook, List[str]]:
             cx.warn(f"missing part {ssr.target}")
         else:
             sst: List[str] = []
+            phonetics: Dict[str, Tuple[list, Optional[dict]]] = {}
+            dropped = 0
             try:
                 for ev, el in ET.iterparse(io.BytesIO(b), events=("end",)):
                     if local(el.tag) == "si":
-                        sst.append(rich_text(el))
+                        text = rich_text(el)
+                        # Phonetic (furigana) runs are kept next to the text they annotate, so an
+                        # open and save does not delete them; one reading per text.
+                        ph = phonetic_data(el, text)
+                        if ph is not None:
+                            if text in phonetics and phonetics[text] != ph:
+                                dropped += 1
+                            phonetics.setdefault(text, ph)
+                        sst.append(text)
                         el.clear()
             except ET.ParseError as e:
                 cx.warn(f"shared strings are damaged ({e}); kept {len(sst)} strings")
+            if dropped:
+                cx.warn(f"shared strings: {dropped} phonetic readings were dropped because another string with the same text already had one")
             cx.sst = sst
+            wb.phonetics = phonetics
     pr = _find_rel(wb_rels, "person")
     if pr is not None:
         try:
@@ -196,6 +209,7 @@ def read_xlsx(data: bytes) -> Tuple[Workbook, List[str]]:
                 raise
             cx.warn(f'sheet "{name}" could not be read: {e}')
             sheet = Sheet(name)
+        sheet.sheet_id = attr_int(se, "sheetId") or 0
         state = attr(se, "state")
         sheet.visibility = state if state in ("hidden", "veryHidden") else "visible"
         file_to_model.append(len(wb.sheets))

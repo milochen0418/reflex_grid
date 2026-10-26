@@ -134,7 +134,7 @@ def read_drawing(cx, part: str, sheet: Sheet) -> None:
             ch = child(gd, "chart") if gd is not None else None
             if ch is None:
                 if gd is not None:
-                    cx.warn("some charts of newer types (chartex) or other objects were not loaded")
+                    cx.warn(f"a chart of a newer type (chartex) or an embedded object (SmartArt, OLE…) was skipped ({part})")
                 continue
             rid = attr(ch, "id")
             rel = next((r for r in rels if r.id == rid), None)
@@ -145,13 +145,13 @@ def read_drawing(cx, part: str, sheet: Sheet) -> None:
                 continue
             chart = read_chart(cxml)
             if chart is None:
-                cx.warn("a chart of an unsupported type was not loaded")
+                cx.warn(f"chart {rel.target} has no supported plot and was skipped ({part})")
                 continue
             chart.id = cx.next_object_id()
             chart.anchor = anchor
             sheet.charts.append(chart)
         elif child(a, "sp") is not None or child(a, "grpSp") is not None or child(a, "cxnSp") is not None:
-            cx.warn("shapes and text boxes were not loaded")
+            cx.warn(f"a shape, text box or group of shapes was skipped ({part})")
 
 
 def _group_kind(g: ET.Element) -> Optional[str]:
@@ -176,7 +176,7 @@ def _group_kind(g: ET.Element) -> Optional[str]:
     if tag == "doughnutChart":
         return "doughnut"
     if tag in ("areaChart", "area3DChart"):
-        return "areaStacked" if stacked or pct else "area"
+        return "areaStacked100" if pct else ("areaStacked" if stacked else "area")
     if tag == "scatterChart":
         # Excel writes "lineMarker" for every scatter chart: one without lines has series lines with no fill.
         sers = list(kids(g, "ser"))
@@ -427,7 +427,7 @@ def write_chart(wb, sheet_index: int, ch: Chart) -> str:
         group_end = ('<c:firstSliceAng val="0"/></c:pieChart>' if k == "pie" else '<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>')
         axes = None
     elif k.startswith("area"):
-        grouping = "stacked" if k == "areastacked" else "standard"
+        grouping = "percentStacked" if k == "areastacked100" else ("stacked" if k == "areastacked" else "standard")
         s.append(f'<c:areaChart><c:grouping val="{grouping}"/><c:varyColors val="0"/>')
         group_end = '<c:axId val="111"/><c:axId val="222"/></c:areaChart>'
         axes = "cat"

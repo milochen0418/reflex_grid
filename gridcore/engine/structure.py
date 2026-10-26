@@ -101,6 +101,11 @@ def _adjust_everything(ctx, si: int, edit: Edit) -> None:
                         ser.categories = _adjust_formula_text(ser.categories, host, target, edit)
                     if ser.name and not ser.name.startswith('"'):
                         ser.name = _adjust_formula_text(ser.name, host, target, edit)
+        if sh.sparklines:
+            sm = wb.sheet_mut(i)
+            for sp in sm.sparklines:
+                if sp.source:
+                    sp.source = _adjust_formula_text(sp.source, host, target, edit)
     for d in wb.names:
         host = wb.sheets[d.scope].name if d.scope is not None and d.scope < len(wb.sheets) else target
         # Names hold absolute references qualified by sheet; unqualified ones follow the scope.
@@ -214,6 +219,18 @@ def shift_lines(ctx, si: int, axis: str, at: int, count: int, insert: bool) -> N
             if nv is not None:
                 nd[(nv, rc[1]) if rows else (rc[0], nv)] = x
         setattr(sm, name, nd)
+    # A sparkline moves with its cell, and goes when its row or column is deleted.
+    kept = []
+    for sp in sm.sparklines:
+        nv = _map_index(sp.row if rows else sp.col, at, count, insert, MAX_ROWS if rows else MAX_COLS)
+        if nv is None:
+            continue
+        if rows:
+            sp.row = nv
+        else:
+            sp.col = nv
+        kept.append(sp)
+    sm.sparklines = kept
     for obj in list(sm.charts) + list(sm.images):
         a = obj.anchor
         if a.mode == "absolute":

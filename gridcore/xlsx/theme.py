@@ -9,7 +9,7 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 
 from ..model.style import Theme
-from .xml import XML_DECL, attr, child, esc_attr, path
+from .xml import XML_DECL, attr, child, esc_attr, kids, path
 
 SLOTS = [
     ("dk1", 1), ("lt1", 0), ("dk2", 3), ("lt2", 2), ("accent1", 4), ("accent2", 5), ("accent3", 6),
@@ -63,6 +63,19 @@ def read_theme(root: ET.Element) -> Theme:
             mn = path(fs, "minorFont", "latin")
             if mn is not None and attr(mn, "typeface"):
                 minor = attr(mn, "typeface")
+            extra = {}
+            for key, font in (("major", "majorFont"), ("minor", "minorFont")):
+                for kind in ("ea", "cs"):
+                    e = path(fs, font, kind)
+                    extra[f"{key}_font_{kind}"] = (attr(e, "typeface") or "") if e is not None else ""
+                coll = child(fs, font)
+                scripts = []
+                if coll is not None:
+                    # A hostile file is held to 64 entries of at most 256 characters each.
+                    for f in list(kids(coll, "font"))[:64]:
+                        scripts.append(((attr(f, "script") or "")[:256], (attr(f, "typeface") or "")[:256]))
+                extra[f"{key}_font_scripts"] = tuple(scripts)
+            return Theme(name, tuple(colors), major, minor, **extra)
     return Theme(name, tuple(colors), major, minor)
 
 
@@ -75,9 +88,14 @@ def write_theme(t: Theme) -> str:
         rgb = t.colors[idx] & 0xFFFFFF
         s.append(f'<a:{slot}><a:srgbClr val="{rgb:06X}"/></a:{slot}>')
     s.append("</a:clrScheme>")
+    def scripts(fonts) -> str:
+        return "".join(f'<a:font script="{esc_attr(sc)}" typeface="{esc_attr(face)}"/>' for sc, face in fonts)
+
     s.append(
-        f'<a:fontScheme name="{name}"><a:majorFont><a:latin typeface="{esc_attr(t.major_font)}"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>'
-        f'<a:minorFont><a:latin typeface="{esc_attr(t.minor_font)}"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme>'
+        f'<a:fontScheme name="{name}"><a:majorFont><a:latin typeface="{esc_attr(t.major_font)}"/><a:ea typeface="{esc_attr(t.major_font_ea)}"/>'
+        f'<a:cs typeface="{esc_attr(t.major_font_cs)}"/>{scripts(t.major_font_scripts)}</a:majorFont>'
+        f'<a:minorFont><a:latin typeface="{esc_attr(t.minor_font)}"/><a:ea typeface="{esc_attr(t.minor_font_ea)}"/>'
+        f'<a:cs typeface="{esc_attr(t.minor_font_cs)}"/>{scripts(t.minor_font_scripts)}</a:minorFont></a:fontScheme>'
     )
     fill = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'
     line = '<a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>'

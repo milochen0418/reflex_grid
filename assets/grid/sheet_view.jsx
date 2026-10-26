@@ -607,6 +607,18 @@ export function SheetView(props) {
     [fr, fc, rows, cols, z, mainH, mainW]
   );
 
+  // A keyboard move from the scrolled rows (columns) into the frozen ones puts the scrolled area
+  // back at its top (left), as Excel does: otherwise rows stay hidden behind the frozen ones.
+  const backToPanes = useCallback(
+    (from, to) => {
+      const el = scrollerRef.current;
+      if (!el) return;
+      if (to[0] < fr && from[0] >= fr) el.scrollTop = 0;
+      if (to[1] < fc && from[1] >= fc) el.scrollLeft = 0;
+    },
+    [fr, fc]
+  );
+
   // ------------------------------------------------------------ server state sync
 
   // A chart or picture this tab just inserted is selected, as in Excel: Delete then removes it,
@@ -1268,12 +1280,17 @@ export function SheetView(props) {
           const ng = expandMerges(norm(anchor, [nr, nc]));
           const ns = { active: anchor, anchor, ranges: [...s.ranges.slice(0, -1), ng] };
           setSel(ns);
-          ensureVisible(nr, nc);
+          // Shift+Arrow on whole columns (or rows) keeps the view on the rows (columns) it showed:
+          // the extension's far end is the sheet's edge, not somewhere to scroll to.
+          const wholeCols = g0[0] === 0 && g0[2] === MAXR - 1 && dr === 0;
+          const wholeRows = g0[1] === 0 && g0[3] === MAXC - 1 && dc === 0;
+          ensureVisible(wholeCols ? anchor[0] : nr, wholeRows ? anchor[1] : nc);
           syncSelSoon();
           return;
         }
         const [r, c] = step(s.active[0], s.active[1], dr, dc);
         selectCell(r, c);
+        backToPanes(s.active, [r, c]);
         syncSelSoon();
         return;
       }
@@ -1309,11 +1326,16 @@ export function SheetView(props) {
           if (e.altKey) {
             const [r, c] = step(s.active[0], s.active[1], 0, d * visCols);
             selectCell(r, c);
+            backToPanes(s.active, [r, c]);
           } else {
             const [r, c] = step(s.active[0], s.active[1], d * visRows, 0);
             selectCell(r, c);
             const el = scrollerRef.current;
-            if (el) el.scrollTop = Math.max(0, vmapRef.current.toScroll(vmapRef.current.toSheet(el.scrollTop) + d * visRows * (g.defaultRowHeight || 20) * z));
+            // Into the frozen rows: the scrolled rows go back to the top, so none stay hidden
+            // behind the frozen ones (row 10, Page Down, Page Up, Page Up used to end on row 1 with
+            // rows 2-9 out of sight).
+            if (el && r < fr && s.active[0] >= fr) el.scrollTop = 0;
+            else if (el) el.scrollTop = Math.max(0, vmapRef.current.toScroll(vmapRef.current.toSheet(el.scrollTop) + d * visRows * (g.defaultRowHeight || 20) * z));
           }
           syncSelSoon();
         }
@@ -1529,7 +1551,7 @@ export function SheetView(props) {
       // Printable keys fall through: the textarea receives the character and editing starts
       // in onInput.
     },
-    [ac, acceptAc, commit, cancelEdit, setEd, step, pointTo, ensureVisible, objSel, cmd, dialog, ui, expandMerges, setSel, syncSelSoon, selectCell, moveAfter, fr, fc, mainH, mainW, g.defaultRowHeight, g.defaultColWidth, z, beginEdit, cellText]
+    [ac, acceptAc, commit, cancelEdit, setEd, step, pointTo, ensureVisible, backToPanes, objSel, cmd, dialog, ui, expandMerges, setSel, syncSelSoon, selectCell, moveAfter, fr, fc, mainH, mainW, g.defaultRowHeight, g.defaultColWidth, z, beginEdit, cellText]
   );
 
   const onKbdInput = useCallback(
@@ -2201,6 +2223,9 @@ export function SheetView(props) {
       }
       const pad = 3 * z;
       let shown = text;
+      // With Wrap Text off a multi-line value shows on one line, as in Excel (the breaks stay in the
+      // value; the editor shows them).
+      if (!wrap && shown && shown.includes("\n")) shown = shown.replace(/\n/g, "");
       // Shrink to Fit: a smaller font instead of spilling over or showing ###.
       let fsShown = fs;
       if (st.sh && !wrap && text && !it.span) {

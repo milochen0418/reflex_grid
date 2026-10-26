@@ -84,6 +84,13 @@ def read_font(e: ET.Element, palette: List[int]) -> Font:
     # Text 1 (dk1) is what "automatic" font colour means in practice.
     if color == Color.theme(1, 0):
         color = AUTO
+    cs = child(e, "charset")
+    charset = attr_int(cs, "val") if cs is not None else None
+    fam = child(e, "family")
+    family = attr_int(fam, "val") if fam is not None else None
+    if family is not None and not 1 <= family <= 14 or family == 2:
+        family = None
+    scheme = child_val(e, "scheme") or ""
     f = Font()
     return Font(
         name=name or f.name,
@@ -94,6 +101,9 @@ def read_font(e: ET.Element, palette: List[int]) -> Font:
         strike=_bool_prop(e, "strike"),
         color=color,
         vert=vert,
+        charset=charset if charset is not None and 0 <= charset <= 255 else None,
+        family=family,
+        scheme=scheme if scheme in ("minor", "major") else "",
     )
 
 
@@ -290,7 +300,7 @@ def color_attrs(c: Color) -> str:
     return f'theme="{c.value}" tint="{num(c.tint / 1000.0)}"'
 
 
-def _font_xml(f: Font, dxf: bool) -> str:
+def _font_xml(f: Font, dxf: bool, theme=None) -> str:
     s = ["<font>"]
     if f.bold:
         s.append("<b/>")
@@ -311,9 +321,19 @@ def _font_xml(f: Font, dxf: bool) -> str:
     elif not dxf:
         s.append('<color theme="1"/>')
     if not dxf:
-        s.append(f'<name val="{esc_attr(f.name)}"/><family val="2"/>')
-        if f.name == "Calibri":
+        family = f.family if f.family is not None and 1 <= f.family <= 14 else 2
+        s.append(f'<name val="{esc_attr(f.name)}"/><family val="{family}"/>')
+        if f.charset is not None and 0 <= f.charset <= 255:
+            s.append(f'<charset val="{f.charset}"/>')
+        # A font in the theme's body face that kept its link follows the theme, as Excel writes it
+        # (so do the fonts derived from it: bold, a colour, a size); a face set by hand does not.
+        if theme is None:
+            if f.name == "Calibri":
+                s.append('<scheme val="minor"/>')
+        elif f.scheme == "minor" and f.name == theme.minor_font:
             s.append('<scheme val="minor"/>')
+        elif f.scheme == "major" and f.name == theme.major_font:
+            s.append('<scheme val="major"/>')
     s.append("</font>")
     return "".join(s)
 
@@ -497,7 +517,7 @@ def write_styles(wb, dxfs: List[Style]) -> str:
         for i, code in nf.custom:
             s.append(f'<numFmt numFmtId="{i}" formatCode="{esc_attr(code)}"/>')
         s.append("</numFmts>")
-    s.append(f'<fonts count="{len(fonts.items)}">' + "".join(_font_xml(f, False) for f in fonts.items) + "</fonts>")
+    s.append(f'<fonts count="{len(fonts.items)}">' + "".join(_font_xml(f, False, wb.theme) for f in fonts.items) + "</fonts>")
     s.append(f'<fills count="{len(fills.items)}">' + "".join(_fill_xml(f, False) for f in fills.items) + "</fills>")
     s.append(f'<borders count="{len(borders.items)}">' + "".join(_border_xml(b) for b in borders.items) + "</borders>")
     s.append(f'<cellStyleXfs count="{named}">' + "".join(style_xfs) + "</cellStyleXfs>")

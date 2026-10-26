@@ -187,6 +187,15 @@ class Comment:
     threaded: bool = False
     resolved: bool = False
     visible: bool = False
+    # Where the note's box sits and how big it is, from the note's VML shape: the <x:Anchor>
+    # corners relative to the note's cell (columns, pixels, rows, pixels; top-left then bottom-right,
+    # so the box moves with the note when rows or columns move) and the shape's width and height in
+    # points. None: a note made here, or a file without the shape, gets DEFAULT_NOTE_BOX.
+    box: Optional[Tuple[float, ...]] = None
+
+
+# The box a note made here gets: two columns right of its cell, four rows tall, 108 x 59.25 pt.
+DEFAULT_NOTE_BOX: Tuple[float, ...] = (1, 15, 0, 2, 3, 15, 4, 16, 108.0, 59.25)
 
 
 @dataclass(frozen=True)
@@ -252,7 +261,7 @@ class Series:
 
 CHART_KINDS = [
     "columnClustered", "columnStacked", "columnStacked100", "barClustered", "barStacked", "barStacked100",
-    "line", "lineMarkers", "lineStacked", "pie", "doughnut", "area", "areaStacked", "scatter", "scatterLines",
+    "line", "lineMarkers", "lineStacked", "pie", "doughnut", "area", "areaStacked", "areaStacked100", "scatter", "scatterLines",
     "radar",
 ]
 

@@ -418,16 +418,25 @@ def sci_text(n: float, sig: int) -> str:
 
 
 def number_to_text(n: float) -> str:
-    """Number → text the way Excel converts in ``&``: up to 15 significant digits, scientific
-    for very large or very small magnitudes."""
+    """Number → text the way Excel converts in ``&`` (Excel 16 for Mac): 15 significant digits,
+    written out in full while that takes at most 20 characters, the sign not counted —
+    ``1E-18`` is ``0.000000000000000001``, ``2^63`` is ``9223372036854780000``,
+    ``1E+15+0.5`` is ``1000000000000000`` — and in scientific notation past that: ``1E-19``,
+    ``1E+20``, ``3.33333333333333E-06`` (which would need 22 characters)."""
     if n == 0.0 or not math.isfinite(n):
         return "0"
-    a = abs(n)
-    if (not (1e-9 <= a < 1e15) and round(a) != a) or a >= 1e15:
+    mant, _, exp = f"{abs(n):.14e}".partition("e")
+    digits = mant.replace(".", "")
+    e = int(exp)
+    if e >= 14:
+        plain = digits + "0" * (e - 14)
+    elif e >= 0:
+        plain = trim_decimal(digits[: e + 1] + "." + digits[e + 1:])
+    else:
+        plain = trim_decimal("0." + "0" * (-e - 1) + digits)
+    if len(plain) > 20:
         return sci_text(n, 15)
-    mag = math.floor(math.log10(a))
-    decimals = min(max(14 - mag, 0), 30)
-    return trim_decimal(f"{n:.{decimals}f}")
+    return ("-" if n < 0 else "") + plain
 
 
 def flatten_values(vals: Iterable[Value]) -> List[Value]:

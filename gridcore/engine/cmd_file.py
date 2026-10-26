@@ -43,6 +43,7 @@ def open_bytes(s: Session, data: bytes, name: str, path: Optional[str] = None, d
         raise EngineError("OpenDocument (.ods) files aren't supported yet. Save the file as .xlsx and try again.")
     else:
         raise EngineError(f"ReflexGrid can't open `{name}`: the file format isn't recognised.")
+    wb.file_name = os.path.basename(name)
     d = DocState(wb, os.path.basename(name), path)
     d.warnings = list(warnings)
     s.add_document(d)
@@ -176,6 +177,8 @@ def _save_to(s: Session, path: str):
         d.saved = d.wb
         d.path = path
         d.name = os.path.basename(path)
+        # The new file is the workbook's own now, so CELL("filename") reports it.
+        d.wb.file_name = d.name
     out: Dict[str, Any] = {"path": path, "size": len(data)}
     if fmt == "xlsx" and d.wb.vba is not None:
         out["warning"] = "The VBA project was left out: an .xlsx workbook can't hold macros. Save as .xlsm to keep them."

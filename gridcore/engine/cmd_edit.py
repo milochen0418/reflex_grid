@@ -118,7 +118,21 @@ def _set(ctx, si: int, rc: Tuple[int, int], cell: Optional[Cell]) -> None:
         sm.remove_cell(rc)
     else:
         sm.set_cell(rc, cell)
+        grow_autofilter(sm, rc, cell)
     ctx.touch(si, rc)
+
+
+def grow_autofilter(sm, rc: Tuple[int, int], cell: Cell) -> None:
+    """Excel grows an AutoFilter range when a value is entered in the row right below it, in one
+    of its columns (GridCraft #2342): not after a blank row, not outside its columns, not for empty
+    text, and a table's filter belongs to the table. A formula counts before it is calculated."""
+    af = sm.autofilter
+    if af is None or (cell.formula is None and (cell.value is None or cell.value == "")):
+        return
+    r = af.range
+    if rc[0] != r.r1 + 1 or not r.c0 <= rc[1] <= r.c1 or any(t.range == r for t in sm.tables):
+        return
+    sm.autofilter = replace(af, range=RangeRef(r.r0, r.c0, rc[0], r.c1))
 
 
 # ---------------------------------------------------------------- entering
@@ -1128,7 +1142,7 @@ def fill_left(s, p):
     return _fill_dir(s, p, 0, -1)
 
 
-@command("edit.autoFill", "AutoFill", params='{source?: "A1:A2", target: "A1:A10", mode?: series|alternate|fillseries|copy|formats|values}')
+@command("edit.autoFill", "AutoFill", params='{source?: "A1:A2", target: "A1:A10", mode?: series|alternate|fillseries|copy|formats|values|days|weekdays|months|years} (days, weekdays, months, years = Fill Days, Fill Weekdays, Fill Months, Fill Years: dates step by one unit, or by the difference between the first two dates in that unit; weekdays skip Saturday and Sunday)')
 def auto_fill(s: Session, p: Dict[str, Any]):
     d = s.doc()
     si = param_sheet(s, p)

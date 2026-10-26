@@ -38,6 +38,35 @@ def approx_text_width(text: str, size: float, bold: bool) -> float:
     return w * size * (1.05 if bold else 1.0) * 96.0 / 72.0
 
 
+def wrapped_line_count(line: str, width: float, size: float, bold: bool) -> int:
+    """Lines one text line needs when word-wrapped into ``width`` points. The grid wraps whole
+    words (``white-space: pre-wrap``), so dividing the line's width by the column width
+    undercounts: each drawn line ends early at the last word that fits. A word wider than the
+    column breaks mid-word (``word-break: break-word``)."""
+    space = approx_text_width(" ", size, bold)
+    lines, used = 1, 0.0
+    for word in line.split(" "):
+        if not word:
+            # Runs of spaces stay in the line.
+            used += space
+            continue
+        w = approx_text_width(word, size, bold)
+        if w > width:
+            if used > 0:
+                lines += 1
+            chunks = max(math.ceil(w / width), 1)
+            lines += chunks - 1
+            used = w - (chunks - 1) * width
+            continue
+        gap = space if used > 0 else 0.0
+        if used + gap + w > width:
+            lines += 1
+            used = w
+        else:
+            used += gap + w
+    return lines
+
+
 def auto_row_height(wb, si: int, row: int) -> None:
     """Recomputes an automatic row height from its content: the largest font, and wrapped or
     multi-line text. Rows with a user-set height keep it."""
@@ -52,7 +81,9 @@ def auto_row_height(wb, si: int, row: int) -> None:
     plain = True
     for c, cell in cells.items():
         st = wb.styles.get(cell.style)
-        if st.font.size > DEFAULT_FONT_SIZE or st.align.wrap or (isinstance(cell.value, str) and "\n" in cell.value):
+        # Line breaks in a cell's text count only when the cell wraps, as in Excel: with Wrap Text
+        # off a multi-line value shows on one line and AutoFit gives a one-line row.
+        if st.font.size > DEFAULT_FONT_SIZE or st.align.wrap:
             plain = False
             break
     if plain:
@@ -66,13 +97,13 @@ def auto_row_height(wb, si: int, row: int) -> None:
         size = st.font.size
         line = max(round(size * 1.8), default * size / DEFAULT_FONT_SIZE)
         if cell.value is not None or cell.formula is not None:
-            text = cell_text(wb, sh, (row, c))
-            lines_txt = text.split("\n") or [""]
+            lines = 1
             if st.align.wrap:
+                # Only a wrapping cell is laid out over several lines: each line break starts one,
+                # and each line folds at the column width, whole words at a time.
+                text = cell_text(wb, sh, (row, c))
                 w = max(sh.col_width(c) - 6.0, 1.0)
-                lines = max(sum(max(math.ceil(approx_text_width(l, size, st.font.bold) / w), 1) for l in lines_txt), 1)
-            else:
-                lines = max(len(lines_txt), 1)
+                lines = max(sum(wrapped_line_count(l, w, size, st.font.bold) for l in text.split("\n")), 1)
         elif size <= DEFAULT_FONT_SIZE:
             continue
         else:

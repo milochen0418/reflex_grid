@@ -2,8 +2,9 @@
 formula point mode, Enter pasting a copy, typing after the name box, Ctrl+Shift+Arrow revealing the
 moving end, the last row reached and drawn, a new chart selected so Delete removes it,
 double-clicking the fill handle, a validation's input message under its open list, Center Across
-Selection, Shrink to Fit and a merged area's borders, links that may not run script, and panning the
-grid with a finger."""
+Selection, Shrink to Fit and a merged area's borders, links that may not run script, panning the
+grid with a finger, a multi-line value in an unwrapped cell on one line, Page Up into frozen rows
+scrolling the rows below back to the top, and Shift+Arrow on a whole column keeping the view."""
 
 import sys
 from pathlib import Path
@@ -175,6 +176,10 @@ def body(g: Grid) -> None:
     ws.column_dimensions["D"].width = 8
     ws["F10"] = "merged"
     ws.merge_cells("F10:H11")
+    ws["J2"] = "one\ntwo"
+    ws["J3"] = "one\ntwo"
+    ws["J3"].alignment = Alignment(wrap_text=True)
+    ws.freeze_panes = "A2"
     red = Side(style="medium", color="FF0000")
     for r in (10, 11):
         for c in "FGH":
@@ -221,6 +226,36 @@ def body(g: Grid) -> None:
     mid_x, mid_y = (fx + hx + hw) / 2, (fy + hy + hh) / 2
     for side, (px_, py_) in {"left": (fx - 1, mid_y), "top": (mid_x, fy - 1), "right": (hx + hw - 1, mid_y), "bottom": (mid_x, hy + hh - 1)}.items():
         assert pixel(px_, py_) == [255, 0, 0], (side, pixel(px_, py_))
+
+    # GridCraft 4faa3ff0: with Wrap Text off a multi-line value shows on one line, as in Excel; the
+    # breaks stay in the value.
+    assert page.locator('.rg-pane [data-cell="J2"]').inner_text() == "onetwo"
+    g.click("J2")
+    g.wait_formula_bar("one\ntwo")
+    # GridCraft 8eda5775: Page Up into the frozen row scrolls the rows below back to the top (row 10,
+    # Page Down, Page Up, Page Up used to end on row 1 with rows 2-9 out of sight).
+    g.select("B10")
+    page.focus("#rg-editor")
+    page.keyboard.press("PageDown")
+    g.wait_idle(0.3)
+    page.keyboard.press("PageUp")
+    g.wait_idle(0.3)
+    page.keyboard.press("PageUp")
+    g.wait_idle(0.5)
+    assert g.name_box() == "B1", g.name_box()
+    page.wait_for_function("() => document.querySelector('.rg-scroller').scrollTop === 0 && [...document.querySelectorAll('.rg-rowhead')].some((e) => e.innerText.trim() === '2')", timeout=8000)
+    # GridCraft #2451: Shift+Arrow on a whole column keeps the view on the rows it showed; it used
+    # to scroll to row 1,048,576, the extension's far end.
+    page.mouse.click(*header(g, "cols", "C"))
+    g.wait_idle(0.3)
+    page.focus("#rg-editor")
+    page.keyboard.press("Shift+ArrowRight")
+    g.wait_idle(0.6)
+    assert page.evaluate("() => document.querySelector('.rg-scroller').scrollTop") < 50
+    assert g.name_box().startswith("C"), g.name_box()
+    page.locator(".rg-selection").wait_for(state="visible")
+    g.click("B2")
+    g.wait_idle(0.3)
 
     # GridCraft #1907: a finger dragging on the grid pans it; it doesn't select cells.
     ctx = page.context.browser.new_context(viewport={"width": 900, "height": 700}, has_touch=True, is_mobile=False)

@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1
 from ..core.value import Array, CellError
 from ..formula import quote_sheet
-from ..model.features import CondFormat, FilterCriterion, LineInfo, Table, Validation, default_icon_thresholds, icon_count
+from ..model.features import DEFAULT_NOTE_BOX, CondFormat, FilterCriterion, LineInfo, Table, Validation, default_icon_thresholds, icon_count
 from ..model.sheet import DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, Sheet
 from ..model.style import AUTO, Fill, Style
 from .array_formula import needs_array
@@ -734,11 +734,17 @@ def _vml_xml(sheet: Sheet, n: int) -> str:
         c = sheet.comments[cell]
         sid = n * 1024 + 1 + i
         vis = "visible" if c.visible else "hidden"
+        # The box read from the file (or the default one), its corners moved with the note's cell
+        # and kept on the sheet.
+        b = c.box or DEFAULT_NOTE_BOX
+        c1, r1 = min(max(cell[1] + int(b[0]), 0), MAX_COLS - 1), min(max(cell[0] + int(b[2]), 0), MAX_ROWS - 1)
+        c2, r2 = min(max(cell[1] + int(b[4]), 0), MAX_COLS - 1), min(max(cell[0] + int(b[6]), 0), MAX_ROWS - 1)
+        anchor = f"{c1}, {int(b[1])}, {r1}, {int(b[3])}, {c2}, {int(b[5])}, {r2}, {int(b[7])}"
         s.append(
-            f'<v:shape id="_x0000_s{sid}" type="#_x0000_t202" style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:{i + 1};visibility:{vis}" fillcolor="#ffffe1" o:insetmode="auto">'
+            f'<v:shape id="_x0000_s{sid}" type="#_x0000_t202" style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:{b[8]:g}pt;height:{b[9]:g}pt;z-index:{i + 1};visibility:{vis}" fillcolor="#ffffe1" o:insetmode="auto">'
             '<v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/>'
             '<v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox>'
-            f'<x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{cell[1] + 1}, 15, {cell[0]}, 2, {cell[1] + 3}, 15, {cell[0] + 4}, 16</x:Anchor>'
+            f'<x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{anchor}</x:Anchor>'
             f'<x:AutoFill>False</x:AutoFill><x:Row>{cell[0]}</x:Row><x:Column>{cell[1]}</x:Column>{"<x:Visible/>" if c.visible else ""}</x:ClientData></v:shape>'
         )
     s.append("</xml>")

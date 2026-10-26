@@ -61,13 +61,48 @@ def parse_number_text_in(s: str, sys: DateSystem) -> Optional[float]:
     return None if r is None else r[0]
 
 
+def _parenthesized(t: str) -> Optional[str]:
+    """The number text inside a parenthesised negative, the accounting forms included — ``(5)``,
+    ``$(1,234)``, ``($5)``, ``(5)%``, ``(5%)``, ``(1 1/2)`` — with the currency sign and the percent
+    moved inside (``$(1,234)`` gives ``$1,234``); ``None`` when ``t`` isn't one such pair. Excel 16
+    reads one pair only, with no sign and no further parentheses inside, so ``((5))``, ``(-5)``,
+    ``($-5)``, ``-(5)``, ``$(5)%`` and ``(5)%%`` stay text."""
+    s = t
+    prefix = suffix = ""
+    if s.startswith("$"):
+        prefix = "$"
+        s = s[1:].lstrip()
+    elif s.endswith("%"):
+        suffix = "%"
+        s = s[:-1].rstrip()
+    if not (s.startswith("(") and s.endswith(")") and len(s) >= 2):
+        return None
+    inner = s[1:-1].strip()
+    if not inner or "(" in inner or ")" in inner:
+        return None
+    body = inner[1:].lstrip() if inner.startswith("$") else inner
+    if not body or body[0] in "-+":
+        return None
+    if (prefix and inner.startswith("$")) or (suffix and inner.endswith("%")):
+        return None
+    return prefix + inner + suffix
+
+
 def _parse_numeric(t: str, sys: DateSystem) -> Optional[tuple[float, Optional[str]]]:
     if not t:
         return None
-    # Parenthesised negatives: (100) = -100.
-    if t.startswith("(") and t.endswith(")") and len(t) >= 2:
-        inner = _parse_numeric(t[1:-1].strip(), sys)
-        return None if inner is None else (-inner[0], inner[1])
+    inner = _parenthesized(t)
+    if inner is not None:
+        # Inside the parentheses Excel reads a plain number or a fraction, never a date or a time:
+        # (1/2), (10:30) and (3/4/2026) are text.
+        r = _parse_plain(inner)
+        if r is None:
+            f = _parse_fraction(inner)
+            if f is None:
+                return None
+            r = (f, "# ?/?")
+        n = r[0]
+        return (0.0 if n == 0 else -n), r[1]
     r = _parse_plain(t)
     if r is not None:
         return r
@@ -100,8 +135,9 @@ def _parse_plain(t: str) -> Optional[tuple[float, Optional[str]]]:
         s = s[1:].lstrip()
     elif s.startswith("+"):
         s = s[1:].lstrip()
-    if s.startswith("$"):
-        currency = True
+    if s.startswith("$") or s.startswith("€"):
+        # € is read as a currency sign too (Excel 16 for Mac, en-US), but brings no currency format.
+        currency = s.startswith("$")
         s = s[1:].lstrip()
         if not neg and s.startswith("-"):
             neg = True
@@ -109,7 +145,8 @@ def _parse_plain(t: str) -> Optional[tuple[float, Optional[str]]]:
     if s.endswith("%"):
         percent = True
         s = s[:-1].rstrip()
-    if not s:
+    if not s or (currency and percent):
+        # `$5%` is text in Excel 16 (typed, and in VALUE).
         return None
     has_sep = "," in s
     if has_sep:
@@ -188,9 +225,11 @@ def _parse_fraction(t: str) -> Optional[float]:
     fa, fb = _float(a), _float(b)
     if fa is None or fb is None:
         return None
-    if fb == 0.0 or not math.isfinite(w):
+    if fb == 0.0 or not all(math.isfinite(x) for x in (w, fa, fb)):
         return None
     v = w + fa / fb
+    if not math.isfinite(v):
+        return None
     return -v if neg else v
 
 

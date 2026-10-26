@@ -49,6 +49,11 @@ def autosum(s: Session, p: Dict[str, Any]):
     d = s.doc()
     sh = d.sheet
     sel = d.selection.current()
+    used = sh.used_range()
+    if used is not None and (sel.is_full_rows() or sel.is_full_cols()):
+        # A whole-row or whole-column selection stops at the data, as Excel's does: a row's total
+        # goes just after its last value, not in column XFD.
+        sel = RangeRef(sel.r0, sel.c0, min(sel.r1, max(used.r1, sel.r0)), min(sel.c1, max(used.c1, sel.c0)))
     merged = sh.merge_at(sel.start)
     if sel.is_single() or (merged is not None and merged == sel):
         at = sel.start

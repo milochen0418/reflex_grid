@@ -7,6 +7,7 @@ columns (``XFD1048576``), like Excel.
 
 from __future__ import annotations
 
+import re
 from typing import Iterator, NamedTuple, Optional, Tuple
 
 MAX_ROWS = 1_048_576
@@ -82,6 +83,24 @@ def parse_a1_prefix(s: str) -> Optional[tuple[int, int, bool, bool, str]]:
     if row == 0 or row > MAX_ROWS:
         return None
     return col, row - 1, col_abs, row_abs, s[i:]
+
+
+_R1C1_TOKEN_RE = re.compile(r"^(?:[Rr]\d*)?(?:[Cc]\d*)?$")
+
+
+def sheet_needs_quotes(name: str) -> bool:
+    """Whether Excel quotes a sheet name in a reference (``'My Sheet'!A1``): it starts with a digit
+    or ``.``, holds anything but letters (any script), digits, ``_`` and ``.``, reads as a cell
+    within the sheet (``A1``, ``CR1``, ``AB1048576``; ``XFE1`` and ``AB1048577`` stay bare) or as an
+    R1C1 reference (``R``, ``C``, ``RC``, ``R1C``, ``RC1``, ``r2c3``), or is TRUE or FALSE — checked
+    in Excel 16 for Mac."""
+    if not name:
+        return True
+    if name[0].isdigit() or name[0] == "." or any(not (c.isalnum() or c in "_.") for c in name):
+        return True
+    if parse_cell(name) is not None or name.upper() in ("TRUE", "FALSE"):
+        return True
+    return _R1C1_TOKEN_RE.match(name) is not None
 
 
 def parse_cell(s: str) -> Optional[Cell]:

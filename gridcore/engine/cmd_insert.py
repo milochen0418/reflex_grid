@@ -60,6 +60,11 @@ def insert_table(s: Session, p: Dict[str, Any]):
     if rng.count() > 50_000_000:
         raise EngineError("The range is too large for a table.")
     if any(t.range.intersects(rng) for t in sh.tables):
+        inside = next((t for t in sh.tables if t.range.contains_range(rng)), None)
+        if inside is not None and p.get("style"):
+            # Format as Table on cells inside a table restyles that table, as in Excel.
+            table_style(s, {"style": str(p["style"]), "table": inside.name})
+            return {"name": inside.name, "range": inside.range.a1(), "restyled": True}
         raise EngineError("A table can't overlap another table.")
     if any(m.intersects(rng) for m in sh.merges):
         raise EngineError("A table can't overlap a range that contains merged cells.")
@@ -387,7 +392,7 @@ def build_series(wb, si: int, rng: RangeRef, by_rows: Optional[bool], kind: str)
 
 
 @command("insert.chart", "Chart", menu=("Insert", "Charts"), shortcut="Alt+F1",
-         params="{kind?: columnClustered|columnStacked|columnStacked100|barClustered|barStacked|barStacked100|line|lineMarkers|lineStacked|pie|doughnut|area|areaStacked|scatter|scatterLines|radar, range?, title?, byRows?: bool}")
+         params="{kind?: columnClustered|columnStacked|columnStacked100|barClustered|barStacked|barStacked100|line|lineMarkers|lineStacked|pie|doughnut|area|areaStacked|areaStacked100|scatter|scatterLines|radar, range?, title?, byRows?: bool}")
 def insert_chart(s, p):
     d = s.doc()
     si = param_sheet(s, p)
@@ -760,12 +765,18 @@ def new_note(s, p):
     si, at = _note_cell(s, p)
     _one_kind(s, si, at, False)
     text = str(p.get("text", ""))
-    author = p_str(p, "author") or s.prefs.get("userName", "ReflexGrid User")
+    named = p_str(p, "author")
+    author = named or s.prefs.get("userName", "ReflexGrid User")
 
     def f(ctx):
         sm = ctx.sheet_mut(si)
         old = sm.comments.get(at)
-        sm.comments[at] = Comment(author, text, visible=old.visible if old is not None else False)
+        if old is not None and not old.threaded:
+            # Writing a note on a cell that has one edits it, as Excel's Edit Note does: whether it
+            # is shown, its box as read from the file and who wrote it stay.
+            sm.comments[at] = replace(old, text=text, author=named or old.author)
+        else:
+            sm.comments[at] = Comment(author, text)
 
     edit(s, f)
     return None

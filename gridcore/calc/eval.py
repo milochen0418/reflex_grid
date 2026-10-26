@@ -12,7 +12,7 @@ import math
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef, col_to_letters
-from ..core.value import Array, CellError, Value, XlError, compare, scalar, to_bool, to_number, to_number_in, to_text
+from ..core.value import Array, CellError, Value, XlError, compare, fold, scalar, to_bool, to_number, to_number_in, to_text
 from ..formula import (
     ArrayLit,
     Binary,
@@ -38,6 +38,11 @@ from ..functions.registry import Arg
 
 # Largest array a reference may expand to.
 MAX_CELLS = 16_000_000
+# Lambda invocations one cell may make. A bounded formula can invoke its lambda at most once per
+# cell of an array (capped by MAX_CELLS), so this covers every legitimate call; hostile work that
+# grows past one dimension (a LAMBDA that recurses, MAP nested in MAP over big arrays) then stops at
+# the same bound (#CALC!) instead of squaring.
+LAMBDA_FUEL = MAX_CELLS
 # References up to this many cells are read at their full size; larger ones (A:A, ranges reserved
 # for data to come) stop at the sheet's used range.
 FULL_SIZE_CELLS = 16_384
@@ -134,7 +139,7 @@ def _err(e: CellError) -> CellError:
 
 
 class Evaluator:
-    __slots__ = ("host", "sheet", "at", "env", "depth")
+    __slots__ = ("host", "sheet", "at", "env", "depth", "fuel")
 
     def __init__(self, host: Host, sheet: int, at: Tuple[int, int]):
         self.host = host
@@ -142,6 +147,8 @@ class Evaluator:
         self.at = at
         self.env: List[Tuple[str, Any]] = []
         self.depth = 0
+        # Lambda invocations this cell still has left (LAMBDA_FUEL).
+        self.fuel = LAMBDA_FUEL
 
     # ------------------------------------------------------------ values
 
@@ -265,9 +272,11 @@ class Evaluator:
         return self.name(e.name)
 
     def name(self, n: str):
-        nl = n.lower()
+        # LET and LAMBDA names match case-insensitively in any script, as text does in Excel:
+        # dług is DŁUG, ß is ẞ, ς is σ, but ı and İ are letters of their own.
+        nl = fold(n)
         for k, v in reversed(self.env):
-            if k.lower() == nl:
+            if fold(k) == nl:
                 return v
         wb = self.host.wb
         if "!" in n:
@@ -603,6 +612,11 @@ class Evaluator:
         return self.call_lambda_values(l, bound)
 
     def call_lambda_values(self, l: Lambda, bound: List[Tuple[str, Any]]):
+        # One charge per invocation, whatever the path into the body (direct application, MAP,
+        # REDUCE, BYROW…), so a cell's total lambda work stays bounded however the lambdas nest.
+        if self.fuel <= 0:
+            return CellError.CALC
+        self.fuel -= 1
         saved = self.env
         self.env = list(l.env) + bound
         try:
@@ -625,8 +639,8 @@ class Evaluator:
 
     def is_function_name(self, n: str) -> bool:
         """``n`` names a worksheet function, and no LET variable or defined name."""
-        nl = n.lower()
-        if "!" in n or any(k.lower() == nl for k, _ in self.env) or self.host.wb.name(n, self.sheet) is not None:
+        nl = fold(n)
+        if "!" in n or any(fold(k) == nl for k, _ in self.env) or self.host.wb.name(n, self.sheet) is not None:
             return False
         return is_worksheet_function(n)
 
@@ -1091,7 +1105,11 @@ def _sf_cell(ev: Evaluator, name: str, args):
             return 8.0
         return float(round(max(sh.col_width(c[1]) - 5.0, 0.0) / 7.0))
     if kind == "filename":
-        return ""
+        # Excel's `<folder>\[<file>]<sheet>`, which the classic sheet-name formula splits on the
+        # `]`; a workbook that has no file yet gives "", as in Excel before the first save. Books
+        # here arrive as bytes and know no folder: `[Budget.xlsx]Sheet1`.
+        name = getattr(wb, "file_name", "")
+        return f"[{name}]{sh.name}" if name and sh is not None else ""
     if kind == "sheetname":
         return sh.name if sh is not None else ""
     if kind == "protect":
@@ -1164,11 +1182,35 @@ def _sf_subtotal(ev: Evaluator, name: str, args):
         if len(rest) > 1:
             k = ev.value(rest[1])
     wb = ev.host.wb
+    # Every cell of every area and every value is charged against one budget for the whole call
+    # before any cell is read: a value in XFD1048576 makes `A:XFD` trim to the whole sheet, 17
+    # billion cells, which used to keep the server busy for ever.
+    budget = MAX_CELLS
+    inputs = []
     for e in refs:
         x = ev.eval(e)
         if isinstance(x, RefVal):
-            for a in x.areas:
-                rng = ev.trim(a)
+            areas = [(a, ev.trim(a)) for a in x.areas]
+            budget -= sum(rng.count() for _, rng in areas)
+            if budget < 0:
+                return CellError.NUM
+            inputs.append(("areas", areas))
+        elif name == "SUBTOTAL" or func <= 13:
+            # These take references only: AGGREGATE(9,0,{1,2}) is #VALUE! (Excel refuses such a
+            # SUBTOTAL as it is typed); only the array form (14-19) takes an array.
+            return x if isinstance(x, CellError) else CellError.VALUE
+        elif isinstance(x, Array):
+            budget -= len(x.data)
+            if budget < 0:
+                return CellError.NUM
+            inputs.append(("array", x))
+        elif isinstance(x, Lambda):
+            return CellError.VALUE
+        else:
+            inputs.append(("value", x))
+    for what, x in inputs:
+        if what == "areas":
+            for a, rng in x:
                 s = wb.sheet(a.sheet)
                 for (r, c) in rng.cells():
                     if s is not None:
@@ -1185,14 +1227,8 @@ def _sf_subtotal(ev: Evaluator, name: str, args):
                     if skip_errors and isinstance(v, CellError):
                         continue
                     values.append(v)
-        elif name == "SUBTOTAL" or func <= 13:
-            # These take references only: AGGREGATE(9,0,{1,2}) is #VALUE! (Excel refuses such a
-            # SUBTOTAL as it is typed); only the array form (14-19) takes an array.
-            return x if isinstance(x, CellError) else CellError.VALUE
-        elif isinstance(x, Array):
+        elif what == "array":
             values.extend(v for v in x.data if not (skip_errors and isinstance(v, CellError)))
-        elif isinstance(x, Lambda):
-            return CellError.VALUE
         else:
             values.append(x)
     if k is not None:
@@ -1248,9 +1284,9 @@ def _sf_lambda(ev: Evaluator, name: str, args):
 
 def _sf_isomitted(ev: Evaluator, name: str, args):
     if args and isinstance(args[0], Name):
-        n = args[0].name.lower()
+        n = fold(args[0].name)
         for k, v in reversed(ev.env):
-            if k.lower() == n:
+            if fold(k) == n:
                 return v is None
     return False
 
@@ -1535,6 +1571,10 @@ def zip2(a: Value, b: Value, f: Callable[[Value, Value], Value]) -> Value:
         if isinstance(b, Array):
             rows = _broadcast_dim(a.rows, b.rows)
             cols = _broadcast_dim(a.cols, b.cols)
+            if rows * cols > MAX_CELLS:
+                # Each operand fits, but their broadcast product can be 17 billion cells
+                # (SEQUENCE(1048576)*SEQUENCE(1,16384)): #NUM! instead of running for ever.
+                return CellError.NUM
             data = [f(a.get_broadcast(r, c), b.get_broadcast(r, c)) for r in range(rows) for c in range(cols)]
             return Array(rows, cols, data)
         return Array(a.rows, a.cols, [f(x, b) for x in a.data])
@@ -1551,6 +1591,8 @@ def zip3(c: Array, t: Value, f: Value, g) -> Value:
     fr, fc = dims(f)
     rows = _broadcast_dim(_broadcast_dim(c.rows, tr), fr)
     cols = _broadcast_dim(_broadcast_dim(c.cols, tc), fc)
+    if rows * cols > MAX_CELLS:
+        return CellError.NUM
 
     def get(v, r, k):
         return v.get_broadcast(r, k) if isinstance(v, Array) else v

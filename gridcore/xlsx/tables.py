@@ -16,10 +16,12 @@ def builtin_format(fid: int) -> Optional[str]:
 
 
 def builtin_id(code: str) -> Optional[int]:
-    """Id to write for a format code when it is a locale-independent built-in (currency formats
-    5–8 are written as custom formats because their meaning depends on the reader's locale)."""
+    """Id to write for a format code when it is a locale-independent built-in. The currency
+    formats 5–8 and the accounting formats with a currency symbol, 42 and 44, are written as custom
+    formats because readers resolve those ids by their locale (LibreOffice showed a 44 cell holding
+    -0.14 as "- 0.14" where US Excel shows "$ (0.14)")."""
     for i, c in BUILTINS:
-        if c == code and not 5 <= i <= 8:
+        if c == code and i not in (5, 6, 7, 8, 42, 44):
             return i
     return None
 

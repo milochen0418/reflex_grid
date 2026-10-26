@@ -15,7 +15,7 @@ from .fmla import text_to_file
 from .sheet_write import NS_MAIN, NS_REL, Rels, write_sheet
 from .styles import write_styles
 from .theme import write_theme
-from .xml import XML_DECL, esc, esc_attr, num, t_el
+from .xml import XML_DECL, esc, esc_attr, num, si_body, t_el
 
 CT_WORKSHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
 CT_MAIN = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -93,6 +93,11 @@ def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid", macros: bool = True) 
     active = wb.active_sheet if wb.active_sheet in visible else (visible[0] if visible else 0)
     wb_rels = Rels()
     sheets_xml = []
+    # Each sheet keeps the sheetId its file gave it; a new sheet, or a copy whose id is taken,
+    # gets the first id no sheet asks for.
+    wanted = {s.sheet_id for s in wb.sheets if s.sheet_id}
+    given: set = set()
+    next_id = 1
     for i, sheet in enumerate(wb.sheets):
         xml, rels = write_sheet(wb, i, i == active, out)
         out.part(f"xl/worksheets/sheet{i + 1}.xml", CT_WORKSHEET, xml.encode("utf-8"))
@@ -102,7 +107,13 @@ def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid", macros: bool = True) 
         state = ""
         if sheet.visibility != "visible" and not (not visible and i == active):
             state = f' state="{sheet.visibility}"'
-        sheets_xml.append(f'<sheet name="{esc_attr(sheet.name[:31])}" sheetId="{i + 1}"{state} r:id="{rid}"/>')
+        sid = sheet.sheet_id
+        if not sid or sid in given:
+            while next_id in wanted or next_id in given:
+                next_id += 1
+            sid = next_id
+        given.add(sid)
+        sheets_xml.append(f'<sheet name="{esc_attr(sheet.name[:31])}" sheetId="{sid}"{state} r:id="{rid}"/>')
 
     names = []
     seen = set()
@@ -172,7 +183,8 @@ def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid", macros: bool = True) 
     out.part("xl/theme/theme1.xml", "application/vnd.openxmlformats-officedocument.theme+xml", write_theme(wb.theme).encode("utf-8"))
     wb_rels.add("theme", "theme/theme1.xml")
     sst = [XML_DECL, f'<sst xmlns="{NS_MAIN}" count="{out.sst.count}" uniqueCount="{len(out.sst.list)}">']
-    sst.extend(f"<si>{t_el(t)}</si>" for t in out.sst.list)
+    # Phonetic (furigana) runs go back next to the <si> holding the same text.
+    sst.extend(f"<si>{si_body(t, wb.phonetics.get(t))}</si>" for t in out.sst.list)
     sst.append("</sst>")
     out.part("xl/sharedStrings.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml", "".join(sst).encode("utf-8"))
     wb_rels.add("sharedStrings", "sharedStrings.xml")

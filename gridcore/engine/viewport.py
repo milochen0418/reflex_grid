@@ -267,7 +267,8 @@ def viewport(wb, si: int, window: RangeRef, show_formulas: Optional[bool] = None
             cells_out.append(entry)
 
     merges = [[m.r0, m.c0, m.r1, m.c1] for m in sh.merges if any(m.intersects(a) for a in areas)]
-    spills = [[r.r0, r.c0, r.r1, r.c1, anchor[0], anchor[1]] for anchor, r in sh.spill_ranges.items() if any(r.intersects(a) for a in areas)]
+    # A one-cell anchor (a FILTER matching one row) draws no outline, as in Excel.
+    spills = [[r.r0, r.c0, r.r1, r.c1, anchor[0], anchor[1]] for anchor, r in sh.spill_ranges.items() if not r.is_single() and any(r.intersects(a) for a in areas)]
     notes = []
     for rc, cm in sh.comments.items():
         if any(a.contains(rc) for a in areas):
@@ -545,7 +546,7 @@ def ui_state(session) -> Dict[str, Any]:
     t = sh.table_at(rc)
     spill_anchor = None
     for anchor, r in sh.spill_ranges.items():
-        if r.contains(rc):
+        if r.contains(rc) and not r.is_single():
             spill_anchor = [anchor[0], anchor[1], r.r0, r.c0, r.r1, r.c1]
             break
     return {

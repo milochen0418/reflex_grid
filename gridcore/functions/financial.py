@@ -31,12 +31,33 @@ def fv(rate: float, nper: float, pmt: float, pv: float, typ: int) -> float:
 
 
 def pmt(rate: float, nper: float, pv: float, fv_: float, typ: int) -> float:
-    if nper == 0:
+    """The payment per period. ``(1 + rate)^nper`` comes from ``nper * log1p(rate)`` and ``p - 1``
+    from ``expm1``: rounding ``1 + rate`` first throws away the low bits of a small rate, which left
+    PMT about 1e-8 off Excel for PMT(0.000001,360,100000). As in Excel 16 for Mac: a rate of -1 or
+    less is #NUM!, a huge nper gives -pv*rate, and a tiny rate with a big pv overflows to #NUM!
+    (PMT(1E-300,10,1E+12)) while PMT(1E-300,10,100) is -10."""
+    if nper == 0 or rate <= -1:
         raise XlError(CellError.NUM)
     if rate == 0:
         return -(pv + fv_) / nper
-    f = (1 + rate) ** nper
-    return -(rate * (pv * f + fv_)) / ((1 + rate * typ) * (f - 1))
+    l = nper * math.log1p(rate)
+    try:
+        m = math.expm1(l)
+    except OverflowError:
+        m = math.inf
+    k = 1 + rate * typ
+    try:
+        if m > 0:
+            # (fv + pv*p) / (p - 1) = pv + (pv + fv) / (p - 1), without the cancellation in p - 1.
+            return -(pv + (pv + fv_) / m) * rate / k
+        if m > -0.5:
+            # p near 1 from below: fv + pv*p = (pv + fv) + pv*m keeps the small terms that rounding
+            # p would drop.
+            return -(rate * (pv + fv_ + pv * m)) / (k * m)
+        # p well below 1: m nears -1 and pv*m would swallow pv + fv, so use p itself.
+        return -(rate * (fv_ + pv * math.exp(l))) / (k * m)
+    except (ZeroDivisionError, OverflowError):
+        raise XlError(CellError.NUM) from None
 
 
 def pv(rate: float, nper: float, pmt_: float, fv_: float, typ: int) -> float:

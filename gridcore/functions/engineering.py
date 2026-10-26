@@ -6,6 +6,7 @@ from __future__ import annotations
 import cmath
 import math
 import re
+import sys
 from typing import Optional, Tuple
 
 from ..core.value import Array, CellError, Value, XlError, scalar, to_number, to_text
@@ -319,7 +320,22 @@ _cfun("IMEXP", cmath.exp, "Returns the exponential of a complex number.")
 _cfun("IMLN", cmath.log, "Returns the natural logarithm of a complex number.", True)
 _cfun("IMLOG10", cmath.log10, "Returns the base-10 logarithm of a complex number.", True)
 _cfun("IMLOG2", lambda z: cmath.log(z) / math.log(2), "Returns the base-2 logarithm of a complex number.", True)
-_cfun("IMSQRT", cmath.sqrt, "Returns the square root of a complex number.")
+def _im_sqrt(z: complex) -> complex:
+    """IMSQRT as Excel computes it, from the polar form: the square root of a negative real keeps
+    the stray real part cos(π/2)·√r (IMSQRT("-4") is 1.22464679914735E-16+2i in Excel 16 for Mac);
+    the squared magnitude counts as 0 below the smallest normal number (IMSQRT("1E-154") is 0) and
+    overflows to #NUM! (IMSQRT("1E155"))."""
+    s = z.real * z.real + z.imag * z.imag
+    if not math.isfinite(s):
+        raise XlError(CellError.NUM)
+    if s < sys.float_info.min:
+        return 0j
+    r = math.sqrt(math.sqrt(s))
+    th = math.atan2(z.imag, z.real) / 2.0
+    return complex(r * math.cos(th), r * math.sin(th))
+
+
+_cfun("IMSQRT", _im_sqrt, "Returns the square root of a complex number.")
 
 
 @fn("IMPOWER", 2, 2, E, S, "IMPOWER(inumber, number)", "Returns a complex number raised to an integer power.")

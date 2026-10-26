@@ -241,8 +241,11 @@ class _PassHost(Host):
             a = v
             if not keep_blanks and any(x is None for x in a.data):
                 a = Array(a.rows, a.cols, [0.0 if x is None else x for x in a.data])
-            if a.rows > 1 or a.cols > 1:
-                self.spills[k] = a
+            # A dynamic-array formula anchors a spill range even while its result is one value —
+            # a FILTER matching one row, a SORT or UNIQUE over one item, `=A1:A1` — so `C1#` is the
+            # 1 x 1 range and ROWS(C1#) is 1, as in Excel. A formula whose result is a scalar never
+            # reaches this arm, so `=1+1` is no anchor.
+            self.spills[k] = a
             v = a.data[0] if a.data else None
             if isinstance(v, Array):
                 v = v.data[0] if v.data else None

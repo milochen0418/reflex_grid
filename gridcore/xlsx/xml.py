@@ -116,6 +116,65 @@ def rich_text(e: ET.Element) -> str:
     return decode_xstring("".join(out))
 
 
+# ST_PhoneticType and ST_PhoneticAlignment (ISO/IEC 29500-1 §18.18.57, §18.18.56): a damaged file's
+# values are dropped, never written back.
+PHONETIC_KINDS = ("halfwidthKatakana", "fullwidthKatakana", "Hiragana", "noConversion")
+PHONETIC_ALIGNMENTS = ("noControl", "left", "center", "distributed")
+
+
+def _utf16_len(s: str) -> int:
+    return len(s.encode("utf-16-le")) // 2
+
+
+def phonetic_data(e: ET.Element, base: str):
+    """The phonetic (furigana) data of a string item: its ``<rPh>`` runs in document order as
+    ``(sb, eb, reading)`` — zero-based offsets into the base text in UTF-16 units (§18.4.6), a run
+    with bad or missing offsets, ``sb >= eb`` or no reading dropped — and its ``<phoneticPr>``
+    attributes (§18.4.7) when present. ``None`` when the item has neither."""
+    n = _utf16_len(base)
+    runs = []
+    props = None
+    for c in e:
+        name = local(c.tag)
+        if name == "rPh":
+            sb, eb = attr_int(c, "sb"), attr_int(c, "eb")
+            if sb is None or eb is None:
+                continue
+            sb, eb = min(max(sb, 0), n), min(max(eb, 0), n)
+            t = child(c, "t")
+            reading = decode_xstring(t.text or "") if t is not None else ""
+            if sb < eb and reading:
+                runs.append((sb, eb, reading))
+        elif name == "phoneticPr":
+            kind, align = (attr(c, "type") or "").strip(), (attr(c, "alignment") or "").strip()
+            props = {"fontId": attr_int(c, "fontId") or 0, "type": kind if kind in PHONETIC_KINDS else None, "alignment": align if align in PHONETIC_ALIGNMENTS else None}
+    if not runs and props is None:
+        return None
+    return runs, props
+
+
+def si_body(text: str, phonetic) -> str:
+    """The contents of a shared string item: the text, then its ``<rPh>`` runs and ``<phoneticPr>``
+    when it has phonetic data (checked again here: the data may come from an API caller)."""
+    s = t_el(text)
+    if not phonetic:
+        return s
+    runs, props = phonetic
+    n = _utf16_len(text)
+    for sb, eb, reading in runs:
+        sb, eb = min(max(int(sb), 0), n), min(max(int(eb), 0), n)
+        if sb < eb and reading:
+            s += f'<rPh sb="{sb}" eb="{eb}">{t_el(str(reading))}</rPh>'
+    if props is not None:
+        s += f'<phoneticPr fontId="{int(props.get("fontId") or 0)}"'
+        if props.get("type") in PHONETIC_KINDS:
+            s += f' type="{props["type"]}"'
+        if props.get("alignment") in PHONETIC_ALIGNMENTS:
+            s += f' alignment="{props["alignment"]}"'
+        s += "/>"
+    return s
+
+
 def decode_xstring(s: str) -> str:
     if "_x" not in s:
         return s

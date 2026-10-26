@@ -150,6 +150,16 @@ class Theme:
     )
     major_font: str = DEFAULT_FONT
     minor_font: str = DEFAULT_FONT
+    # The heading and body fonts' East Asian (<a:ea>) and complex-script (<a:cs>) typefaces, and
+    # their per-script typefaces (<a:font script="Arab" typeface="…"/>, as (script, typeface) in
+    # file order); empty when the file did not set them. A Japanese workbook's theme fonts
+    # (游ゴシック, ＭＳ Ｐゴシック) used to be deleted by an open and save.
+    major_font_ea: str = ""
+    minor_font_ea: str = ""
+    major_font_cs: str = ""
+    minor_font_cs: str = ""
+    major_font_scripts: Tuple[Tuple[str, str], ...] = ()
+    minor_font_scripts: Tuple[Tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -162,6 +172,15 @@ class Font:
     strike: bool = False
     color: Color = AUTO
     vert: str = "baseline"  # baseline superscript subscript
+    # Windows character set the font was chosen for (178 = Arabic), kept so Excel substitutes a
+    # font for the same script; None = the file gave none.
+    charset: Optional[int] = None
+    # Font family class (1 roman, 2 swiss, 3 modern…); None = swiss, the default.
+    family: Optional[int] = None
+    # The font follows the theme's body ("minor") or heading ("major") font while its face is that
+    # font's (`<scheme val="minor"/>`); "" = no link. New fonts follow the body font, as Excel's do,
+    # and fonts derived from them (bold, a colour, a size) keep the link.
+    scheme: str = "minor"
 
 
 @dataclass(frozen=True)

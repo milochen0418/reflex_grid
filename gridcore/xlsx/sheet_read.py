@@ -13,6 +13,7 @@ from ..formula import ParseError, parse
 from ..formula.adjust import shift_relative
 from ..model.cell import Cell, Formula
 from ..model.features import (
+    DEFAULT_NOTE_BOX,
     AutoFilter,
     CfRule,
     CfValue,
@@ -222,7 +223,7 @@ def read_sheet(cx, part: str, name: str) -> Sheet:
                 except XlsxError:
                     x = None
                 if x is not None:
-                    _read_note_visibility(x, sheet, 0)
+                    _read_note_shapes(x, sheet, 0)
     return sheet
 
 
@@ -773,15 +774,20 @@ def _read_comments(x: ET.Element, sheet: Sheet) -> None:
         sheet.comments[cell] = Comment(author, text)
 
 
-def _read_note_visibility(x: ET.Element, sheet: Sheet, depth: int) -> None:
+def _read_note_shapes(x: ET.Element, sheet: Sheet, depth: int) -> None:
+    """The notes' VML shapes: a shape carrying ``<x:Visible/>`` marks its note as shown, and its
+    ``<x:Anchor>`` and style size become the note's box, so a plain open and save no longer moves
+    and resizes every note box Excel had stored. Shapes may sit in groups."""
+    from dataclasses import replace
+
     if depth > 64:
         return
     for e in x:
         if local(e.tag) != "shape":
-            _read_note_visibility(e, sheet, depth + 1)
+            _read_note_shapes(e, sheet, depth + 1)
             continue
         cd = child(e, "ClientData")
-        if cd is None or attr(cd, "ObjectType") != "Note" or child(cd, "Visible") is None:
+        if cd is None or attr(cd, "ObjectType") != "Note":
             continue
         try:
             row = int((text_of(child(cd, "Row"))).strip())
@@ -789,10 +795,39 @@ def _read_note_visibility(x: ET.Element, sheet: Sheet, depth: int) -> None:
         except ValueError:
             continue
         c = sheet.comments.get((row, col))
-        if c is not None and not c.threaded:
-            from dataclasses import replace
+        if c is None:
+            continue
+        if child(cd, "Visible") is not None and not c.threaded:
+            c = replace(c, visible=True)
+        box = _note_box(text_of(child(cd, "Anchor")), attr(e, "style") or "", (row, col))
+        if box is not None and box != DEFAULT_NOTE_BOX:
+            c = replace(c, box=box)
+        sheet.comments[(row, col)] = c
 
-            sheet.comments[(row, col)] = replace(c, visible=True)
+
+def _note_box(anchor: str, style: str, cell: Tuple[int, int]) -> Optional[Tuple[float, ...]]:
+    """A note's box from its VML ``<x:Anchor>`` (left column, offset, top row, offset, right column,
+    offset, bottom row, offset; offsets in pixels) and its shape's style, the corners made relative
+    to the note's ``cell``; ``None`` when the anchor isn't eight in-sheet numbers."""
+    try:
+        v = [int(p.strip()) for p in anchor.split(",")]
+    except ValueError:
+        return None
+    if len(v) != 8 or any(n < 0 for n in v) or max(v[0], v[4]) >= MAX_COLS or max(v[2], v[6]) >= MAX_ROWS:
+        return None
+    size = {}
+    for part in style.split(";"):
+        k, _, val = part.partition(":")
+        k, val = k.strip().lower(), val.strip().lower()
+        if k in ("width", "height") and val.endswith("pt"):
+            try:
+                n = float(val[:-2].strip())
+            except ValueError:
+                continue
+            if 0 < n < 1e6:
+                size[k] = n
+    w, h = size.get("width", DEFAULT_NOTE_BOX[8]), size.get("height", DEFAULT_NOTE_BOX[9])
+    return (v[0] - cell[1], v[1], v[2] - cell[0], v[3], v[4] - cell[1], v[5], v[6] - cell[0], v[7], w, h)
 
 
 def _read_threaded(cx, x: ET.Element, sheet: Sheet) -> None:

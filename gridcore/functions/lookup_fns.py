@@ -307,17 +307,20 @@ def _transpose(args, ctx):
 
 
 def _quote_address_sheet(s: str) -> str:
+    """Sheet text for ADDRESS, quoted as Excel 16 for Mac quotes it: a bare sheet name follows the
+    rule references follow (``'A1'``, ``'RC'``, ``'.x'``, ``'TRUE'``, ``'My Sheet'``; ``XFE1`` and
+    ``Sheet.1`` stay bare); ``[Book]Sheet`` is quoted when either part holds a character a name
+    can't (``'[Book 1]Sheet1'``), and ``[Book1]A1`` stays bare."""
+    from ..core.addr import sheet_needs_quotes
+
     def word(p: str) -> bool:
         return all(c.isalnum() or c in "_." for c in p)
 
-    def bare(p: str) -> bool:
-        return bool(p) and word(p) and not p[0].isdigit()
-
     if s.startswith("[") and "]" in s:
         book, sheet = s[1:].split("]", 1)
-        plain = bool(book) and word(book) and bare(sheet)
+        plain = bool(book) and bool(sheet) and word(book) and word(sheet) and not sheet[0].isdigit()
     else:
-        plain = bare(s)
+        plain = not sheet_needs_quotes(s)
     return s if plain else "'" + s.replace("'", "''") + "'"
 
 

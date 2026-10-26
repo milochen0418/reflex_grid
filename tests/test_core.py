@@ -49,10 +49,13 @@ def test_number_text():
     assert number_to_text(-2.5) == "-2.5"
     assert number_to_text(0.1 + 0.2) == "0.3"
     assert number_to_text(123456789012345.0) == "123456789012345"
-    assert number_to_text(1e15) == "1E+15"
-    assert number_to_text(1234567890123456.0) == "1.23456789012346E+15"
+    # Excel 16 for Mac writes a number out in full while that takes at most 20 characters.
+    assert number_to_text(1e15) == "1000000000000000"
+    assert number_to_text(1234567890123456.0) == "1234567890123460"
     assert number_to_text(0.0001) == "0.0001"
-    assert number_to_text(1e-10) == "1E-10"
+    assert number_to_text(1e-10) == "0.0000000001"
+    assert number_to_text(1e-19) == "1E-19"
+    assert number_to_text(1e20) == "1E+20"
     assert number_to_text(1.0 / 3.0) == "0.333333333333333"
 
 

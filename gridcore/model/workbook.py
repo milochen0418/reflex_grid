@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 from ..core.date import DateSystem
 from ..formula import Call, Expr, ParseError, parse, print_formula
@@ -55,6 +55,14 @@ class Workbook:
         # immutable, so snapshots share it (see :mod:`gridcore.model.vba`).
         self.vba = None
         self.code_name = ""
+        # Phonetic (furigana) data of shared strings, keyed by the string's text (all a cell keeps
+        # of its shared string): ([(sb, eb, reading)…], phoneticPr attributes or None). Written back
+        # next to the <si> holding the same text, so an open and save keeps a Japanese workbook's
+        # readings; the saved table holds each text once, so one reading per text.
+        self.phonetics: Dict[str, Tuple[list, Optional[dict]]] = {}
+        # The file the workbook is known by (`Budget.xlsx`), what CELL("filename") reports as
+        # `[Budget.xlsx]Sheet1`; "" until it has one, as Excel reports before the first save.
+        self.file_name = ""
         # Sheets this workbook object may mutate in place (copy-on-write; ids of sheet objects).
         self._owned: set = set(id(s) for s in self.sheets)
 

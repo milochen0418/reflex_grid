@@ -6,7 +6,9 @@ Excel."""
 
 import base64
 import io
+import math
 import os
+import re
 import tempfile
 import time
 import warnings
@@ -965,3 +967,444 @@ def test_files_with_these_fixes_read_back_in_openpyxl():
     assert ws["D4"].value == "=SUBTOTAL(109,Sales[[Qty ]])"
     assert getattr(ws["J1"].value, "text", ws["J1"].value) == "=_xlfn.BYROW(D2:D3,_xleta.SUM)"  # a spill: an array formula
     assert ws["K1"].value == '=_xludf.CONCAT("a","b")'
+
+
+# ---------------------------------------------------------------- GridCraft's fixes of 2026-10-19 to 2026-10-26
+
+
+def test_mod_is_the_exact_remainder_with_excels_quotient_limit():
+    # c746eea8 made MOD an exact remainder with the divisor's sign, which is what Excel 16 for Mac
+    # computes: MOD(-0.3,0.1) shows the rounding of 0.1. Excel also refuses a quotient of 1.1259E+12
+    # or more (older Excels stopped at 2^27); GridCraft doesn't.
+    assert ev("=MOD(-0.3,0.1)") == "2.77555756156289E-17"
+    assert ev("=MOD(0.3,0.1)") == "0.1" and ev("=MOD(5,0.1)") == "0.0999999999999997"
+    assert ev("=MOD(-3,2)") == "1" and ev("=MOD(3,-2)") == "-1" and ev("=MOD(2^39+0.75,0.5)") == "0.25"
+    assert ev("=MOD(1.125E+12,1)") == "0" and ev("=MOD(2^40*1.01,1)") == "0.760009765625"
+    for f in ("=MOD(1.13E+12,1)", "=MOD(5,1E-15)", "=MOD(1E+15,3)", "=MOD(2^53,10)", "=MOD(0.5,2^-42)", "=MOD(1,1E-14)"):
+        assert ev(f) == "#NUM!", f
+    assert ev("=MOD(3,0)") == "#DIV/0!"
+
+
+def test_pmt_to_excels_last_bits_and_its_edges():
+    # 1ce4781d: (1 + rate)^nper from log1p and expm1, which keeps the low bits of a small rate.
+    # Excel 16 for Mac's answers; GridCraft's later 72c1d57d avoided the overflow of
+    # PMT(1E-300,10,1E+12), which Excel reports as #NUM!.
+    assert ev("=PMT(0.000001,360,100000)") == "-277.827919666642"
+    assert ev("=PMT(1E-12,10,100)") == "-10.000000000055" and ev("=PMT(1E-10,100,1000)") == "-10.0000000505"
+    assert ev("=PMT(0.05,1E+6,100)") == "-5" and ev("=PMT(1E-5,1E+8,100)") == "-0.001"
+    assert ev("=PMT(1E-20,10,100)") == "-10" and ev("=PMT(1E-300,10,100)") == "-10"
+    assert ev("=PMT(-0.999,5,100)") == "-9.99000000000009E-14"
+    assert ev("=PMT(-0.5,60,1E+18)") == "-0.433680868994203"
+    assert ev("=PMT(0.05,10,100,50,1)") == "-16.1197011855414" and ev("=PMT(0.05,-10,100)") == "7.95045749654567"
+    for f in ("=PMT(-1,10,100)", "=PMT(-1.5,10,100)", "=PMT(1E-300,10,1E+12)", "=PMT(0.05,0,100)"):
+        assert ev(f) == "#NUM!", f
+    assert ev("=PPMT(1E-10,1,100,1000)") == "-9.9999999505"
+    # FV and PV are unchanged: Excel's own sit further from the exact value than this form does.
+    assert ev("=FV(1E-10,100,-10)") == "1000.00008274037" and ev("=PV(1E-10,100,-10)") == "1000.00007274037"
+
+
+def test_accounting_negatives_read_one_pair_of_parentheses():
+    # 35067fa9, checked in Excel 16 for Mac: $(1,234), $ (5), ($5), (5)%, (5%), (1 1/2) and € are
+    # numbers; (-5), ((5)), $5%, (1/2), (10:30), (1/2/2024) and (5)$ stay text.
+    s = new()
+    currency, cents = "$#,##0_);[Red]($#,##0)", "$#,##0.00_);[Red]($#,##0.00)"
+    numbers = {
+        "$(1,234)": (-1234.0, currency), "$ (5)": (-5.0, currency), "($5)": (-5.0, currency), "( $ 1,234 )": (-1234.0, currency),
+        "$(1,234.)": (-1234.0, cents), "$(.5)": (-0.5, cents), "$(0)": (0.0, currency), "(5)%": (-0.05, "0%"), "(5%)": (-0.05, "0%"),
+        "( 5 ) %": (-0.05, "0%"), "(1,234)%": (-12.34, "0%"), "(5.)%": (-0.05, "0.00%"), "(1 1/2)": (-1.5, "# ?/?"),
+        "(1e-3)": (-0.001, "0.00E+00"), "(5)": (-5.0, "General"), "( 5 )": (-5.0, "General"), "(.5)": (-0.5, "General"), "€5": (5.0, "General"),
+    }
+    for text, (value, fmt) in numbers.items():
+        s.run("home.numberFormat", range="A1", code="General")
+        s.run("cell.set", cell="A1", input=text)
+        got = s.run("cell.get", cell="A1")
+        assert (got["value"], got["format"]) == (value, fmt), (text, got)
+    for text in ["(-5)", "(+5)", "((5))", "$5%", "$(5)%", "(5)%%", "($-5)", "(1/2)", "(10:30)", "(1/2/2024)", "(5)$", "(5)(5)", "$(5", "5)", "(1,23)", "$(1/2)", "(TRUE)"]:
+        s.run("home.numberFormat", range="A1", code="General")
+        s.run("cell.set", cell="A1", input=text)
+        assert s.run("cell.get", cell="A1")["value"] == text, text
+    # VALUE and arithmetic read the same way.
+    assert ev('=VALUE("$(1,234)")') == "-1234" and ev('="(5)"*1') == "-5" and ev('=VALUE("(1 1/2)")') == "-1.5"
+    for f in ('=VALUE("((5))")', '=VALUE("(-5)")', '=VALUE("$5%")', '=VALUE("(1/2)")', '=VALUE("(10:30)")', '=VALUE("$(5)%")'):
+        assert ev(f) == "#VALUE!", f
+    # #2163: digits too many for a finite number don't make one (∞/∞ was NaN).
+    assert ev('=VALUE("1 "&REPT("9",400)&"/"&REPT("9",400))') == "#VALUE!"
+    assert ev('=("1"&REPT("0",400)&"/"&REPT("9",400))+0') == "#VALUE!"
+
+
+def test_the_text_of_a_number_is_written_out_up_to_20_characters():
+    # f29ac7d9 made 999999999999999.9 "1E+15"; Excel 16 for Mac writes a number out in full while
+    # that takes at most 20 characters (the sign not counted) and in scientific notation past that.
+    cases = [
+        ('=(999999999999999+0.9)&""', "1000000000000000"), ('=2^63&""', "9223372036854780000"), ('=1E-18&""', "0.000000000000000001"),
+        ('=1E-19&""', "1E-19"), ('=1E+20&""', "1E+20"), ('=(1E+16/3)&""', "3333333333333330"), ('=(1/3*1E-5)&""', "3.33333333333333E-06"),
+        ('=(2/3*1E-3)&""', "0.000666666666666667"), ('=(1/7*1E-3)&""', "0.000142857142857143"), ('=(1/7*1E-4)&""', "1.42857142857143E-05"),
+        ('=-(1E+19/7)&""', "-1428571428571430000"), ('=99999999999999900000&""', "99999999999999900000"), ('=(1E+15+0.5)&""', "1000000000000000"),
+        ('=1E-10&""', "0.0000000001"), ('=(1/3)&""', "0.333333333333333"), ('=(2^53)&""', "9007199254740990"),
+    ]
+    for f, want in cases:
+        assert ev(f) == want, f
+    # 9cbb674c: a formula's constants keep their short form, and never round past the largest number.
+    s = new()
+    s.run("cell.set", cell="A1", input="=1E-10+0")
+    assert inp(s, "A1") == "=1E-10+0"
+    s.run("cell.set", cell="A2", input="=1.7976931348623157E+308")
+    assert inp(s, "A2") == "=1.7976931348623157E+308" and val(s, "A2") == 1.7976931348623157e308
+
+
+def test_isoweeknum_at_the_start_of_the_calendar():
+    # 86064077: the week of serial 1 belongs to 1899 (Excel 16 for Mac: ISOWEEKNUM(1) is 52, not 0).
+    assert [ev(f"=ISOWEEKNUM({x})") for x in (0, 1, 2, 7, 8, 9)] == ["52", "52", "1", "1", "1", "2"]
+    assert ev("=WEEKNUM(1,21)") == "52" and ev("=WEEKNUM(0,21)") == "52" and ev("=WEEKNUM(8,21)") == "1"
+    assert ev("=ISOWEEKNUM(-1)") == "#NUM!"
+    # A 1904 workbook: January 1 to 3, 1904 are in week 53 of 1903.
+    wb = wb1904()
+    assert [ev(f"=ISOWEEKNUM({x})", wb) for x in (0, 1, 2)] == ["53", "53", "53"]
+
+
+def test_imsqrt_follows_excels_polar_form():
+    # 92d2b989 removed the stray real part; Excel 16 for Mac keeps it (the polar form), counts a
+    # squared magnitude below the smallest normal number as 0 and overflows to #NUM!.
+    assert ev('=IMSQRT("-4")') == "1.22464679914735E-16+2i" and ev('=IMSQRT("-1")') == "6.12323399573677E-17+i"
+    assert ev('=IMSQRT("-2")') == "8.65956056235493E-17+1.4142135623731i"
+    assert ev('=IMSQRT("-2i")') == "1-i" and ev('=IMSQRT("3+4i")') == "2+i" and ev('=IMSQRT("4")') == "2"
+    assert ev('=IMSQRT("i")') == "0.707106781186548+0.707106781186547i"
+    assert ev('=IMSQRT("-1E150")') == "6.12323399573677E+58+1E+75i"
+    assert ev('=IMSQRT("1E154")') == "1E+77" and ev('=IMSQRT("1E155")') == "#NUM!"
+    assert ev('=IMSQRT("1E-154")') == "0" and ev('=IMSQRT("1E-300")') == "0"
+
+
+def test_percentrank_significance_past_the_number_range():
+    # 14415f41 returned the rank untruncated; Excel 16 for Mac gives #DIV/0! past 308.
+    assert ev("=PERCENTRANK({1,2,3,4},2.5,308)") == "0.5" and ev("=PERCENTRANK({1,2,3,4},2,308)") == "0.333333333333333"
+    for f in ("=PERCENTRANK({1,2,3,4},2.5,309)", "=PERCENTRANK({1,2,3,4},2,400)", "=PERCENTRANK.EXC({1,2,3,4},2.5,1E+10)"):
+        assert ev(f) == "#DIV/0!", f
+    assert ev("=PERCENTRANK({1,2,3,4},2.5,0)") == "#NUM!"
+
+
+def test_sheet_names_are_quoted_as_excel_quotes_them():
+    # #1458 and #2473, checked in Excel 16 for Mac: names that start with a dot or read as R1C1
+    # (R, C, RC, R1C, RC1, r2c3) or as a cell are quoted; past the sheet's edge (XFE1, AB1048577)
+    # they are not.
+    s = new()
+    for name, quoted in [(".foo", True), ("RC", True), ("R1C", True), ("r2c3", True), ("CR1", True), ("AB1048576", True), ("TRUE", True),
+                         ("A1A", False), ("Sheet.1", False), ("RR", False), ("XFE1", False), ("AB1048577", False), ("_x", False), ("Ärger", False)]:
+        s.run("home.insertSheet", name=name)
+        s.run("sheet.activate", sheet="Sheet1")
+        s.run("cell.set", cell="A1", input=f"='{name}'!A1")
+        assert inp(s, "A1") == (f"='{name}'!A1" if quoted else f"={name}!A1"), name
+    # ADDRESS follows the same rule; a [Book]Sheet prefix is judged with its sheet part's letters.
+    for sheet, want in [("RC", "'RC'!$A$1"), (".x", "'.x'!$A$1"), ("TRUE", "'TRUE'!$A$1"), ("XFE1", "XFE1!$A$1"), ("[Book1]Sheet1", "[Book1]Sheet1!$A$1"),
+                        ("[Book1]A1", "[Book1]A1!$A$1"), ("[Book 1]Sheet1", "'[Book 1]Sheet1'!$A$1"), ("My Sheet", "'My Sheet'!$A$1")]:
+        assert ev(f'=ADDRESS(1,1,1,TRUE,"{sheet}")') == want, sheet
+    # #2473: a range whose second end repeats the sheet (in any case) is accepted, as typed.
+    s.run("range.setValues", range="B1", values=[[1, 2], [3, 4]])
+    s.run("cell.set", cell="D1", input="=SUM(Sheet1!B1:SHEET1!C2)")
+    assert val(s, "D1") == 10 and inp(s, "D1") == "=SUM(Sheet1!B1:SHEET1!C2)"
+
+
+def test_let_and_lambda_names_fold_case_as_text_does():
+    # ac371be5 and a74e82ac: dług is DŁUG, ß is ẞ, ς is σ (Excel 16: ="ς"="σ" is TRUE); ı and İ
+    # are letters of their own.
+    assert ev("=LET(dług,100,DŁUG*2)") == "200" and ev("=LET(ς,5,σ)") == "5" and ev("=LET(ß,1,ẞ)") == "1"
+    assert ev("=LET(i,1,ı,2,i)") == "1" and ev("=LET(İ,1,i)") == "#NAME?"
+    assert ev('="ς"="σ"') == "TRUE" and ev('="ı"="i"') == "FALSE"
+
+
+def test_a_dynamic_array_of_one_value_still_anchors_a_spill_range():
+    # #1491: C1# gave #REF! while the FILTER in C1 matched one row, so ROWS, SUM and COUNT over
+    # it failed the moment a list had one entry.
+    s = new()
+    s.run("range.setValues", range="A1", values=[[1, "x"], [2, "y"], [3, "z"]])
+    s.run("cell.set", cell="C1", input='=FILTER(A1:A3,B1:B3="x")')
+    s.run("cell.set", cell="E1", input="=SORT(A1:A1)")
+    s.run("cell.set", cell="F1", input="=1+1")
+    assert (cell(s, "=ROWS(C1#)", "D5"), cell(s, "=SUM(C1#)", "D6"), cell(s, "=COUNT(C1#)", "D7")) == (1, 1, 1)
+    assert cell(s, "=ROWS(E1#)", "D8") == 1
+    assert display(cell(s, "=ROWS(F1#)", "D9")) == "#REF!"  # a scalar formula is no anchor
+    assert s.doc().wb.sheet(0).spill_ranges[(0, 2)] == RangeRef(0, 2, 0, 2)
+
+
+def test_cell_filename_names_the_workbooks_file():
+    # #1489: it was "" for every workbook. Excel gives <folder>\[<file>]<sheet>, and "" before the
+    # first save; a workbook that arrived as bytes knows no folder.
+    s = new()
+    assert cell(s, '=CELL("filename",A1)') == ""
+    s2 = roundtrip(s, "Budget.xlsx")
+    assert cell(s2, '=CELL("filename",A1)') == "[Budget.xlsx]Sheet1"
+    assert cell(s2, '=MID(CELL("filename",A1),FIND("]",CELL("filename",A1))+1,31)') == "Sheet1"
+
+
+def test_hostile_formulas_are_refused_at_once():
+    # #2182: the broadcast of two arrays can be 17 billion cells; #2175: SUBTOTAL over A:XFD with a
+    # value in XFD1048576; #2415: star churn in SEARCH; #2177: a regression with 16,384 predictors.
+    # Each used to keep the server busy for minutes or for ever.
+    s = new()
+    s.run("cell.set", cell="XFD1048576", input="1")
+    t = time.time()
+    for f in ("=ROWS(SEQUENCE(1048576)*SEQUENCE(1,16384))", "=ROWS(IF(SEQUENCE(1048576)>0,SEQUENCE(1,16384),0))", "=SUBTOTAL(9,E:XFD)",
+              "=AGGREGATE(9,0,E:XFD)", "=INDEX(LINEST(SEQUENCE(3),SEQUENCE(3,16384)),1,1)"):
+        assert display(cell(s, f, "A1")) == "#NUM!", f
+    assert display(cell(s, '=SEARCH("*a*a*a*a*a*a*a*a*a*a*a*a*b",REPT("a",30000))', "A2")) == "#VALUE!"
+    assert time.time() - t < 20
+    # Honest work is untouched.
+    # Excel 16 for Mac: a leading star absorbs the text before the match, so the match starts at
+    # start_num; a start from the end of the text on is #VALUE!, an empty find_text included.
+    assert ev('=SEARCH("*a*b","xaab")') == "1" and ev('=SEARCH("*b","aab",2)') == "2" and ev('=SEARCH("*b","aab",3)') == "3"
+    assert ev('=SEARCH("a*","xxa")') == "3" and ev('=SEARCH("?b","aab")') == "2" and ev('=SEARCH("*~*b","a*b")') == "1"
+    assert ev('=SEARCH("?*zz",REPT("a",30000)&"zz")') == "1"
+    for f in ('=SEARCH("*b","aab",4)', '=SEARCH("","abc",4)', '=SEARCH("*","abc",4)', '=SEARCH("*?c","abc",3)', '=SEARCH("*q","xaab")', '=SEARCH("b*","abc",3)', '=SEARCH("*","")'):
+        assert ev(f) == "#VALUE!", f
+    assert ev('=MATCH("*b",{"xab","b"},0)') == "1"
+    assert ev('=SUM(SEQUENCE(2000)*SEQUENCE(1,100))') == "10105050000"
+
+
+def test_an_autofilter_grows_when_a_value_is_entered_in_the_row_below_it():
+    # #2342 and #2367
+    s = new()
+    s.run("range.setValues", range="A1", values=[["Name", "Qty"], ["d", 4], ["b", 2]])
+    s.run("data.filter", range="A1:B3")
+
+    def rng():
+        return s.doc().wb.sheet(0).autofilter.range.a1()
+
+    s.run("cell.set", cell="A4", input="e")
+    assert rng() == "A1:B4"
+    s.run("range.setValues", range="A5", values=[["f", 6]])
+    assert rng() == "A1:B5"
+    s.run("cell.set", cell="A7", input="x")  # after a blank row
+    s.run("cell.set", cell="C6", input="x")  # outside its columns
+    s.run("range.setValues", range="A6", values=[[""]])  # empty text is no entry
+    assert rng() == "A1:B5"
+    s.run("cell.set", cell="B6", input="=1+1")
+    assert rng() == "A1:B6"
+    s.run("range.fill", range="A7:B7", input="g")
+    assert rng() == "A1:B7"
+
+
+def test_sparklines_follow_rows_and_go_with_a_deleted_row():
+    # 80e20411: a sparkline whose row was deleted stayed, pointing at the next row's cell (and
+    # sparklines never followed inserted rows here).
+    s = new()
+    s.run("range.setValues", range="A1", values=[[1, 2, 3], [4, 5, 6]])
+    s.run("insert.sparkline", data="A1:C1", location="E1")
+    s.run("insert.sparkline", data="A2:C2", location="E2")
+    s.run("home.insertRows", rows="1:1")
+    sp = sorted((x.row, x.col, x.source) for x in s.doc().wb.sheet(0).sparklines)
+    assert sp == [(1, 4, "Sheet1!$A$2:$C$2"), (2, 4, "Sheet1!$A$3:$C$3")], sp
+    s.run("home.deleteRows", rows="2:2")
+    sp = [(x.row, x.col, x.source) for x in s.doc().wb.sheet(0).sparklines]
+    assert sp == [(1, 4, "Sheet1!$A$2:$C$2")], sp
+
+
+def test_a_conditional_format_threshold_formula_must_parse():
+    # #1999: a formula that doesn't parse must never reach the workbook — Excel refuses to open a
+    # file carrying it, even in repair mode.
+    s = new()
+    with pytest.raises(EngineError):
+        s.run("home.conditionalFormat", range="A1:A5", rule={"type": "dataBar", "min": {"kind": "formula", "value": "=1+("}})
+    s.run("home.conditionalFormat", range="A1:A5", rule={"type": "dataBar", "min": {"kind": "formula", "value": "=$B$1"}})
+    assert s.doc().wb.sheet(0).cond_formats[0].rule.bar_min.value == "$B$1"
+
+
+def test_row_auto_fit_counts_line_breaks_only_in_wrapping_cells_and_wraps_whole_words():
+    # 4faa3ff0 and #1969
+    from gridcore.engine.layout import approx_text_width, wrapped_line_count
+
+    s = new()
+    s.run("cell.set", cell="A1", input="one\ntwo\nthree")  # a typed break turns wrap on and grows the row
+    sh = s.doc().wb.sheet(0)
+    info = sh.rows.get(0)
+    assert info is not None and info.size is not None and info.size > sh.default_row_height
+    s.run("home.wrapText", on=False, range="A1")
+    s.run("home.autofitRowHeight", rows="1:1")
+    info = s.doc().wb.sheet(0).rows.get(0)
+    assert info is None or info.size is None
+    # Twelve five-letter words in a column that holds two of them and a bit: whole words wrap, so six
+    # lines, where the width alone says five.
+    w = approx_text_width("abcde", 11.0, False)
+    sp = approx_text_width(" ", 11.0, False)
+    line = " ".join(["abcde"] * 12)
+    assert wrapped_line_count(line, 2.9 * w + 2 * sp, 11.0, False) == 6
+    assert math.ceil(approx_text_width(line, 11.0, False) / (2.9 * w + 2 * sp)) == 5
+
+
+def test_fill_days_weekdays_months_and_years_keep_the_time_of_day():
+    # 00edfd06
+    s = new()
+    s.run("cell.set", cell="A1", input="1/31/2026 9:30")
+    s.run("edit.autoFill", source="A1", target="A1:A4", mode="months")
+    assert [cell(s, f'=TEXT(A{r},"yyyy-mm-dd hh:mm")', "J1") for r in (2, 3, 4)] == ["2026-02-28 09:30", "2026-03-31 09:30", "2026-04-30 09:30"]
+    s.run("cell.set", cell="B1", input="1/2/2026")  # a Friday
+    s.run("edit.autoFill", source="B1", target="B1:B4", mode="weekdays")
+    assert [cell(s, f'=TEXT(B{r},"ddd d")', "J1") for r in (2, 3, 4)] == ["Mon 5", "Tue 6", "Wed 7"]
+    s.run("range.setValues", range="D1", values=[["1/1/2026"], ["1/3/2026"]])
+    s.run("edit.autoFill", source="D1:D2", target="D1:D4", mode="years")
+    assert [cell(s, f'=TEXT(D{r},"yyyy-m-d")', "J1") for r in (3, 4)] == ["2027-1-3", "2028-1-3"]
+    s.run("range.setValues", range="E1", values=[["1/1/2026"], ["1/4/2026"]])
+    s.run("edit.autoFill", source="E1:E2", target="E1:E4", mode="days")
+    assert [cell(s, f'=TEXT(E{r},"m/d")', "J1") for r in (3, 4)] == ["1/7", "1/10"]
+    # A source that isn't dates fills as a plain drag does.
+    s.run("cell.set", cell="F1", input="5")
+    s.run("edit.autoFill", source="F1", target="F1:F3", mode="months")
+    assert (val(s, "F2"), val(s, "F3")) == (5, 5)
+
+
+def test_editing_a_note_keeps_its_box_and_who_wrote_it():
+    # #1608: a note's box was written at a fixed place and size; 3e6eac42: Edit Note replaced the
+    # whole note.
+    from dataclasses import replace
+
+    s = new()
+    s.run("review.newNote", cell="B2", text="first", author="Ann")
+    sh = s.doc().wb.sheet(0)
+    sh.comments[(1, 1)] = replace(sh.comments[(1, 1)], box=(2, 10, 1, 5, 5, 20, 6, 8, 150.0, 80.0))
+    vml = part(s, "xl/drawings/vmlDrawing1.vml")
+    assert "<x:Anchor>3, 10, 2, 5, 6, 20, 7, 8</x:Anchor>" in vml and "width:150pt;height:80pt" in vml
+    s2 = roundtrip(s)
+    assert s2.doc().wb.sheet(0).comments[(1, 1)].box == (2, 10, 1, 5, 5, 20, 6, 8, 150.0, 80.0)
+    s2.run("review.editNote", cell="B2", text="second")
+    c = s2.doc().wb.sheet(0).comments[(1, 1)]
+    assert (c.text, c.author, c.box) == ("second", "Ann", (2, 10, 1, 5, 5, 20, 6, 8, 150.0, 80.0))
+    # A note made here keeps the default box, which is not stored.
+    s.run("review.newNote", cell="C3", text="plain")
+    assert s.doc().wb.sheet(0).comments[(2, 2)].box is None
+    assert "<x:Anchor>3, 15, 2, 2, 5, 15, 6, 16</x:Anchor>" in part(s, "xl/drawings/vmlDrawing1.vml")
+
+
+def _rewritten(s, name, fn):
+    """The workbook ``s`` saves, with the part ``name`` changed by ``fn``, as base64."""
+    raw = base64.b64decode(s.run("file.saveBytes")["data"])
+    src = zipfile.ZipFile(io.BytesIO(raw))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == name:
+                data = fn(data.decode()).encode()
+            dst.writestr(item, data)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def test_sheets_keep_their_sheet_ids():
+    # 85e8f790: a rewritten workbook renumbered sheetIds from 1, so anything that recognises a
+    # sheet by its id lost it.
+    s = new()
+    s.run("home.insertSheet", name="B")
+    s.run("home.insertSheet", name="C")
+    data = _rewritten(s, "xl/workbook.xml", lambda x: x.replace('sheetId="2"', 'sheetId="7"').replace('sheetId="3"', 'sheetId="9"'))
+    s2 = open_data(data, "ids.xlsx")
+    before = {x.name: x.sheet_id for x in s2.doc().wb.sheets}
+    assert sorted(before.values()) == [1, 7, 9] and before["B"] == 7
+    s2.run("home.deleteSheet", sheet="B")
+    s2.run("home.insertSheet", name="D")
+    ids = dict(re.findall(r'<sheet name="([^"]+)" sheetId="(\d+)"', part(s2, "xl/workbook.xml")))
+    # The sheets keep their ids; the new one takes the first id no sheet asks for.
+    assert ids == {"Sheet1": str(before["Sheet1"]), "C": str(before["C"]), "D": "2"}, ids
+
+
+def test_fonts_keep_their_charset_family_and_theme_link():
+    # 24b0b5d1, 6760e006 and #2517: the charset (178 = Arabic), the family class and the link to
+    # the theme's body font survive a save, on every font that had it.
+    from xml.etree import ElementTree as ET
+
+    from gridcore.model.style import Font, Theme
+    from gridcore.xlsx.styles import _font_xml, read_font
+    from gridcore.xlsx.tables import INDEXED
+
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    bold = read_font(ET.fromstring(f'<font {ns}><b/><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>'), list(INDEXED))
+    arabic = read_font(ET.fromstring(f'<font {ns}><sz val="11"/><name val="Arial"/><family val="3"/><charset val="178"/></font>'), list(INDEXED))
+    assert (bold.bold, bold.scheme, bold.family, bold.charset) == (True, "minor", None, None)
+    assert (arabic.charset, arabic.family, arabic.scheme) == (178, 3, "")
+    assert _font_xml(bold, False, Theme()).endswith('<name val="Calibri"/><family val="2"/><scheme val="minor"/></font>')
+    assert _font_xml(arabic, False, Theme()).endswith('<name val="Arial"/><family val="3"/><charset val="178"/></font>')
+    # Calibri chosen by hand (no link in the file) gets no scheme; a new font has the link; a font
+    # given another face than the theme's keeps none.
+    from dataclasses import replace
+
+    assert "scheme" not in _font_xml(replace(arabic, name="Calibri"), False, Theme())
+    assert _font_xml(Font(), False, Theme()).endswith('<scheme val="minor"/></font>')
+    assert "scheme" not in _font_xml(replace(Font(), name="Arial"), False, Theme())
+    # Through a file: the bold font derived from Normal keeps the link.
+    s = new()
+    s.run("cell.set", cell="A1", input="x")
+    s.run("home.bold", range="A1", on=True)
+    assert part(s, "xl/styles.xml").count('<scheme val="minor"/>') == 2
+    s.run("home.fontName", range="A1", name="Arial")
+    assert '<name val="Arial"/><family val="2"/></font>' in part(s, "xl/styles.xml")
+
+
+def test_accounting_formats_with_a_currency_are_written_with_their_code():
+    # b389d906: ids 42 and 44 are resolved by the reader's locale (LibreOffice showed "- 0.14" where
+    # US Excel shows "$ (0.14)"), so they are written as custom formats like the currency formats 5–8.
+    from gridcore.xlsx.tables import builtin_format
+
+    s = new()
+    s.run("cell.set", cell="A1", input="-0.14")
+    s.run("home.numberFormat", range="A1", code=builtin_format(44))
+    s.run("cell.set", cell="A2", input="-0.14")
+    s.run("home.numberFormat", range="A2", code=builtin_format(43))
+    styles = part(s, "xl/styles.xml")
+    assert 'numFmtId="44"' not in styles and 'numFmtId="43"' in styles
+    assert re.search(r'<numFmt numFmtId="1\d\d" formatCode="[^"]*&quot;\$&quot;', styles), styles
+    s2 = roundtrip(s)
+    assert s2.run("cell.get", cell="A1")["format"] == builtin_format(44)
+
+
+def test_phonetic_runs_survive_open_and_save():
+    # 40803e6a and e42ebf93: a Japanese workbook's furigana (<rPh> runs and <phoneticPr>) were
+    # deleted by an open and save.
+    s = new()
+    s.run("range.setValues", range="A1", values=[["東京"], ["大阪"], ["東京"]])
+    runs = '<si><t>東京</t><rPh sb="0" eb="2"><t>トウキョウ</t></rPh><phoneticPr fontId="1" type="Hiragana" alignment="center"/></si>'
+    damaged = '<si><t>大阪</t><rPh sb="5" eb="9"><t>x</t></rPh><rPh sb="1" eb="1"><t>y</t></rPh><phoneticPr fontId="0" type="bogus"/></si>'
+    data = _rewritten(s, "xl/sharedStrings.xml", lambda x: x.replace("<si><t>東京</t></si>", runs).replace("<si><t>大阪</t></si>", damaged))
+    s2 = open_data(data, "furigana.xlsx")
+    assert s2.doc().wb.phonetics == {"東京": ([(0, 2, "トウキョウ")], {"fontId": 1, "type": "Hiragana", "alignment": "center"}),
+                                    "大阪": ([], {"fontId": 0, "type": None, "alignment": None})}
+    sst = part(s2, "xl/sharedStrings.xml")
+    assert runs in sst and '<si><t>大阪</t><phoneticPr fontId="0"/></si>' in sst
+    assert cell(s2, "=A1&A2", "C1") == "東京大阪"
+
+
+def test_the_themes_east_asian_and_per_script_typefaces_survive():
+    # 2c6ffe48 and 189eb7ae: a Japanese workbook's theme fonts were deleted by an open and save.
+    s = new()
+    major = '<a:ea typeface="游ゴシック Light"/><a:cs typeface="Arial"/><a:font script="Jpan" typeface="游ゴシック Light"/></a:majorFont>'
+    data = _rewritten(s, "xl/theme/theme1.xml", lambda x: x.replace('<a:ea typeface=""/><a:cs typeface=""/></a:majorFont>', major, 1))
+    s2 = open_data(data, "theme.xlsx")
+    t = s2.doc().wb.theme
+    assert (t.major_font_ea, t.major_font_cs, t.major_font_scripts, t.minor_font_ea) == ("游ゴシック Light", "Arial", (("Jpan", "游ゴシック Light"),), "")
+    assert major in part(s2, "xl/theme/theme1.xml")
+
+
+def test_a_100_percent_stacked_area_chart_opens_and_saves_as_such():
+    # 0eb2f1f6: an area chart with percentStacked grouping opened as a stacked area.
+    s = new()
+    s.run("range.setValues", range="A1", values=[["x", "a", "b"], [1, 2, 3], [2, 3, 4]])
+    s.run("selection.set", range="A1:C3")
+    s.run("insert.chart", kind="areaStacked100")
+    assert '<c:areaChart><c:grouping val="percentStacked"/>' in part(s, "xl/charts/chart1.xml")
+    s2 = roundtrip(s)
+    assert s2.doc().wb.sheet(0).charts[0].kind == "areaStacked100"
+
+
+def test_format_as_table_inside_a_table_restyles_it():
+    # 09f78cb3
+    s = new()
+    s.run("range.setValues", range="A1", values=[["h", "k"], [1, 2], [3, 4]])
+    s.run("insert.table", range="A1:B3", name="T")
+    assert s.run("insert.table", range="A2:B2", style="TableStyleLight9") == {"name": "T", "range": "A1:B3", "restyled": True}
+    assert s.doc().wb.sheet(0).tables[0].style == "TableStyleLight9"
+    with pytest.raises(EngineError):
+        s.run("insert.table", range="A2:B2")  # Insert › Table still refuses to overlap
+
+
+def test_autosum_on_a_whole_row_totals_it_after_the_data():
+    # 802c7823
+    s = new()
+    s.run("range.setValues", range="B2", values=[[1, 2, 3, 4]])
+    s.run("selection.set", range="2:2")
+    assert s.run("formulas.autoSum") == {"cells": ["F2"]}
+    assert inp(s, "F2") == "=SUM(A2:E2)" and val(s, "F2") == 10

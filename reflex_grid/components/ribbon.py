@@ -391,7 +391,7 @@ def home_tab() -> rx.Component:
 CHART_KINDS = [
     ("Clustered Column", "columnClustered"), ("Stacked Column", "columnStacked"), ("100% Stacked Column", "columnStacked100"),
     ("Clustered Bar", "barClustered"), ("Stacked Bar", "barStacked"), ("100% Stacked Bar", "barStacked100"),
-    ("Line", "line"), ("Stacked Line", "lineStacked"), ("Line with Markers", "lineMarkers"), ("Area", "area"), ("Stacked Area", "areaStacked"),
+    ("Line", "line"), ("Stacked Line", "lineStacked"), ("Line with Markers", "lineMarkers"), ("Area", "area"), ("Stacked Area", "areaStacked"), ("100% Stacked Area", "areaStacked100"),
     ("Pie", "pie"), ("Doughnut", "doughnut"), ("Scatter", "scatter"), ("Scatter with Lines", "scatterLines"), ("Radar", "radar"),
 ]
 

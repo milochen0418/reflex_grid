@@ -219,7 +219,8 @@ def font_name(s, p):
     name = str(need(p, "name", "home.fontName")).strip()
     if not name:
         raise EngineError("home.fontName: empty font name")
-    return apply_style(s, p, lambda st: _font(st, name=name))
+    # A face chosen by hand drops the file's charset and family class: Excel picks them again.
+    return apply_style(s, p, lambda st: _font(st, name=name, charset=None, family=None))
 
 
 @command("home.fontSize", "Font Size", menu=("Home", "Font"), params="{size: 12, range?}")
