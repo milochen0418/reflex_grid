@@ -1408,3 +1408,17 @@ def test_autosum_on_a_whole_row_totals_it_after_the_data():
     s.run("selection.set", range="2:2")
     assert s.run("formulas.autoSum") == {"cells": ["F2"]}
     assert inp(s, "F2") == "=SUM(A2:E2)" and val(s, "F2") == 10
+
+
+def test_an_explicit_range_keeps_its_blanks_and_a_padded_stack_is_capped():
+    # #1010: a range of more than 16,384 cells was trimmed to the used range, so COUNTBLANK(A1:A20000)
+    # was 1 on an empty sheet (Excel 16: 20000); only whole columns and rows, and ranges past a
+    # million cells, trim now. #536: HSTACK/VSTACK pad to the tallest/widest array, which is what
+    # must fit (HSTACK(SEQUENCE(1048576),SEQUENCE(1,16384)) used to run for ever).
+    s = new()
+    assert (cell(s, "=COUNTBLANK(A1:A20000)"), cell(s, '=SUMPRODUCT(--(B1:B20000=""))'), cell(s, '=COUNTIF(C1:C20000,"")')) == (20000, 20000, 20000)
+    t = time.time()
+    for f in ("=ROWS(HSTACK(SEQUENCE(1048576),SEQUENCE(1,16384)))", "=ROWS(VSTACK(SEQUENCE(1,16384),SEQUENCE(1048576)))"):
+        assert display(cell(s, f)) == "#NUM!", f
+    assert time.time() - t < 10
+    assert cell(s, "=ROWS(HSTACK(SEQUENCE(3),SEQUENCE(2,2)))") == 3 and cell(s, "=COLUMNS(VSTACK(SEQUENCE(1,3),SEQUENCE(2)))") == 3

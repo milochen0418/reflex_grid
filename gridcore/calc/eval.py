@@ -46,6 +46,10 @@ LAMBDA_FUEL = MAX_CELLS
 # References up to this many cells are read at their full size; larger ones (A:A, ranges reserved
 # for data to come) stop at the sheet's used range.
 FULL_SIZE_CELLS = 16_384
+# An explicit (bounded) range keeps its full shape, blanks included, up to this many cells —
+# COUNTBLANK(A1:A20000) is 20000 and SUMPRODUCT(--(A1:A20000="")) too, as in Excel — so only whole
+# columns and rows, and ranges past this, trim to the sheet's used range.
+FULL_SIZE_BOUNDED_CELLS = 1_048_576
 MAX_DEPTH = 400
 # The argument of GROUPBY and PIVOTBY that takes a function (a worksheet function by its name).
 _FUNCTION_ARG = {"GROUPBY": 2, "PIVOTBY": 3}
@@ -170,7 +174,7 @@ class Evaluator:
         if rng.r0 == rng.r1 and rng.c0 == rng.c1:
             return self.host.cell_value(a.sheet, (rng.r0, rng.c0))
         cells = rng.height * rng.width
-        if cells > FULL_SIZE_CELLS:
+        if cells > FULL_SIZE_CELLS and (rng.is_full_cols() or rng.is_full_rows() or cells > FULL_SIZE_BOUNDED_CELLS):
             rng = self.trim(a)
         h, w = rng.height, rng.width
         if h * w > MAX_CELLS:

@@ -248,10 +248,14 @@ def _randarray(args, ctx):
 def _vstack(args, ctx):
     rows: List[List[Value]] = []
     total = 0
+    widest = 0
     for i in range(len(args)):
         a = _arr(args, i)
         total += len(a.data)
-        if total > MAX_CELLS:
+        widest = max(widest, a.cols)
+        # The padded result (every row as wide as the widest array) is what must fit, not the
+        # inputs: VSTACK(SEQUENCE(1,16384),SEQUENCE(1048576)) would build 17 billion cells.
+        if total > MAX_CELLS or (len(rows) + a.rows) * widest > MAX_CELLS:
             raise XlError(CellError.NUM)
         rows.extend(_rows(a))
     return _from_rows(rows, CellError.NA)
@@ -260,7 +264,9 @@ def _vstack(args, ctx):
 @fn("HSTACK", 1, VAR, LR, A, "HSTACK(array1, [array2], …)", "Appends arrays horizontally and in sequence to return a larger array.")
 def _hstack(args, ctx):
     arrays = [_arr(args, i) for i in range(len(args))]
-    if sum(len(a.data) for a in arrays) > MAX_CELLS:
+    # The padded result (the tallest array's rows times every column) is what must fit, not the
+    # inputs: HSTACK(SEQUENCE(1048576),SEQUENCE(1,16384)) would build 17 billion cells.
+    if max(a.rows for a in arrays) * sum(a.cols for a in arrays) > MAX_CELLS:
         raise XlError(CellError.NUM)
     h = max(a.rows for a in arrays)
     rows: List[List[Value]] = [[] for _ in range(h)]
