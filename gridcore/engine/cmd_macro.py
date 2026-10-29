@@ -250,26 +250,41 @@ def macro_delete_module(s: Session, p: Dict[str, Any]):
     return {"removed": name}
 
 
+def _renamed(proj: VbaProject, old: str, new: str) -> VbaProject:
+    """``proj`` with the module ``old`` named ``new``: its code stream, its ``VB_Name`` and, for
+    a UserForm, the name in its design's header (the storage follows when the file is written).
+    Sheet and workbook modules keep their names. Code that names the module isn't rewritten, as
+    in Excel."""
+    err = valid_module_name(new)
+    if err:
+        raise EngineError(err)
+    m = proj.module(old)
+    if m is None:
+        raise EngineError(f"There is no module named {old}.")
+    if m.kind == DOCUMENT:
+        raise EngineError("Sheet and workbook modules can't be renamed here.")
+    if new.lower() != old.lower() and proj.module(new) is not None:
+        raise EngineError(f"A module named {new} already exists.")
+    proj = proj.renamed_module(old, new)
+    if m.kind == FORM and m.designer:
+        from ..xlsx.oforms_edit import renamed_designer
+        from ..xlsx.ovba import codec
+
+        proj = proj.with_module(replace(proj.module(new), designer=renamed_designer(m.designer, new, codec(proj.code_page))))
+    return proj
+
+
 @command("macro.renameModule", "Rename Module", menu=("Developer", "Code"), params="{name, newName}")
 def macro_rename_module(s: Session, p: Dict[str, Any]):
+    """Renames a module, a class module or a UserForm (as its (Name) in the VBA editor's
+    Properties window does)."""
     _editable(s)
     old = p_str(p, "name") or ""
     new = (p_str(p, "newName") or "").strip()
     err = valid_module_name(new)
     if err:
         raise EngineError(err)
-
-    def f(proj: VbaProject) -> VbaProject:
-        m = proj.module(old)
-        if m is None:
-            raise EngineError(f"There is no module named {old}.")
-        if m.kind in (DOCUMENT, FORM):
-            raise EngineError("Sheet, workbook and form modules can't be renamed here.")
-        if new.lower() != old.lower() and proj.module(new) is not None:
-            raise EngineError(f"A module named {new} already exists.")
-        return proj.renamed_module(old, new)
-
-    _change_project(s, f)
+    _change_project(s, lambda proj: _renamed(proj, old, new))
     return {"name": new}
 
 
@@ -761,6 +776,18 @@ def macro_edit_form(s: Session, p: Dict[str, Any]):
         raise EngineError(f"There is no UserForm named {name}.")
     if not m.designer:
         raise EngineError(f"{m.name}'s design is missing from the workbook.")
+    # The form's own (Name) is the module's name: a change to it renames the module (its
+    # design's header follows), it isn't a change of the design.
+    renamed_to = ""
+    for op in ops:
+        if isinstance(op, dict) and op.get("op") == "set" and not op.get("control") and str(op.get("key") or "") == "name":
+            renamed_to = str(op.get("value") or "").strip()
+    if renamed_to == name:
+        renamed_to = ""
+    if renamed_to:
+        err = valid_module_name(renamed_to)
+        if err:
+            raise EngineError(err)
 
     def edited() -> tuple:
         try:
@@ -770,6 +797,8 @@ def macro_edit_form(s: Session, p: Dict[str, Any]):
                 if kind == "set":
                     control = str(op.get("control") or "")
                     key = str(op.get("key") or "")
+                    if not control and key == "name":
+                        continue
                     if control:
                         c = ed.design.find(control)
                         if c is None:
@@ -804,7 +833,14 @@ def macro_edit_form(s: Session, p: Dict[str, Any]):
         return ed.items()
 
     designer = edited()
-    if designer != tuple(sorted(m.designer)):
+    changed = designer != tuple(sorted(m.designer))
+    if changed or renamed_to:
         # One edit of the project (undo takes it back), only when the form did change.
-        proj = _change_project(s, lambda pr: pr.with_module(replace(pr.module(name), designer=designer)))
-    return {**_form_view(proj, proj.module(name), focus[0]), "added": added}
+        def f(pr: VbaProject) -> VbaProject:
+            if changed:
+                pr = pr.with_module(replace(pr.module(name), designer=designer))
+            return _renamed(pr, name, renamed_to) if renamed_to else pr
+
+        proj = _change_project(s, f)
+    shown = renamed_to or name
+    return {**_form_view(proj, proj.module(shown), focus[0]), "added": added}

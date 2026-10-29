@@ -2280,6 +2280,9 @@ class GridState(rx.State):
             r = s.execute("macro.editForm", {"name": name, "ops": ops, "control": self.vba_form_selected if control is None else control})
             self._vba_form_shown(r)
             self.vba_status = ""
+            if r.get("name") and r["name"] != name:
+                # The form's (Name) changed: the module is renamed, the editor follows it.
+                self._vba_load(s, r["name"])
 
         return await self._vba_edit(f)
 

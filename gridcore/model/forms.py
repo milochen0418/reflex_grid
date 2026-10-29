@@ -262,7 +262,7 @@ PROPERTY_SHEET: Tuple[Tuple[str, str, Any, Optional[Tuple[str, ...]]], ...] = (
 )
 
 FORM_PROPERTY_SHEET: Tuple[Tuple[str, str, Any], ...] = (
-    ("(Name)", "name", "readonly"),
+    ("(Name)", "name", "text"),
     ("Caption", "caption", "text"),
     ("Width", "width", "number"),
     ("Height", "height", "number"),
@@ -345,7 +345,8 @@ def property_change(target: Any, key: str, value: Any, form: bool = False) -> di
         kind = next((kd for _, k, kd in FORM_PROPERTY_SHEET if k == key), None)
     else:
         kind = next((kd for _, k, kd, kinds in PROPERTY_SHEET if k == key and (kinds is None or target.kind in kinds)), None)
-    if kind is None or kind == "readonly":
+    if kind is None or kind == "readonly" or (form and key == "name"):
+        # A form's name is its module's: macro.renameModule (or macro.editForm) renames it.
         raise ValueError(f"{key} can't be set here")
     current = _get(target, key)
     if kind == "color":

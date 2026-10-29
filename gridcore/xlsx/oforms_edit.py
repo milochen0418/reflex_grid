@@ -470,6 +470,26 @@ class FormEditor:
         return tuple(sorted(self.files.items()))
 
 
+def renamed_designer(items: Sequence[Tuple[str, bytes]], name: str, encoding: str = "cp1252") -> Tuple[Tuple[str, bytes], ...]:
+    """A form's designer items with the form named ``name`` in its VBFrame header (the
+    ``Begin {…} Name`` line), as the VBA editor rewrites it when a form's (Name) changes.
+    Everything else is kept byte for byte."""
+    out = []
+    for path, data in items:
+        if path == VBFRAME:
+            text = data.decode(encoding, "replace")
+            sep = "\r\n" if "\r\n" in text else "\n"
+            lines = text.split(sep)
+            for i, line in enumerate(lines):
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].upper() == "BEGIN":
+                    lines[i] = f"Begin {parts[1]} {name} "
+                    break
+            data = sep.join(lines).encode(encoding, "replace")
+        out.append((path, data))
+    return tuple(out)
+
+
 _FRAME_ORDER = ("Caption", "ClientHeight", "ClientLeft", "ClientTop", "ClientWidth", "OleObjectBlob", "ShowModal", "StartUpPosition", "TypeInfoVer")
 
 

@@ -774,3 +774,57 @@ def test_a_designed_form_as_excel_describes_it():
     s = designer_workbook()
     assert s.run("macro.run", name="RunAll")["status"] == "done"
     assert results(s) == EXPECTED["designer"]
+
+
+# ---------------------------------------------------------------- renaming a form
+
+
+def test_a_renamed_form_keeps_its_design_runs_and_saves_under_the_new_name():
+    """Rename in the toolbar, or (Name) in the Properties window: the module, its VB_Name, its
+    design's header and its storage in the .xlsm take the new name; code naming the form isn't
+    rewritten, as in Excel."""
+    begin = "Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmOrder \r\n"
+
+    def has(session, name):
+        return session.doc().wb.vba.module(name) is not None
+
+    s = new()
+    add_form(s, ORDER, 'Private Sub CommandButton1_Click()\n    Range("A1").Value = "clicked"\n    Unload Me\nEnd Sub\n')
+    assert s.run("macro.renameModule", name="OrderForm", newName="frmOrder") == {"name": "frmOrder"}
+    m = s.doc().wb.vba.module("frmOrder")
+    assert m is not None and m.kind == "form" and not has(s, "OrderForm")
+    assert 'Attribute VB_Name = "frmOrder"' in m.attributes
+    header = dict(m.designer)[VBFRAME].decode("cp1252")
+    assert begin in header and "OrderForm" not in header
+    _same(dataclasses.replace(ORDER, name="frmOrder"), read_design("frmOrder", design_streams(m.designer)))
+    exported = s.run("macro.exportModule", name="frmOrder")
+    assert (exported["fileName"], exported["frxName"]) == ("frmOrder.frm", "frmOrder.frx")
+    assert begin in exported["text"] and 'Attribute VB_Name = "frmOrder"' in exported["text"]
+    # It runs under its new name.
+    r = macro(s, "Sub M()\n    frmOrder.Show\nEnd Sub\n", answers=[{"event": "click", "control": "CommandButton1"}])
+    assert r["status"] == "done", r.get("error")
+    assert val(s, "A1") == "clicked"
+    # Saved and opened again: the form's storage is under the new name, the old one is gone.
+    data = base64.b64decode(s.run("file.saveBytes")["data"])
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        raw = z.read("xl/vbaProject.bin")
+    assert b"frmOrder" in raw and b"OrderForm" not in raw
+    s2 = Session()
+    assert open_bytes(s2, data, "Book1.xlsm").warnings == []
+    again = s2.doc().wb.vba.module("frmOrder")
+    assert again.kind == "form" and not has(s2, "OrderForm")
+    _same(dataclasses.replace(ORDER, name="frmOrder"), read_design("frmOrder", design_streams(again.designer)))
+    # The Properties window's (Name) does the same, through macro.editForm.
+    r = s.run("macro.editForm", name="frmOrder", ops=[{"op": "set", "key": "name", "value": "frmLast"}])
+    assert r["name"] == "frmLast" and has(s, "frmLast") and not has(s, "frmOrder")
+    name_row = next(row for row in r["props"] if row["key"] == "name")
+    assert (name_row["type"], name_row["value"]) == ("text", "frmLast")
+    # Refused: a taken name, a bad name, a sheet module; undo takes a rename back.
+    with pytest.raises(EngineError, match="already exists"):
+        s.run("macro.renameModule", name="frmLast", newName="Module1")
+    with pytest.raises(EngineError, match="start with a letter"):
+        s.run("macro.editForm", name="frmLast", ops=[{"op": "set", "key": "name", "value": "1st"}])
+    with pytest.raises(EngineError, match="can't be renamed"):
+        s.run("macro.renameModule", name="Sheet1", newName="Data")
+    s.run("edit.undo")
+    assert has(s, "frmOrder") and not has(s, "frmLast")

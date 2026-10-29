@@ -153,7 +153,8 @@ def light_in_dark_mode(g: Grid) -> None:
 
 def design_a_form(g: Grid) -> None:
     """Insert › UserForm, a TextBox and a CommandButton from the toolbox, the button's caption in
-    the Properties window, the box moved, the button's Click by double-clicking it, Run Form."""
+    the Properties window, the box moved, the form renamed through its (Name), the button's Click
+    by double-clicking it, Run Form."""
     page = g.page
     page.click("#tab-developer")
     page.click("#rb-vba")
@@ -181,6 +182,17 @@ def design_a_form(g: Grid) -> None:
     page.mouse.move(box["x"] + 70, box["y"] + 8, steps=6)
     page.mouse.up()
     page.wait_for_function("() => { const r = document.getElementById('vba-prop-left'); return r && parseFloat(r.querySelector('input').value) > 60; }")
+    # The form itself (an empty spot), then its (Name) in the Properties window: the form, the
+    # project tree and the editor take the new name.
+    b = client.bounding_box()
+    page.mouse.click(b["x"] + b["width"] - 12, b["y"] + 12)
+    page.wait_for_function("() => (document.getElementById('vba-properties') || {}).innerText.includes('ShowModal')")
+    name = page.locator("#vba-prop-name input[name=value]")
+    name.fill("frmDesigned")
+    name.press("Enter")
+    page.locator('.rg-form-designer[data-form="frmDesigned"]').wait_for(state="visible")
+    page.locator("#vba-mod-frmDesigned").wait_for(state="visible")
+    assert page.locator("#vba-mod-UserForm1").count() == 0
     g.shot("designer")
     button = page.locator('.rg-form-designer [data-control="CommandButton1"]').bounding_box()
     page.mouse.dblclick(button["x"] + 10, button["y"] + 8)
@@ -190,10 +202,10 @@ def design_a_form(g: Grid) -> None:
     area.press(f"{MOD}+s")
     page.wait_for_function("() => !document.querySelector('#vba-dirty')")
     page.click("#vba-run-form")
-    form(g, "UserForm1").wait_for(state="visible")
-    ctl(g, "UserForm1", "TextBox1").fill("designed here")
-    ctl(g, "UserForm1", "CommandButton1").click()
-    form(g, "UserForm1").wait_for(state="detached")
+    form(g, "frmDesigned").wait_for(state="visible")
+    ctl(g, "frmDesigned", "TextBox1").fill("designed here")
+    ctl(g, "frmDesigned", "CommandButton1").click()
+    form(g, "frmDesigned").wait_for(state="detached")
     page.locator("#dlg-vba").wait_for(state="visible")
     page.click("#vba-close")
     page.locator("#dlg-vba").wait_for(state="detached")
@@ -306,8 +318,9 @@ def body(g: Grid) -> None:
     assert m.kind == "form" and "Private Sub Label1_Click()" in m.code
     back = read_design("OrderForm", design_streams(m.designer))
     assert [c.name for c in back.controls] == [c.name for c in ORDER.controls] and back.warnings == ()
-    made = s.doc().wb.vba.module("UserForm1")
-    designed = read_design("UserForm1", design_streams(made.designer))
+    assert s.doc().wb.vba.module("UserForm1") is None
+    made = s.doc().wb.vba.module("frmDesigned")
+    designed = read_design("frmDesigned", design_streams(made.designer))
     assert [(c.name, c.caption) for c in designed.controls] == [("TextBox1", ""), ("CommandButton1", "Save")] and designed.controls[0].left > 60
 
 

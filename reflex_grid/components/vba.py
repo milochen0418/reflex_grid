@@ -174,7 +174,7 @@ def _toolbar() -> rx.Component:
         ),
         tb("file_down", "Export", GridState.vba_export, "Export the module as a .bas, .cls or .frm (with its .frx) file", "vba-export", (GridState.vba_module == "") | GridState.vba_locked),
         rx.popover.root(
-            rx.popover.trigger(rx.button(rx.icon("pencil", size=15), rx.text("Rename", size="1"), variant="ghost", color_scheme="gray", size="1", id="vba-rename", color="#1F2937", disabled=(GridState.vba_kind == "document") | is_form | GridState.vba_locked)),
+            rx.popover.trigger(rx.button(rx.icon("pencil", size=15), rx.text("Rename", size="1"), variant="ghost", color_scheme="gray", size="1", id="vba-rename", color="#1F2937", disabled=(GridState.vba_kind == "document") | GridState.vba_locked)),
             rx.popover.content(
                 rx.form(
                     rx.hstack(
