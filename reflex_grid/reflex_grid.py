@@ -10,7 +10,9 @@ import os
 import reflex as rx
 from reflex.style import set_color_mode
 
+from . import ai, ai_tools
 from .api import api
+from .components.ai_views import ai_fill_dialog, ai_job_panel
 from .components.call_views import call_keepalive, incoming_call
 from .components.chrome import backstage, book_gone, sheet_tabs, status_bar, title_bar
 from .components.dialogs import all_dialogs
@@ -52,6 +54,7 @@ def index() -> rx.Component:
                     rev=BookRoom.rev,
                     changes=BookRoom.changes,
                     me=GridState.me["peer"],
+                    ai=GridState.ai_props,
                     on_event=GridState.on_event,
                 ),
                 flex="1",
@@ -68,6 +71,8 @@ def index() -> rx.Component:
         ),
         backstage(),
         all_dialogs(),
+        ai_fill_dialog(),
+        ai_job_panel(),
         forms_layer(),
         vba_dialogs(),
         book_gone(),
@@ -139,6 +144,13 @@ try:
     app.extra_app_wraps[(8, "ReflexGridCallKeepalive")] = lambda stateful: rx.fragment(call_keepalive())
 except ImportError:
     pass
+
+if ai.ENABLED:
+    # On re_ddns with an AI Hub: the hub's assistant may read workbooks (ai_tools), and the hub's
+    # page says what ReflexGrid asks its models for.
+    ai_tools.install(app)
+    ai.declare(app)
+
 
 def workbook_list() -> rx.Component:
     return rx.fragment(light_only(), manager_page())

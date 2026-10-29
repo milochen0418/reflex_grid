@@ -77,12 +77,15 @@ jobs:
       fail-fast: false
       matrix:
         suite: [smoke_home, editing_formulas, formatting_ribbon, sheets_data, insert_tab, xlsx_roundtrip,
-                workbook_manager, collab_live, vba_macros, vba_userforms, gridcraft_issues]
+                workbook_manager, collab_live, vba_macros, vba_userforms, gridcraft_issues, ai_features]
     defaults:
       run:
         working-directory: reflex_grid
     env:
       PW_TIMEOUT_MS: "60000"
+      # ai_features runs a stand-in AI Hub at this address; the other suites have no AI.
+      DDNS_AI_HUB_URL: ${{ matrix.suite == 'ai_features' && 'http://127.0.0.1:8399' || '' }}
+      DDNS_AUTH_SECRET: ${{ matrix.suite == 'ai_features' && 'ci-only-secret-for-the-ai-features-suite' || '' }}
     steps:
       - uses: actions/checkout@v7
         with:

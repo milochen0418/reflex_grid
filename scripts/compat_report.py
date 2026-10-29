@@ -72,6 +72,9 @@ AREAS: List[Tuple[str, Tuple[str, ...], str]] = [
     ("Bugs fixed in GridCraft", ("test_gridcraft_issues",),
      "Issues that [GridCraft](https://github.com/storytold/gridcraft), whose design gridcore follows, fixed "
      "against Excel 365's answers: functions, number formats, recalculation, `.xlsx` files, fills, filters and links"),
+    ("AI through the AI Hub", ("test_ai",),
+     "How AI Fill and formula suggestions word their questions and read the answers, and the tools the "
+     "hub's assistant reads workbooks with"),
     ("Editing together", ("test_collab", "test_books"),
      "Several people on one workbook, undo that takes back only your own changes, the shared "
      "workbook store"),

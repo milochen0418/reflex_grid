@@ -17,7 +17,7 @@ from ..model.features import Validation
 from ..numfmt import parse as parse_fmt
 from .session import EngineError
 
-_AUTO_DATE = (
+AUTO_DATE = (
     (("TODAY(", "DATE(", "EDATE(", "EOMONTH(", "WORKDAY(", "WORKDAY.INTL("), "m/d/yyyy"),
     (("NOW(",), "m/d/yyyy h:mm"),
     (("TIME(",), "h:mm AM/PM"),
@@ -79,7 +79,7 @@ def input_to_cell(wb, sheet, rc: Tuple[int, int], text: str, strict: bool = Fals
         f = parse_formula_input(text, strict)
         if st.num_fmt == "General":
             up = f.text.upper()
-            for prefixes, code in _AUTO_DATE:
+            for prefixes, code in AUTO_DATE:
                 if up.startswith(prefixes):
                     style = wb.styles.derive(style, lambda s, code=code: replace(s, num_fmt=code))
                     break

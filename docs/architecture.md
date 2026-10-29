@@ -116,6 +116,14 @@ exactly puts its epoch back, so earlier transitions become undoable again.
 - **Calls** (`reflex_grid/call.py`, from CoDoc in MD): the call's members and its private id stay in the
   process (`CallStore`); the room carries what everyone must see (how many are in it, who is ringing, whom it
   rings and who answered). The call runs in the app chosen for the DDNS Intent `call.join`.
+- **AI** (`reflex_grid/ai.py`, `ai_tools.py`, `components/ai_views.py`): only on re_ddns with its AI Hub,
+  which chooses the models (`reflex_ddns_auth.ai`). The hub's assistant reads workbooks through read-only
+  tools (`reflex_ddns_auth.tools`) that take a snapshot under the book's lock, and gets what the page shows
+  from the grid's `window.__ddnsContext`. AI Fill takes the rows inside `book.act`, asks the hub's role
+  `fast` from a background event (no lock held while waiting), then writes all answers in one act: one undo
+  step for the person who ran it. A formula suggestion is asked for when an entry stays `=` for a moment
+  (the request has its own number, `req`, and doesn't move the tab's `seq`), and shows only after
+  `formulas.evaluate` with `check` has tried it in the cell.
 - **Cost of a shared state**: Reflex re-sends its router data with each update a linked tab gets (about 2 KB
   next to the room's own data), so every move of a selection costs each other person a small message —
   fine for a team, not meant for hundreds of people on one workbook.

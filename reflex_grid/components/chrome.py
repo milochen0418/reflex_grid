@@ -7,6 +7,7 @@ import reflex as rx
 
 from ..room import BookRoom
 from ..state import AuthState, GridState
+from .ai_views import ai_button
 from .call_views import call_button
 
 ACCENT = "#156082"
@@ -124,6 +125,7 @@ def title_bar() -> rx.Component:
         save_status(),
         rx.spacer(),
         presence(),
+        ai_button(),
         call_button(),
         rx.tooltip(
             rx.icon_button(

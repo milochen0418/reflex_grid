@@ -84,6 +84,7 @@ forms included, or when you want a spreadsheet engine you can script from Python
 | Macros (VBA) | Developer tab, VBA editor (modules, class modules, UserForms with a form designer — Toolbox and Properties window —, import/export `.bas`/`.cls`/`.frm`+`.frx`, compile errors, Immediate window), Macros dialog (Alt+F8), `MsgBox`/`InputBox` dialogs, UserForms (shown from their design; `Initialize`/`Show`/`Hide`/`Unload`/`QueryClose`, control events, `ControlSource`/`RowSource`, modal and modeless), Stop for long macros, VBA functions in formulas, event macros (off until enabled, like Excel's *Enable Content*), a macro run as one undo step; the Excel object model macros use (`Range`, `Cells`, `Worksheets`, `Application`, tables, filters, names, formats…); no file, shell, network or COM access ([details and limits](docs/vba.md)) |
 | Files | Open `.xlsx`/`.xlsm`/`.csv`/`.tsv` (upload), download `.xlsx` (`.xlsm` with macros), export CSV, print (with the sheet's page setup), save as web page, document properties; workbooks are saved on the server as `.xlsx` (`.xlsm` with macros) while you edit |
 | Together | Workbook list (search, filters, who is editing now, new, upload, download, delete), shared links, presence (avatars, "N here"), everyone's selection and typing cell in their colour, changes highlighted for a moment, per-person sheets, zoom and undo, a shared title, calls |
+| AI (on re_ddns, with its AI Hub) | The hub's assistant opened on a workbook (title bar **AI**, Alt+A) reads it and explains its formulas; **AI Fill** (Data tab) writes a value for each selected row into a column, in one undo step; typing `=` in a cell suggests a formula, checked by the engine before it shows (Tab takes it; Formulas › Formula Suggestions turns it off) — see [below](#with-re_ddns-sign-in-and-calls) |
 
 ### Excel compatibility
 
@@ -213,9 +214,20 @@ install a few apps by hand and they work.
 4. Install a call app, e.g. **LiveKit Audio Chat (self-hosted)**, **LiveKit Video Chat** or **LiveKit Avatar
    Chat**: **Call everyone** rings the people on the workbook and opens the call in a dialog. With several
    call apps installed, whoever starts the call picks one.
+5. Install the **AI Hub** for the AI: **AI** in the title bar, **AI Fill** and formula suggestions.
 
 Apps on re_ddns open each other in dialogs through **DDNS Intents** (a call is the intent `call.join`); this
 video explains the idea: [DDNS Intent](https://www.youtube.com/watch?v=Y5YKXsWkrxg).
+
+The AI comes from the AI Hub, the platform's one AI window; ReflexGrid holds no model, key or address of
+its own. **AI** opens the hub's assistant on the workbook (the intent `ai.assist`): it reads the workbook
+through ReflexGrid's tools (`grid.workbook`, `grid.read`, `grid.find`; it can't change cells yet) and
+knows the sheet, the selection and the active cell's formula. **AI Fill** and formula suggestions ask the
+hub's role `fast`; which model answers is chosen on the AI Hub's page, where ReflexGrid's row says what it
+asks for. A suggestion is a formula the engine has tried in the cell first (`formulas.evaluate` with
+`check`): one with a syntax error, one that refers to its own cell, gives an error or refers only to empty
+cells never shows. Pick a model that answers without thinking first (e.g. `qwen2.5-coder:7b-instruct`):
+a suggestion is only useful within a second or two.
 
 On re_ddns each workbook is also a file in its shared collection `spreadsheets`: one item per workbook,
 `spreadsheets/by-app/grid/<id>/book.xlsx` (`book.xlsm` with macros) under the host's collections folder

@@ -486,3 +486,30 @@ def test_pasting_many_cells_is_fast():
     took = time.perf_counter() - t0
     assert val(s, "CV500") == rows * cols - 1
     assert took < 3.0, f"pasting {rows * cols} cells took {took:.1f}s"
+
+
+# ---------------------------------------------------------------- trying a formula without storing it
+
+
+def test_evaluate_check_tries_a_formula_as_typed_without_storing_it():
+    """``formulas.evaluate`` with ``check``: what a formula would show in a cell, refusing what
+    typing it would refuse (the AI's formula suggestions are checked this way before they show)."""
+    s = new()
+    s.run("range.setValues", range="A1", values=[["Item", "Qty", "Price"], ["Pen", 3, 1.5], ["Ink", 5, 2]])
+    s.run("home.numberFormat", range="B4", code='"$"#,##0.00')
+    s.run("home.bold", range="E2:E3")  # formatted, still empty
+    undo = len(s.doc().undo)
+    r = s.run("formulas.evaluate", formula="=SUMPRODUCT(B2:B3,C2:C3)", cell="B4", check=True)
+    assert r["formula"] == "=SUMPRODUCT(B2:B3,C2:C3)" and r["value"] == 14.5 and r["shown"] == "$14.50"
+    assert r["error"] is None and r["spill"] is None
+    assert s.run("formulas.evaluate", formula="=TODAY()", cell="D9", check=True)["shown"].count("/") == 2
+    assert s.run("formulas.evaluate", formula="=SEQUENCE(3)", cell="D1", check=True)["spill"] == [3, 1]
+    assert s.run("formulas.evaluate", formula="=1/0", cell="D1", check=True)["error"] == "#DIV/0!"
+    assert s.run("formulas.evaluate", formula="sum(b2:b3)", cell="D1", check=True)["formula"] == "=SUM(B2:B3)"
+    assert s.run("formulas.evaluate", formula="=E2-E3", cell="B4", check=True)["blankRefs"] is True
+    assert s.run("formulas.evaluate", formula="=B2-E3", cell="B4", check=True)["blankRefs"] is False
+    assert s.run("formulas.evaluate", formula="=TODAY()", cell="B4", check=True)["blankRefs"] is False
+    for bad in ("=SUM(B2:B3", "=IF(1)", "=B4*2", "=SUM(B:B)", "=Sheet1!B4"):
+        with pytest.raises(EngineError):
+            s.run("formulas.evaluate", formula=bad, cell="B4", check=True)
+    assert s.run("cell.get", cell="B4")["input"] == "" and len(s.doc().undo) == undo

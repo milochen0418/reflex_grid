@@ -288,7 +288,7 @@ function toggleAbs(ref) {
 // ---------------------------------------------------------------- component
 
 export function SheetView(props) {
-  const { geometry, data, objects, ui, functions, names, onEvent, focusKey, editRequest, peers, rev, changes, me } = props;
+  const { geometry, data, objects, ui, functions, names, onEvent, focusKey, editRequest, peers, rev, changes, me, ai } = props;
   const g = geometry || {};
   const z = (g.zoom || 100) / 100;
   const rows = useMemo(() => new Lines(g.rows, g.defaultRowHeight || 20, MAXR), [g.rows, g.defaultRowHeight]);
@@ -336,6 +336,17 @@ export function SheetView(props) {
   onEventRef.current = onEvent;
   const composingRef = useRef(false);
   const extentRef = useRef({ r: 100, c: 26 });
+  // The AI's formula suggestion (reflex_grid/ai.py): ``ai.suggest`` says whether to ask when a
+  // cell's entry is "=", ``ai.hint`` is the answer. A request has a number of its own (``req``,
+  // not ``seq``: it isn't an edit the server answers with a redraw); one per cell being typed into.
+  const aiRef = useRef(ai);
+  aiRef.current = ai;
+  const suggestReqRef = useRef(null); // {req, r, c, sheet, at}
+  const reqSeqRef = useRef(0);
+  const [hintOff, setHintOff] = useState(0); // the request whose suggestion Esc dismissed
+  const [, setHintTick] = useState(0);
+  const hintRef = useRef(null);
+  const cellMapRef = useRef(null);
   const autoScrollRef = useRef(null);
 
   const [fontTick, setFontTick] = useState(0);
@@ -389,6 +400,7 @@ export function SheetView(props) {
     if (data && data.cells && data.sheet === sheetIndex) for (const e of data.cells) m.set(key(e.r, e.c), e);
     return m;
   }, [data, sheetIndex]);
+  cellMapRef.current = cellMap;
   const styles = (data && data.styles) || {};
   const merges = (data && data.sheet === sheetIndex && data.merges) || [];
   const mergeAt = useCallback(
@@ -750,6 +762,67 @@ export function SheetView(props) {
     onEventRef.current({ type: "presence", seq: seqRef.current, editing: ed ? [ed.r, ed.c] : null });
   }, [ed]);
 
+  // A cell's entry that stays "=" for a moment asks the AI for a formula (when suggestions are on):
+  // once per cell being typed into, not while typing on.
+  useEffect(() => {
+    if (!ed) {
+      suggestReqRef.current = null;
+      return undefined;
+    }
+    const a = aiRef.current;
+    if (!a || !a.suggest || ed.text !== "=" || composingRef.current) return undefined;
+    const cur = suggestReqRef.current;
+    if (cur && cur.r === ed.r && cur.c === ed.c && cur.sheet === sheetRef.current) return undefined;
+    const t = setTimeout(() => {
+      const e = edRef.current;
+      if (!e || e.text !== "=" || e.r !== ed.r || e.c !== ed.c || !onEventRef.current) return;
+      const req = ++reqSeqRef.current;
+      suggestReqRef.current = { req, r: e.r, c: e.c, sheet: sheetRef.current, at: Date.now() };
+      onEventRef.current({ type: "suggest", seq: seqRef.current, req, r: e.r, c: e.c });
+      setHintTick((n) => n + 1);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [ed]);
+
+  // What this page shows, for the AI Hub's assistant opened on it (reflex_ddns_auth's intents ask
+  // ``window.__ddnsContext`` when a message is sent): the sheet, the selection, the active cell.
+  useEffect(() => {
+    const context = () => {
+      const s = selRef.current;
+      const u = uiRef.current || {};
+      const [r, c] = s.active;
+      const cell = (cellMapRef.current && cellMapRef.current.get(key(r, c))) || {};
+      const onActive = u.selection && u.selection.active && u.selection.active[0] === r && u.selection.active[1] === c;
+      const input = onActive && u.formulaBar !== undefined ? u.formulaBar : cell.in !== undefined ? cell.in : "";
+      const titleEl = document.getElementById("doc-title");
+      let text = `ReflexGrid workbook "${titleEl ? titleEl.value : ""}", sheet "${sheetRef.current}", selection ${s.ranges.map(rangeA1).join(",")}, active cell ${a1(r, c)}.`;
+      // How far the cells on screen go, and the headers of row 1 (so "the Sales column" means B).
+      let lastR = -1;
+      let lastC = -1;
+      const heads = [];
+      if (cellMapRef.current) {
+        cellMapRef.current.forEach((x) => {
+          if (x.t === undefined || x.t === "") return;
+          lastR = Math.max(lastR, x.r);
+          lastC = Math.max(lastC, x.c);
+          if (x.r === 0 && x.c < 40) heads[x.c] = x.t;
+        });
+      }
+      if (lastR >= 0) text += ` The cells on screen with content reach ${a1(lastR, lastC)}.`;
+      const named = heads.map((h, i) => (h ? `${colName(i)} "${h}"` : "")).filter(Boolean);
+      if (named.length) text += ` Row 1 holds the headers ${named.join(", ")}.`;
+      if (input && input[0] === "=") text += ` ${a1(r, c)} holds the formula ${input}` + (cell.t ? ` and shows ${cell.t}.` : ".");
+      else if (cell.t) text += ` ${a1(r, c)} shows ${cell.t}.`;
+      const e = edRef.current;
+      if (e) text += ` The person is typing into ${a1(e.r, e.c)}: ${e.text}`;
+      return { text };
+    };
+    window.__ddnsContext = context;
+    return () => {
+      if (window.__ddnsContext === context) delete window.__ddnsContext;
+    };
+  }, []);
+
   // Everyone else on this sheet, drawn with their selection in their colour.
   const others = useMemo(() => (peers || []).filter((q) => q && q.id !== me && q.sheet === sheetName && q.active), [peers, me, sheetName]);
 
@@ -1037,6 +1110,17 @@ export function SheetView(props) {
     [ac, setEd]
   );
 
+  const acceptHint = useCallback(() => {
+    const h = hintRef.current;
+    const e = edRef.current;
+    if (!h || h.waiting || !e) return;
+    caretRef.current = { pos: h.formula.length };
+    setEd({ ...e, text: h.formula });
+    setAc(null);
+    pointRef.current = null;
+    setHintOff(h.req);
+  }, [setEd]);
+
   const argHint = useMemo(() => {
     if (!ed || !ed.text || ed.text[0] !== "=") return null;
     const el = ed.bar ? barRef.current : kbdRef.current;
@@ -1177,6 +1261,19 @@ export function SheetView(props) {
             return;
           }
         }
+        // A suggestion on screen takes the first Esc (the second cancels the entry, as without one);
+        // one still being thought of doesn't.
+        const h = hintRef.current;
+        if (h && !h.waiting && e.key === "Escape") {
+          e.preventDefault();
+          setHintOff(h.req);
+          return;
+        }
+        if (h && !h.waiting && e.key === "Tab" && !e.shiftKey) {
+          e.preventDefault();
+          acceptHint();
+          return;
+        }
         if (e.key === "Enter") {
           if (e.altKey) {
             // Line break inside the cell.
@@ -1248,6 +1345,14 @@ export function SheetView(props) {
         return;
       }
       // ---- not editing
+      if (e.altKey && !mod && e.code === "KeyA") {
+        const btn = document.getElementById("ai-assist");
+        if (btn) {
+          e.preventDefault();
+          btn.click();
+          return;
+        }
+      }
       const s = selRef.current;
       const k = e.key;
       if (objSel !== null && (k === "Delete" || k === "Backspace")) {
@@ -1551,7 +1656,7 @@ export function SheetView(props) {
       // Printable keys fall through: the textarea receives the character and editing starts
       // in onInput.
     },
-    [ac, acceptAc, commit, cancelEdit, setEd, step, pointTo, ensureVisible, backToPanes, objSel, cmd, dialog, ui, expandMerges, setSel, syncSelSoon, selectCell, moveAfter, fr, fc, mainH, mainW, g.defaultRowHeight, g.defaultColWidth, z, beginEdit, cellText]
+    [ac, acceptAc, acceptHint, commit, cancelEdit, setEd, step, pointTo, ensureVisible, backToPanes, objSel, cmd, dialog, ui, expandMerges, setSel, syncSelSoon, selectCell, moveAfter, fr, fc, mainH, mainW, g.defaultRowHeight, g.defaultColWidth, z, beginEdit, cellText]
   );
 
   const onKbdInput = useCallback(
@@ -2702,6 +2807,14 @@ export function SheetView(props) {
   })();
   const [nameEdit, setNameEdit] = useState(null);
 
+  const hint = ai && ai.hint;
+  const sreq = suggestReqRef.current;
+  const hintFor = ed && sreq && sreq.r === ed.r && sreq.c === ed.c && sreq.sheet === sheetName && hintOff !== sreq.req ? sreq : null;
+  const hintReady = hintFor && hint && hint.req === hintFor.req;
+  const showHint = !!(hintReady && !hint.none && hint.formula && !ac && hint.formula.length > ed.text.length && hint.formula.toUpperCase().startsWith(ed.text.toUpperCase()));
+  const hintWaiting = !!(hintFor && !hintReady && ed.text === "=" && Date.now() - hintFor.at < 60000);
+  hintRef.current = showHint ? hint : hintWaiting ? { waiting: true, req: hintFor.req } : null;
+
   const dropdownBtn = ui && ui.dropdown && !ed && ui.sheet === sheetIndex && ui.selection && sel.active[0] === ui.selection.active[0] && sel.active[1] === ui.selection.active[1];
   const inputMsg = ui && ui.inputMessage && !ed && ui.selection && sel.active[0] === ui.selection.active[0] && sel.active[1] === ui.selection.active[1] ? ui.inputMessage : null;
   const hovered = menu ? null : hover; // a context menu hides what the pointer shows
@@ -2928,7 +3041,32 @@ export function SheetView(props) {
                   ))}
                 </div>
               )}
-              {!ac && argHint && ed && (
+              {hintRef.current && ed && (
+                <div
+                  className="rg-ai-hint"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    acceptHint();
+                  }}
+                  style={{ position: "absolute", left: ed.bar ? RW + 4 : activeRect.x, top: ed.bar ? 2 : activeRect.y + Math.max(activeRect.h, 20) + 2, background: "#FFFFFF", border: "1px solid #C4B5FD", borderRadius: 4, boxShadow: "0 2px 10px rgba(0,0,0,0.15)", padding: "5px 8px", zIndex: 11, maxWidth: 460, font: "12px 'Segoe UI', system-ui, sans-serif", color: "#374151", cursor: "pointer", pointerEvents: showHint ? "auto" : "none" }}
+                >
+                  {showHint ? (
+                    <>
+                      <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
+                        <span style={{ color: "#7C3AED" }}>✦</span>
+                        <span className="rg-ai-formula" style={{ fontFamily: "Consolas, Menlo, monospace", color: "#6B7280" }}>{hint.formula}</span>
+                        <span className="rg-ai-shown" style={{ color: "#111827" }}>→ {hint.shown}{hint.spill ? ` (fills ${hint.spill[0]}×${hint.spill[1]})` : ""}</span>
+                      </div>
+                      {hint.why ? <div style={{ color: "#4B5563", marginTop: 2 }}>{hint.why}</div> : null}
+                      <div style={{ color: "#9CA3AF", marginTop: 2, fontSize: 11 }}>Tab to use it · Esc to dismiss</div>
+                    </>
+                  ) : (
+                    <span className="rg-ai-waiting" style={{ color: "#6B7280" }}><span style={{ color: "#7C3AED" }}>✦</span> Thinking of a formula…</span>
+                  )}
+                </div>
+              )}
+              {!ac && !hintRef.current && argHint && ed && (
                 <div className="rg-arghint" style={{ position: "absolute", left: ed.bar ? RW + 4 : activeRect.x, top: ed.bar ? 2 : activeRect.y + Math.max(activeRect.h, 20) + 2, background: "#FFFFE1", border: "1px solid #A0A0A0", padding: "2px 6px", zIndex: 10, font: "12px 'Segoe UI', system-ui, sans-serif", pointerEvents: "none", whiteSpace: "nowrap" }}>
                   {renderSignature(argHint.fn.signature, argHint.arg)}
                 </div>

@@ -10,6 +10,7 @@ import reflex as rx
 from gridcore.engine.cmd_format import CELL_STYLE_NAMES
 from gridcore.engine.tables import TABLE_STYLE_NAMES
 
+from .. import ai
 from ..state import CATEGORIES, FUNCTIONS, GridState
 
 ACCENT = "#156082"
@@ -483,6 +484,7 @@ def formulas_tab() -> rx.Component:
             menu("calculator", "Calculation Options", [("Automatic", c("formulas.calculationOptions", mode="auto")), ("Automatic Except for Data Tables", c("formulas.calculationOptions", mode="autoNoTable")), ("Manual", c("formulas.calculationOptions", mode="manual")), "-", ("Enable Iterative Calculation", c("formulas.calculationOptions", iterative=True)), ("Disable Iterative Calculation", c("formulas.calculationOptions", iterative=False))], big=True),
             rbtn("refresh_cw", "Calculate Now", c("formulas.calculateNow"), "Calculate Now (F9)", big=True),
         ),
+        *([group("AI", rbtn("sparkles", "Formula Suggestions", GridState.toggle_ai_suggest, "Suggest a formula when you type = in a cell (on or off)", big=True, active=GridState.ai_props["suggest"].to(bool), id="rb-ai-suggest"))] if ai.ENABLED else []),
         spacing="0",
         align="stretch",
     )
@@ -505,6 +507,7 @@ def data_tab() -> rx.Component:
             menu("shield_check", "Data Validation", [("Data Validation…", dlg("validation")), ("Circle Invalid Data", GridState.audit("invalid")), ("Clear Validation", c("data.clearValidation"))], big=True, id="rb-validation"),
         ),
         group("Forecast", menu("target", "What-If Analysis", [("Goal Seek…", dlg("goalSeek"))], big=True, id="rb-whatif")),
+        *([group("AI", rbtn("sparkles", "AI Fill", dlg("aiFill"), "AI Fill: the AI writes a value for each selected row (a category, a summary, a translation…) into a column", big=True, id="rb-ai-fill"))] if ai.ENABLED else []),
         spacing="0",
         align="stretch",
     )

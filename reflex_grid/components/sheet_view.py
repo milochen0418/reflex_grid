@@ -36,6 +36,8 @@ class SheetView(rx.Component):
     rev: rx.Var[int]
     changes: rx.Var[list]
     me: rx.Var[str]
+    # The AI (ai.py): whether to ask for a formula when a cell's entry is "=", and the last one.
+    ai: rx.Var[dict]
     on_event: rx.EventHandler[lambda e: [e]]
 
 

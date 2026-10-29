@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from ..calc import evaluate
+from ..calc.recalc import evaluate_expr
 from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, letters_to_col, parse_cell
 from ..core.value import Array, CellError, display
 from ..formula import ParseError, Ref, parse, print_formula
@@ -14,6 +15,8 @@ from ..formula.printer import quote_sheet
 from ..functions import all_functions
 from ..model.features import DefinedName
 from .cmd_edit import cell_set, _json_value
+from .display import fmt
+from .entry import AUTO_DATE, parse_formula_input
 from .selection import Selection
 from .session import EngineError, Session, command, edit, need, p_bool, p_str, param_cell, param_sheet
 
@@ -326,14 +329,61 @@ def calculation_options(s: Session, p: Dict[str, Any]):
     return {"mode": c.mode, "iterative": c.iterative}
 
 
-@command("formulas.evaluate", "Evaluate", params="{formula, cell?, sheet?}", undoable=False, journal=False)
+@command("formulas.evaluate", "Evaluate", params="{formula, cell?, sheet?, check?: bool}", undoable=False, journal=False)
 def evaluate_cmd(s: Session, p: Dict[str, Any]):
     d = s.doc()
     si = param_sheet(s, p)
     at = param_cell(s, p)
     text = str(need(p, "formula", "formulas.evaluate"))
-    v = evaluate(d.wb, si, at, text)
-    return {"value": _json_value(v), "text": display(v) if not isinstance(v, Array) else None}
+    if not p_bool(p, "check"):
+        v = evaluate(d.wb, si, at, text)
+        return {"value": _json_value(v), "text": display(v) if not isinstance(v, Array) else None}
+    # ``check``: as if the formula were typed into the cell, without storing it. A syntax error, a
+    # wrong number of arguments or a reference to the cell itself is refused; ``shown`` is the
+    # result as the cell would show it (its number format, or the date format Excel gives
+    # TODAY(), DATE()…), ``spill`` the size of a dynamic array's result, and ``blankRefs`` says
+    # that the formula refers to cells but all of them are empty.
+    f = parse_formula_input(text if text.startswith("=") else "=" + text, strict=True)
+    expr = f.get_expr()
+    sh = d.wb.sheet(si)
+    refs = []
+    for x in expr.walk():
+        if not isinstance(x, Ref):
+            continue
+        name = x.sheet_name()
+        target = d.wb.sheet_index(name) if name else si
+        if target == si and x.range().contains(at):
+            raise EngineError(f"The formula refers to its own cell, {a1(*at)}.")
+        if target is not None:
+            refs.append((target, x.range()))
+    v = evaluate_expr(d.wb, si, at, expr)
+    first = v.get(0, 0) if isinstance(v, Array) else v
+    code = d.wb.styles.get(sh.style_id(at)).num_fmt
+    if code == "General":
+        code = next((c for prefixes, c in AUTO_DATE if f.text.upper().startswith(prefixes)), code)
+    return {
+        "formula": "=" + f.text,
+        "value": _json_value(v),
+        "text": display(v) if not isinstance(v, Array) else None,
+        "shown": fmt(first, code, d.wb).text,
+        "error": first.value if isinstance(first, CellError) else None,
+        "spill": [v.rows, v.cols] if isinstance(v, Array) else None,
+        "blankRefs": bool(refs) and not any(_holds_something(d.wb.sheet(i), r) for i, r in refs),
+    }
+
+
+def _holds_something(sh, rng: RangeRef) -> bool:
+    """Whether any cell of ``rng`` on ``sh`` holds a value or a formula."""
+    used = sh.used_range()
+    inter = rng.intersection(used) if used is not None else None
+    if inter is None:
+        return False
+    for r in range(inter.r0, inter.r1 + 1):
+        for c in range(inter.c0, inter.c1 + 1):
+            cell = sh.cell((r, c))
+            if cell is not None and (cell.formula is not None or cell.value not in (None, "")):
+                return True
+    return False
 
 
 @command("formulas.tracePrecedents", "Trace Precedents", menu=("Formulas", "Formula Auditing"), params="{cell?}", undoable=False, journal=False)

@@ -21,15 +21,16 @@ from typing import Any, Dict, List, Optional, Set
 
 import reflex as rx
 
-from gridcore.core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, col_to_letters
+from gridcore.core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, col_to_letters, letters_to_col
 from gridcore.engine import EngineError, Session, View, geometry, objects, ui_state, viewport
 from gridcore.engine.cmd_file import MIMES, encode, workbook_format
 from gridcore.engine.cmd_format import CELL_STYLE_NAMES, FORMAT_PRESETS  # noqa: F401
+from gridcore.engine.display import value_text
 from gridcore.engine.samples import SAMPLES
 from gridcore.functions import all_functions
 from gridcore.numfmt import parse as parse_fmt
 
-from . import call, sessions
+from . import ai, call, sessions
 from .books import STORE, Book, clean_title, valid_id
 from .room import BookRoom, room_token
 
@@ -173,6 +174,15 @@ class GridState(rx.State):
     vba_goto_line: int = 0
     vba_goto_key: int = 0
     vba_reopen: bool = False
+    # AI through the AI Hub (``ai.py``): the AI Fill running in this tab (rows done, of how many,
+    # what it does), the formula suggested for the cell being typed into, and whether suggestions
+    # are on (remembered in the browser). Rows and answers stay on the server.
+    ai_job: Dict[str, Any] = {}
+    ai_hint: Dict[str, Any] = {}
+    ai_suggest: str = rx.LocalStorage("on", name="rg_ai_suggest")
+    _ai_fill: Dict[str, Any] = {}
+    _ai_stop: bool = False
+    _ai_hint_req: int = 0
     _peer: str = ""
     _guest: str = ""
 
@@ -283,6 +293,11 @@ class GridState(rx.State):
         """A MsgBox, an InputBox or a busy macro is in front of the forms."""
         kind = (self.macro_prompt or {}).get("kind")
         return bool(self.macro_busy or (kind and kind != "form"))
+
+    @rx.var
+    def ai_props(self) -> Dict[str, Any]:
+        """What the grid needs of the AI: whether to ask for formula suggestions, and the last one."""
+        return {"suggest": ai.ENABLED and self.ai_suggest != "off", "hint": self.ai_hint}
 
     # ------------------------------------------------------------ plumbing
 
@@ -523,6 +538,14 @@ class GridState(rx.State):
             return None
         t = e.get("type")
         seq = int(e.get("seq") or 0)
+        if t == "suggest":
+            # The entry of a cell is "=": ask for a formula, unless suggestions are off. The
+            # request has a number of its own (``req``): it doesn't move this tab's ``seq``.
+            if not ai.ENABLED or self.ai_suggest == "off":
+                return None
+            req = int(e.get("req") or 0)
+            self._ai_hint_req = req
+            return GridState.ai_suggest_run(int(e.get("r") or 0), int(e.get("c") or 0), req)
         out = None
         extra: Dict[str, Any] = {}
         with book.act(view) as s:
@@ -1180,6 +1203,15 @@ class GridState(rx.State):
             if ch is None:
                 raise EngineError("Select a chart first.")
             dlg = {"id": ch.id, "range": ch.source or ""}
+        elif name == "aiFill":
+            rng = sel.current()
+            used = sh.used_range()
+            if used is not None and (rng.is_full_rows() or rng.is_full_cols()):
+                rng = RangeRef(rng.r0, rng.c0, min(rng.r1, max(used.r1, rng.r0)), min(rng.c1, max(used.c1, rng.c0)))
+            header = ai.looks_like_header(sh, rng)
+            first = rng.r0 + (1 if header else 0)
+            target = ai.free_column(sh, rng, (first, max(first, rng.r1)))
+            dlg = {"sheet": sh.name, "range": rng.a1(), "rows": rng.r1 - rng.r0 + 1, "instruction": "", "header": header, "target": col_to_letters(target), "overwrite": False}
         else:
             raise EngineError(f"unknown dialog `{name}`")
         self.dlg = dlg
@@ -1243,6 +1275,8 @@ class GridState(rx.State):
 
     def _dialog_action(self, s: Session, name: str, action: str, d: Dict[str, Any]):
         run = lambda cid, **p: s.execute(cid, p)
+        if name == "aiFill":
+            return self._ai_fill_prepare(s, d), False
         if name == "formatCells":
             o = d.get("orig", {})
             patch: Dict[str, Any] = {}
@@ -1606,6 +1640,203 @@ class GridState(rx.State):
         self._publish(room, book)
         return out
 
+    # ------------------------------------------------------------ AI (through the AI Hub)
+
+    def _ai_fill_prepare(self, s: Session, d: Dict[str, Any]):
+        """Checks the AI Fill dialog and takes the rows to send (inside ``book.act``); the
+        answers are asked for and written by ``ai_fill_run``."""
+        if (self.ai_job or {}).get("running"):
+            raise EngineError("An AI Fill is already running in this tab.")
+        instruction = str(d.get("instruction") or "").strip()
+        if not instruction:
+            raise EngineError("Say what the AI should write for each row.")
+        wb = s.doc().wb
+        si = wb.sheet_index(str(d.get("sheet") or ""))
+        rng = RangeRef.parse(str(d.get("range") or ""))
+        if si is None or rng is None:
+            raise EngineError("The sheet or the selection changed: open AI Fill again.")
+        sh = wb.sheet(si)
+        header = bool(d.get("header"))
+        first = rng.r0 + (1 if header else 0)
+        if first > rng.r1:
+            raise EngineError("There are no rows under the headers.")
+        if rng.r1 - first + 1 > ai.FILL_MAX_ROWS:
+            raise EngineError(f"AI Fill takes up to {ai.FILL_MAX_ROWS:,} rows at a time: select fewer rows.")
+        letters = str(d.get("target") or "").strip().upper()
+        col = letters_to_col(letters) if re.fullmatch(r"[A-Z]{1,3}", letters) else None
+        if col is None or not 0 <= col < MAX_COLS:
+            raise EngineError("Write the results' column as letters, e.g. D.")
+        if rng.c0 <= col <= rng.c1:
+            raise EngineError(f"Column {letters} is part of the selection: pick a column beside it for the results.")
+        if not d.get("overwrite"):
+            taken = sum(1 for r in range(rng.r0 if header else first, rng.r1 + 1) if sh.value((r, col)) not in (None, ""))
+            if taken:
+                raise EngineError(f"Column {letters} already holds values in {taken} of these rows: pick an empty column, or tick “Replace what is there”.")
+        rows = [[value_text(wb, sh, (r, c)) for c in range(rng.c0, rng.c1 + 1)] for r in range(first, rng.r1 + 1)]
+        todo = [i for i, row in enumerate(rows) if any(v.strip() for v in row)]
+        if not todo:
+            raise EngineError("The selected rows are empty.")
+        self._ai_fill = {
+            "sheet": sh.name,
+            "col": col,
+            "first": first,
+            "header_row": rng.r0 if header else -1,
+            "names": ai.column_names(wb, sh, rng, header),
+            "rows": rows,
+            "todo": todo,
+            "instruction": instruction,
+        }
+        self._ai_stop = False
+        where = f"{sh.name}!{letters}{first + 1}:{letters}{rng.r1 + 1}"
+        self.ai_job = {"running": True, "done": 0, "total": len(todo), "what": ai.short(instruction, 60), "where": where, "model": "", "stopping": False}
+        return GridState.ai_fill_run
+
+    @rx.event(background=True)
+    async def ai_fill_run(self):
+        """Asks the hub for each row's answer, a batch of rows at a time, then writes them all in
+        one step (one undo takes them back)."""
+        async with self:
+            job = dict(self._ai_fill)
+            user = (self.me or {}).get("user", "")
+        if not job:
+            return
+        rows, todo = job["rows"], job["todo"]
+        answers: Dict[int, str] = {}
+        title = model = error = ""
+        stopped = False
+        for start in range(0, len(todo), ai.FILL_BATCH):
+            async with self:
+                stopped = self._ai_stop
+            if stopped:
+                break
+            batch = todo[start : start + ai.FILL_BATCH]
+            want_title = job["header_row"] >= 0 and start == 0
+            try:
+                text, model = await ai.ask(ai.FILL_SYSTEM, ai.fill_prompt(job["instruction"], job["names"], [rows[i] for i in batch], want_title), max_tokens=4096, user=user, timeout=240)
+                got_title, got = ai.parse_fill(text, len(batch))
+                # Rows the answer left out are asked again, one at a time.
+                for k in [k for k in range(1, len(batch) + 1) if k not in got][:5]:
+                    one, model = await ai.ask(ai.FILL_SYSTEM, ai.fill_prompt(job["instruction"], job["names"], [rows[batch[k - 1]]]), max_tokens=1024, user=user, timeout=120)
+                    _, single = ai.parse_fill(one, 1)
+                    if 1 in single:
+                        got[k] = single[1]
+            except Exception as ex:  # noqa: BLE001 — whatever happens, the run ends and says why
+                error = str(ex) if isinstance(ex, ai.FAILED) and str(ex) else "the AI took too long to answer" if isinstance(ex, ai.FAILED) else f"{type(ex).__name__}: {ex}"
+                break
+            if want_title:
+                title = got_title
+            for k, i in enumerate(batch, 1):
+                if k in got:
+                    answers[i] = got[k]
+            async with self:
+                if self.ai_job:
+                    self.ai_job = {**self.ai_job, "done": min(len(todo), start + len(batch)), "model": model}
+        async with self:
+            out = await self._ai_fill_write(job, answers, title, model, error, stopped)
+        yield out
+
+    async def _ai_fill_write(self, job: Dict[str, Any], answers: Dict[int, str], title: str, model: str, error: str, stopped: bool):
+        """Writes AI Fill's answers into their column (inside ``async with self``) and says how it went."""
+        self._ai_fill, self.ai_job = {}, {}
+        filled = {i: a for i, a in answers.items() if a}
+        if not filled:
+            return rx.toast.error(f"AI Fill: the AI Hub couldn't answer: {error}" if error else "AI Fill wrote nothing: the AI gave no answers.", position="bottom-center")
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        if book is None:
+            return None
+        col, first = job["col"], job["first"]
+        letters = col_to_letters(col)
+        problem = ""
+        with book.act(view) as s:
+            try:
+                # Runs of answered rows, so rows without an answer keep what they hold.
+                order = sorted(filled)
+                run: List[int] = []
+                for i in order + [-2]:
+                    if run and i != run[-1] + 1:
+                        s.execute("range.setValues", {"sheet": job["sheet"], "range": f"{letters}{first + run[0] + 1}", "values": [[ai.as_input(filled[k])] for k in run]})
+                        run = []
+                    if i >= 0:
+                        run.append(i)
+                if title and job["header_row"] >= 0:
+                    head = (job["header_row"], col)
+                    if s.doc().wb.sheet(s.doc().wb.sheet_index(job["sheet"])).value(head) in (None, ""):
+                        s.execute("range.setValues", {"sheet": job["sheet"], "range": a1(*head), "values": [[ai.as_input(title)]]})
+            except EngineError as ex:
+                problem = str(ex).split("\n", 1)[0]
+            self._refresh(entry, book, view)
+        self._publish(room, book)
+        if problem:
+            return rx.toast.error(f"AI Fill couldn't write its answers: {problem}", position="bottom-center")
+        missing = len(job["todo"]) - len(filled)
+        msg = f"AI Fill wrote {len(filled)} value{'s' if len(filled) != 1 else ''} into column {letters}" + (f" ({model})" if model else "") + ". Undo takes them back."
+        if stopped or error:
+            msg = ("Stopped. " if stopped else f"The AI Hub stopped answering ({error}). ") + msg
+        elif missing:
+            msg += f" {missing} row{'s' if missing != 1 else ''} got no answer."
+        return rx.toast.success(msg, position="bottom-center") if not (stopped or error) else rx.toast.warning(msg, position="bottom-center")
+
+    @rx.event
+    def ai_fill_stop(self):
+        """Stops the AI Fill after the rows being asked about now; what is answered is written."""
+        self._ai_stop = True
+        if self.ai_job:
+            self.ai_job = {**self.ai_job, "stopping": True}
+
+    @rx.event(background=True)
+    async def ai_suggest_run(self, r: int, c: int, req: int):
+        """Asks the hub for a formula for the cell at ``r``, ``c`` (whose entry is "="), checks it
+        as if it were typed there (``formulas.evaluate`` with ``check``) and offers it to the grid.
+        A refused answer is asked again once, with the reason."""
+        async with self:
+            if self._ai_hint_req != req:
+                return
+            entry, book, view = self._bound()
+            if book is None:
+                return
+            with book.act(view) as s:
+                wb = s.doc().wb
+                sheet = wb.sheet(wb.active_sheet).name
+                context = ai.neighbourhood(wb, wb.active_sheet, (r, c))
+            user = (self.me or {}).get("user", "")
+        problem = ""
+        for _ in range(2):
+            try:
+                text, model = await ai.ask(ai.SUGGEST_SYSTEM, ai.suggest_prompt(context, problem), max_tokens=1536, user=user, timeout=45)
+            except Exception:  # noqa: BLE001 — no suggestion, nothing else
+                break
+            formula, why = ai.parse_suggestion(text)
+            if not formula:
+                problem = 'there was no line "FORMULA: =…"'
+                continue
+            async with self:
+                if self._ai_hint_req != req:
+                    return
+                entry, book, view = self._bound()
+                if book is None:
+                    return
+                check = None
+                with book.act(view) as s:
+                    try:
+                        check = s.execute("formulas.evaluate", {"formula": formula, "cell": a1(r, c), "sheet": sheet, "check": True})
+                    except EngineError as ex:
+                        problem = f"{formula}: {str(ex).splitlines()[0]}"
+                if check is not None and not check["error"] and not check["blankRefs"]:
+                    self.ai_hint = {"req": req, "sheet": sheet, "r": r, "c": c, "formula": check["formula"], "shown": check["shown"], "spill": check["spill"], "why": why, "model": model}
+                    return
+                if check is not None:
+                    problem = f"{check['formula']} gives {check['error']}" if check["error"] else f"{check['formula']} refers only to empty cells"
+        async with self:
+            if self._ai_hint_req == req:
+                self.ai_hint = {"req": req, "none": True}
+
+    @rx.event
+    def toggle_ai_suggest(self):
+        self.ai_suggest = "off" if self.ai_suggest != "off" else "on"
+        if self.ai_suggest == "off":
+            self.ai_hint = {}
+        return rx.toast.info("Formula suggestions are " + ("off." if self.ai_suggest == "off" else "on: type = in a cell."), position="bottom-center")
 
     # ------------------------------------------------------------ macros (VBA)
 

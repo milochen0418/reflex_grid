@@ -34,6 +34,7 @@ The `run_test.py` script should:
 | `vba_userforms` | UserForms: an `.xlsm` with forms (built by the suite) opened in the browser; a modal form filled in (typing, a drop-down list, a check box, a `KeyPress` handler, a `MsgBox` over the form, OK writing the cells, Esc as Cancel), a modeless form beside the grid, the VBA editor's form view (double-click for an event procedure, Run Form), designing a new form (Toolbox, Properties window, moving a control, its code, running it), the forms kept in the downloaded `.xlsm`, and the editor staying light in a dark-mode browser |
 | `gridcraft_issues` | The browser side of bugs [GridCraft](https://github.com/storytold/gridcraft) fixed (the unit tests are in `tests/test_gridcraft_issues.py`): a column or row header clicked while writing a formula inserts `C:C` / `4:4` (a drag across headers extends it), Enter pastes a copy and ends copy mode, typing right after the name box goes into the cell, Ctrl+Shift+Down scrolls to the end it extends to, a selection down to row 1,048,576 is reached and drawn (past the browsers' scrolling limit), a chart just inserted is selected so Delete removes it (not its data), double-clicking the fill handle fills down beside the data, a list's input message hides while its list is open, Center Across Selection, Shrink to Fit and a merged area's borders as Excel draws them, a `javascript:` link is refused, a finger dragging on the grid pans it, a multi-line value in an unwrapped cell shows on one line, Page Up into frozen rows scrolls the rows below back to the top, and Shift+Arrow on a whole column keeps the view |
 | `collab_call` | Calling everyone on a workbook: who is rung, declining, accepting, joining later; with the call app running, the call itself (needs a `call.join` provider, see below) |
+| `ai_features` | AI against a stand-in AI Hub (`_lib/ai_stub.py`): AI Fill (values and a title in the next free column, one undo, a taken column refused), formula suggestions (Tab, Esc, none while typing on or when off), the page context the hub's assistant gets, the assistant's tools over the platform's routes (needs `DDNS_AI_HUB_URL` and `DDNS_AUTH_SECRET`, see below) |
 
 ## Running
 
@@ -55,6 +56,13 @@ check of the call itself (e.g. reflex_ddns_livekit_audio_chat on 3200/8200):
 ```bash
 DDNS_INTENT_PROVIDER_CALL_JOIN=livekit DDNS_INTENT_URL_LIVEKIT=http://localhost:3200 \
 poetry run ./run_test_suite.sh collab_call
+```
+
+`ai_features` runs its stand-in AI Hub itself, where the server is told to find one:
+
+```bash
+DDNS_AI_HUB_URL=http://127.0.0.1:8399 DDNS_AUTH_SECRET=any-secret-of-32-characters-or-more \
+poetry run ./run_test_suite.sh ai_features
 ```
 
 Example (headed + slow motion):
