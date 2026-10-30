@@ -402,6 +402,17 @@ def _resolve_series(wb, si: int, text: Optional[str]):
     return v
 
 
+def _date_format(wb, si: int, text: str):
+    """The date format of the first cell of a series' range; None when it holds no dates."""
+    sheet, _, ref = text.rpartition("!")
+    i = wb.sheet_index(sheet.strip("'").replace("''", "'")) if sheet else si
+    rng = RangeRef.parse(ref.replace("$", ""))
+    if i is None or rng is None:
+        return None
+    nf = parse_fmt(wb.styles.get(wb.sheet(i).style_id((rng.r0, rng.c0))).num_fmt)
+    return nf if nf.is_date() else None
+
+
 def chart_data(wb, si: int, ch) -> Dict[str, Any]:
     series = []
     cats: List[Any] = []
@@ -426,7 +437,8 @@ def chart_data(wb, si: int, ch) -> Dict[str, Any]:
         if s.categories and not cats:
             cv = _resolve_series(wb, si, s.categories)
             if isinstance(cv, Array):
-                cats = [(x if isinstance(x, float) and ch.kind.startswith("scatter") else (display(x) if x is not None else "")) for x in cv.data[:10000]]
+                dates = _date_format(wb, si, s.categories)
+                cats = [(x if isinstance(x, float) and ch.kind.startswith("scatter") else (format_value(x, dates, wb.date_system).text if dates and isinstance(x, float) else display(x) if x is not None else "")) for x in cv.data[:10000]]
         color = s.color.hex(wb.theme) if s.color is not None else None
         series.append({"name": name, "values": data, "color": color})
     n = max((len(s["values"]) for s in series), default=0)

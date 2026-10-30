@@ -295,6 +295,12 @@ class GridState(rx.State):
         return bool(self.macro_busy or (kind and kind != "form"))
 
     @rx.var
+    def ai_room(self) -> str:
+        """The room the AI Hub's assistant opens on: this workbook, as this tab's person (their
+        Accept makes the AI's change theirs, and their undo takes it back: ``ai_tools``)."""
+        return f"{self.book}~{(self.me or {}).get('peer', '')}"
+
+    @rx.var
     def ai_props(self) -> Dict[str, Any]:
         """What the grid needs of the AI: whether to ask for formula suggestions, and the last one."""
         return {"suggest": ai.ENABLED and self.ai_suggest != "off", "hint": self.ai_hint}
@@ -445,12 +451,13 @@ class GridState(rx.State):
         changes, saving and the call. Only what changed is assigned, so only that is sent."""
         with book.lock:
             rev, title = book.rev, book.meta.title
-            peers = [_peer_json(v) for v in book.views.values()]
+            peers = [_peer_json(v) for v in book.views.values()] + ai.presence(book)
             who = {v.key: (v.name, v.info.get("color", "#5F6368")) for v in book.views.values()}
             changes = [
-                {"rev": c.rev, "author": c.author, "name": who.get(c.author, ("", "#5F6368"))[0], "color": who.get(c.author, ("", "#5F6368"))[1], "areas": [[n, list(r)] for n, r in c.areas]}
+                ai.seen_change(book, {"rev": c.rev, "author": c.author, "name": who.get(c.author, ("", "#5F6368"))[0], "color": who.get(c.author, ("", "#5F6368"))[1], "areas": [[n, list(r)] for n, r in c.areas]})
                 for c in book.changes[-12:]
             ]
+            ai_notes = ai.notes(book)
             saved, error = not book.dirty, book.save_error
         if room.rev != rev:
             room.rev = rev
@@ -460,6 +467,8 @@ class GridState(rx.State):
             room.peers = peers
         if changes and (not room.changes or room.changes[-1].get("rev") != changes[-1]["rev"]):
             room.changes = changes
+        if list(room.ai_notes) != ai_notes:
+            room.ai_notes = ai_notes
         if room.saved != saved:
             room.saved = saved
         if room.save_error != error:
@@ -1830,6 +1839,50 @@ class GridState(rx.State):
         async with self:
             if self._ai_hint_req == req:
                 self.ai_hint = {"req": req, "none": True}
+
+    @rx.event
+    async def ai_undo(self, rev: int):
+        """Takes back a change of the assistant's, whatever this person did after it."""
+        room = await self.get_state(BookRoom)
+        entry, book, view = self._bound()
+        change = ai.change_of(book, int(rev)) if book is not None else None
+        if change is None or change.peer not in (view.key, ai.AI_USER):
+            return None
+        target = view if change.peer == view.key else book.ai_view
+        out = None
+        with book.act(target) as s:
+            try:
+                book.take_back(target, change.step)
+                msgs = s.messages[:]
+                s.messages.clear()
+                if msgs:
+                    out = rx.toast.warning(msgs[-1], position="bottom-center")
+            except EngineError as ex:
+                change.closed = True
+                out = rx.toast.error(str(ex).split("\n", 1)[0], position="bottom-center")
+            if target is view:
+                self._refresh(entry, book, view)
+        if target is not view:
+            book.leave(ai.AI_USER)
+            with book.act(view):
+                self._refresh(entry, book, view)
+        self._publish(room, book)
+        self._focus()
+        return out
+
+    @rx.event
+    async def ai_close(self, rev: int):
+        """Dismisses the note about the assistant's change (and those before it): Ctrl+Z still
+        takes them back."""
+        room = await self.get_state(BookRoom)
+        _, book, view = self._bound()
+        change = ai.change_of(book, int(rev)) if book is not None else None
+        if change is None or change.peer not in (view.key, ai.AI_USER):
+            return
+        for c in book.ai_changes:
+            if c.peer == change.peer and c.revs[-1] <= change.revs[-1]:
+                c.closed = True
+        self._publish(room, book)
 
     @rx.event
     def toggle_ai_suggest(self):

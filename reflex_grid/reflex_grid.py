@@ -12,7 +12,7 @@ from reflex.style import set_color_mode
 
 from . import ai, ai_tools
 from .api import api
-from .components.ai_views import ai_fill_dialog, ai_job_panel
+from .components.ai_views import ai_change_bar, ai_fill_dialog, ai_job_panel
 from .components.call_views import call_keepalive, incoming_call
 from .components.chrome import backstage, book_gone, sheet_tabs, status_bar, title_bar
 from .components.dialogs import all_dialogs
@@ -73,6 +73,7 @@ def index() -> rx.Component:
         all_dialogs(),
         ai_fill_dialog(),
         ai_job_panel(),
+        ai_change_bar(),
         forms_layer(),
         vba_dialogs(),
         book_gone(),

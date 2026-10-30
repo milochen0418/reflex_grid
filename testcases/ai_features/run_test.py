@@ -2,7 +2,9 @@
 value for each selected row into the next free column, with a title, in one undo step; typing
 "=" suggests a formula that Tab takes and Esc dismisses (not while typing on, nor when
 suggestions are off); the page tells the hub's assistant what it shows; the assistant's tools
-read the workbook over the platform's tool routes.
+read the workbook over the platform's tool routes; a change the assistant makes (the hub has
+asked for the person's Accept by then) reaches everyone, lights up as the AI's, its box stays out
+of the people here, and the person's Undo takes it back whatever they did after it.
 
 Needs the server started with ``DDNS_AI_HUB_URL`` (where this suite runs the stand-in, e.g.
 http://127.0.0.1:8399) and ``DDNS_AUTH_SECRET``, as the CI workflow does for this suite; without
@@ -17,7 +19,7 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _lib import ai_stub  # noqa: E402
-from _lib.grid import Grid, run  # noqa: E402
+from _lib.grid import Grid, new_book_id, run  # noqa: E402
 
 COMMENTS = ["Great pen, love it", "It leaks everywhere", "Arrived on Tuesday", "Bad ink, broke in a day", "Good value"]
 
@@ -161,8 +163,10 @@ def context_and_tools(g: Grid) -> None:
     base = backend_url()
     manifest = httpx.get(f"{base}/_ddns_tool/manifest", timeout=10).json()
     names = {t["name"] for t in manifest["tools"]}
-    assert {"grid.guide", "grid.workbook", "grid.read", "grid.find"} <= names, names
-    assert all(t["kind"] == "read" for t in manifest["tools"])
+    assert {"grid.guide", "grid.workbook", "grid.read", "grid.find", "grid.commands", "grid.vba_get"} <= names, names
+    # What changes a workbook waits for the person's Accept on the hub.
+    assert {t["name"] for t in manifest["tools"] if t["kind"] != "read"} == {"grid.edit", "grid.vba_set", "grid.form_design"}
+    assert all(t["kind"] == "danger" for t in manifest["tools"] if t["kind"] != "read")
     assert "fast" in manifest["ai_uses"], manifest["ai_uses"]
     headers = {"Authorization": f"Bearer {call_token(manifest.get('app') or 'grid', 'ai_features suite')}"}
     r = httpx.post(f"{base}/_ddns_tool/call/grid.read", json={"args": {"room": g.book, "ref": "Sheet1!A1:D6"}}, headers=headers, timeout=10).json()
@@ -174,10 +178,120 @@ def context_and_tools(g: Grid) -> None:
     assert refused.status_code == 401
 
 
+def tool(name: str, **args):
+    """Calls a tool the way the hub does, once the person has accepted the change."""
+    import httpx
+    from reflex_ddns_auth.tools import call_token
+
+    base = backend_url()
+    app = httpx.get(f"{base}/_ddns_tool/manifest", timeout=10).json().get("app") or "grid"
+    headers = {"Authorization": f"Bearer {call_token(app, 'ai_features suite')}"}
+    r = httpx.post(f"{base}/_ddns_tool/call/{name}", json={"args": args}, headers=headers, timeout=20).json()
+    assert r["ok"], r
+    return r["result"]
+
+
+def step(command: str, **params) -> dict:
+    return {"command": command, "params": params}
+
+
+SORT = step("data.sort", range="A1:B5", keys=[{"col": "B", "order": "desc"}])
+VIOLET = "rgb(124, 58, 237)"
+
+
+def lit_in_ai_colour(g: Grid) -> bool:
+    return g.page.evaluate("(c) => [...document.querySelectorAll('.rg-flash')].some((e) => getComputedStyle(e).backgroundColor === c)", VIOLET)
+
+
+def ai_box_cell(g: Grid) -> str:
+    box = g.page.locator(".rg-peer[data-peer^='AI']")
+    return box.first.get_attribute("data-peer-cell") if box.count() else ""
+
+
+def undo_button(g: Grid) -> int:
+    return g.page.locator("#ai-change-undo").count()
+
+
+def changes_by_the_ai(g: Grid) -> None:
+    base_url = os.getenv("BASE_URL", "http://127.0.0.1:3000").rstrip("/")
+    book = new_book_id()
+    g.open(base_url, book)
+    context = g.page.context.browser.new_context(viewport={"width": 1400, "height": 860})
+    ben = Grid(context.new_page(), g.out)
+    ben.open(base_url, book)
+    people = lambda who: who.page.locator("#people-count").inner_text()  # noqa: E731
+    wait_for(lambda: people(g) == "2 here", "2 here")
+    room = g.page.locator("#ai-assist").get_attribute("data-room")
+    assert room.startswith(f"{book}~"), room
+
+    # It reaches everyone, in the AI's colour and with its box, also for the one who accepted it.
+    rows = [["Item", "Amount"], ["Pen", 82000], ["Ink", 125000], ["Cap", 230000], ["Box", 64000]]
+    tool("grid.edit", room=room, summary="Enter the sales", steps=[step("range.setValues", range="A1", values=rows)])
+    ben.wait_text("B4", "230000")
+    wait_for(lambda: lit_in_ai_colour(g), "the AI's colour on the accepter's grid")
+    wait_for(lambda: lit_in_ai_colour(ben), "the AI's colour on the other person's grid")
+    wait_for(lambda: ai_box_cell(g) == "A1" and ai_box_cell(ben) == "A1", "the AI's box on both grids")
+    assert people(g) == "2 here" and people(ben) == "2 here", "the AI isn't one of the people here"
+    assert g.page.locator(".rg-person").count() == 2
+    # The note is the accepter's alone.
+    wait_for(lambda: undo_button(g) == 1, "the Undo note")
+    assert "Enter the sales" in g.page.locator("#ai-change-text").inner_text()
+    assert undo_button(ben) == 0
+    g.shot("ai_change_note")
+    ben.shot("ai_change_seen_by_the_other")
+
+    # Dismissed, the change stays and Ctrl+Z still has it.
+    g.page.locator("#ai-change-close").click()
+    wait_for(lambda: undo_button(g) == 0, "the note closing")
+    assert ben.text("B4") == "230000"
+
+    # Undo takes the AI's change back and leaves what came after it.
+    tool("grid.edit", room=room, summary="Add a total", steps=[step("cell.set", cell="A6", input="Total"), step("cell.set", cell="B6", input="=SUM(B2:B5)")])
+    ben.wait_text("B6", "501000")
+    g.type_in("D1", "mine")
+    wait_for(lambda: undo_button(g) == 1, "the Undo note")
+    g.page.locator("#ai-change-undo").click()
+    wait_for(lambda: not ben.text("B6") and not g.text("A6"), "the total leaving")
+    assert g.wait_text("D1", "mine") and ben.wait_text("D1", "mine")
+    wait_for(lambda: undo_button(g) == 0 and not ai_box_cell(g) and not ai_box_cell(ben), "the note and the box leaving")
+
+    # The whole request of the plan: one call, one Accept, one Undo.
+    tool("grid.edit", room=room, summary="Table, total row, biggest first, over 100k in red", steps=[
+        step("insert.table", range="A1:B5", header=True, name="Sales"),
+        step("table.totalRow", on=True, table="Sales"),
+        step("table.totalFunction", col="Amount", function="sum", table="Sales"),
+        SORT,
+        step("home.conditionalFormat", range="B2:B5", rule={"type": "cellIs", "operator": "greaterThan", "value": 100000, "preset": "lightRed"}),
+    ])
+    ben.wait_text("B2", "230000")
+    assert ben.wait_text("B6", "501000") and tool("grid.workbook", room=room)["sheets"][0]["tables"]
+    ben.shot("ai_change_table_seen_by_the_other")
+    wait_for(lambda: undo_button(g) == 1, "the Undo note")
+    g.page.locator("#ai-change-undo").click()
+    ben.wait_text("B2", "82000")
+    wait_for(lambda: not ben.text("B6"), "the total row leaving")
+    assert not tool("grid.workbook", room=room)["sheets"][0]["tables"]
+
+    # After moved cells a change can't be matched any more: it says so, and stays.
+    tool("grid.edit", room=room, summary="Sort", steps=[SORT])
+    ben.wait_text("B2", "230000")
+    wait_for(lambda: undo_button(g) == 1, "the Undo note")
+    ben.type_in("D2", "theirs")
+    g.wait_text("D2", "theirs")
+    g.page.locator("#ai-change-undo").click()
+    g.page.get_by_text("cells have moved").first.wait_for(state="visible")
+    wait_for(lambda: undo_button(g) == 0, "the note closing")
+    assert ben.text("B2") == "230000"
+
+    assert not ben.console_errors, ben.console_errors[:3]
+    context.close()
+
+
 def body(g: Grid) -> None:
     ai_fill(g)
     suggestions(g)
     context_and_tools(g)
+    changes_by_the_ai(g)
 
 
 if __name__ == "__main__":

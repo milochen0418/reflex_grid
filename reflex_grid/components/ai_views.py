@@ -7,6 +7,7 @@ from __future__ import annotations
 import reflex as rx
 
 from .. import ai
+from ..room import BookRoom
 from ..state import GridState
 from .dialogs import D, check, ok_cancel, shell, text_field
 
@@ -25,10 +26,11 @@ def ai_button() -> rx.Component:
         rx.button(
             rx.icon("sparkles", size=14),
             "AI",
-            on_click=Intent.start(None, "ai.assist", keep_alive=True, single=True, label="AI assistant", in_app=ai.APP, room=GridState.book),
+            on_click=Intent.start(None, "ai.assist", keep_alive=True, single=True, label="AI assistant", in_app=ai.APP, room=GridState.ai_room),
             size="1",
             variant="outline",
             id="ai-assist",
+            custom_attrs={"data-room": GridState.ai_room},
             style={"color": "#FFFFFF", "background": "rgba(255,255,255,0.10)", "boxShadow": "inset 0 0 0 1px rgba(255,255,255,0.45)", "cursor": "pointer"},
         ),
         content="Ask the AI about this workbook (Alt+A)",
@@ -84,3 +86,27 @@ def ai_job_panel() -> rx.Component:
             style={"position": "fixed", "left": "12px", "bottom": "34px", "zIndex": "30", "background": "#FFFFFF", "border": "1px solid #E5E7EB", "borderRadius": "8px", "padding": "6px 10px", "boxShadow": "0 4px 14px rgba(0,0,0,0.12)"},
         ),
     )
+
+
+def ai_change_bar() -> rx.Component:
+    """What the assistant just changed for this person, with the button that takes it back
+    (above the assistant's dialog, which stays open while it works)."""
+    if not ai.ENABLED:
+        return rx.fragment()
+
+    def note(n) -> rx.Component:
+        return rx.cond(
+            (n["peer"].to(str) == GridState.me["peer"].to(str)) | (n["peer"].to(str) == ai.AI_USER),
+            rx.hstack(
+                rx.icon("sparkles", size=14, color=ai.AI_COLOR),
+                rx.text("AI: ", n["summary"].to(str), size="1", color="#1F2937", max_width="min(340px, 50vw)", overflow="hidden", text_overflow="ellipsis", white_space="nowrap", id="ai-change-text"),
+                rx.button("Undo", size="1", variant="soft", on_click=GridState.ai_undo(n["rev"].to(int)), title="Take back this change, whatever you did after it", id="ai-change-undo"),
+                rx.icon_button(rx.icon("x", size=12), size="1", variant="ghost", color_scheme="gray", on_click=GridState.ai_close(n["rev"].to(int)), title="Dismiss (Ctrl+Z still takes it back)", id="ai-change-close"),
+                spacing="2",
+                align="center",
+                id="ai-change-bar",
+                style={"position": "fixed", "left": "12px", "bottom": "74px", "zIndex": "1001", "background": "#FFFFFF", "border": "1px solid #DDD6FE", "borderRadius": "8px", "padding": "6px 10px", "boxShadow": "0 4px 14px rgba(0,0,0,0.12)"},
+            ),
+        )
+
+    return rx.fragment(rx.foreach(BookRoom.ai_notes, note))

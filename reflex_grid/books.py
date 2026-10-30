@@ -116,6 +116,10 @@ class Book(SharedBook):
     """A shared workbook and its place in the store."""
 
     def __init__(self, doc: DocState, meta: BookMeta):
+        # What the AI Hub's assistant changed here (``ai.AiChange``), and the view it works
+        # through when no tab opened it: that one is on the book only while it acts.
+        self.ai_changes: List[Any] = []
+        self.ai_view: Optional[Any] = None
         super().__init__(doc, meta.id)
         self.meta = meta
         self.saved_rev = 0

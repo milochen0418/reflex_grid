@@ -109,6 +109,79 @@ def test_undo_keeps_what_others_changed_since():
     assert amy.session.messages and "kept" in amy.session.messages[-1]
 
 
+def take_back(b, v, step):
+    with b.act(v):
+        return b.take_back(v, step)
+
+
+def test_taking_back_an_older_step_keeps_what_came_after():
+    b = new_book()
+    amy, ben = join(b, "amy"), join(b, "ben")
+    run(b, amy, "cell.set", cell="A1", input="mine")
+    step = amy.undo[-1]
+    run(b, amy, "cell.set", cell="A2", input="later")
+    run(b, ben, "cell.set", cell="A3", input="theirs")
+    assert take_back(b, amy, step) == {"undone": step.label, "kept": 0}
+    assert val(b, amy, "A1") is None and val(b, amy, "A2") == "later" and val(b, amy, "A3") == "theirs"
+    assert not any(t is step for t in amy.undo) and len(amy.undo) == 1
+    run(b, amy, "edit.redo")
+    assert val(b, amy, "A1") == "mine", "a step taken back can be redone"
+
+
+def test_taking_back_the_latest_step_is_an_exact_undo():
+    b = new_book()
+    amy = join(b, "amy")
+    run(b, amy, "range.setValues", range="A1", values=[[1], [2]])
+    run(b, amy, "data.sort", range="A1:A2", keys=[{"col": 0, "order": "desc"}])
+    assert val(b, amy, "A1") == 2
+    take_back(b, amy, amy.undo[-1])
+    assert val(b, amy, "A1") == 1
+
+
+def test_taking_back_keeps_what_someone_changed_since():
+    b = new_book()
+    amy, ben = join(b, "amy"), join(b, "ben")
+    run(b, amy, "range.setValues", range="A1", values=[[1, 2]])
+    step = amy.undo[-1]
+    run(b, ben, "cell.set", cell="B1", input="9")
+    assert take_back(b, amy, step)["kept"] == 1
+    assert val(b, amy, "A1") is None and val(b, amy, "B1") == 9
+    assert amy.session.messages and "kept" in amy.session.messages[-1]
+
+
+def test_a_step_cant_be_taken_back_after_cells_moved_or_twice():
+    b = new_book()
+    amy, ben = join(b, "amy"), join(b, "ben")
+    run(b, amy, "cell.set", cell="C1", input="mine")
+    step = amy.undo[-1]
+    run(b, ben, "home.insertRows", rows="1:1")
+    with pytest.raises(EngineError, match="cells have moved"):
+        take_back(b, amy, step)
+    assert any(t is step for t in amy.undo), "it stays where it was"
+    run(b, ben, "edit.undo")
+    take_back(b, amy, step)
+    with pytest.raises(EngineError, match="undone already"):
+        take_back(b, amy, step)
+
+
+def test_discard_drops_what_an_act_did():
+    b = new_book()
+    amy = join(b, "amy")
+    run(b, amy, "cell.set", cell="A1", input="1")
+    run(b, amy, "cell.set", cell="B1", input="=A1+1")
+    rev, wb, undos, epoch = b.rev, b.doc.wb, len(amy.undo), b.epoch
+    with b.act(amy) as s:
+        s.run("cell.set", cell="A1", input="5")
+        s.run("home.insertRows", rows="1:1")
+        s.run("home.insertSheet", name="Extra")
+        assert b.doc.wb is not wb
+        b.discard()
+    assert b.rev == rev and b.doc.wb is wb and len(amy.undo) == undos and b.epoch == epoch
+    assert amy.sheet == "Sheet1" and val(b, amy, "A1") == 1 and val(b, amy, "B1") == 2
+    run(b, amy, "cell.set", cell="A1", input="7")
+    assert val(b, amy, "B1") == 8, "formulas still recalculate"
+
+
 def test_formulas_recalculate_after_a_selective_undo():
     b = new_book()
     amy, ben = join(b, "amy"), join(b, "ben")

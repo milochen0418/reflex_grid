@@ -117,9 +117,21 @@ exactly puts its epoch back, so earlier transitions become undoable again.
   process (`CallStore`); the room carries what everyone must see (how many are in it, who is ringing, whom it
   rings and who answered). The call runs in the app chosen for the DDNS Intent `call.join`.
 - **AI** (`reflex_grid/ai.py`, `ai_tools.py`, `components/ai_views.py`): only on re_ddns with its AI Hub,
-  which chooses the models (`reflex_ddns_auth.ai`). The hub's assistant reads workbooks through read-only
-  tools (`reflex_ddns_auth.tools`) that take a snapshot under the book's lock, and gets what the page shows
-  from the grid's `window.__ddnsContext`. AI Fill takes the rows inside `book.act`, asks the hub's role
+  which chooses the models (`reflex_ddns_auth.ai`). The hub's assistant reads workbooks through tools
+  (`reflex_ddns_auth.tools`) that take a snapshot under the book's lock, and gets what the page shows from
+  the grid's `window.__ddnsContext`. Its tools that change a workbook are `danger` tools, which the hub runs
+  only after the person's Accept. The room it was opened with names the tab too (`<book>~<peer>`), so a
+  change runs in `book.act` on that person's view: it is their change, one undo step per call, and a call
+  that fails at a step leaves nothing (`SharedBook.discard`). Commands are the engine's (`grid.edit`), minus
+  files, macros and the clipboard. Every such change is also remembered on the book as an `ai.AiChange`:
+  publishing shows its revision as the AI's (`ai.seen_change`, so it lights up in the AI's colour also for
+  its person, areas of moved cells included, which the change log leaves out), adds a box for half a minute
+  (`ai.presence`: an entry of the room's `peers`, not a view, so it stays out of the people here, of calls and
+  of `close_idle`) and tells its person what they can take back (`BookRoom.ai_notes`). `SharedBook.take_back`
+  undoes one step of a view's stack wherever it lies, by the rules of any undo. Without the tab the change is
+  made through `book.ai_view`, a view that is on the book only while it acts. A chart floats over cells the
+  model can't see past, so `grid.read` and `grid.workbook` say what each covers and `grid.edit` answers with
+  what a chart now `hidden`s. AI Fill takes the rows inside `book.act`, asks the hub's role
   `fast` from a background event (no lock held while waiting), then writes all answers in one act: one undo
   step for the person who ran it. A formula suggestion is asked for when an entry stays `=` for a moment
   (the request has its own number, `req`, and doesn't move the tab's `seq`), and shows only after

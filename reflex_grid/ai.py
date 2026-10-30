@@ -15,9 +15,12 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gridcore.core.addr import RangeRef, a1, col_to_letters
+from gridcore.engine.collab import changed_areas
 from gridcore.engine.display import value_text
 from gridcore.engine.entry import is_formula_input
 
@@ -56,6 +59,89 @@ async def ask(system: str, prompt: str, *, max_tokens: int, user: str, timeout: 
 
     text = await asyncio.wait_for(collect(), timeout)
     return ("" if reply.stop == "refusal" else text), reply.model
+
+
+# ------------------------------------------------------------ the assistant's changes
+
+# A change the AI Hub's assistant made (``ai_tools``) is its person's, on their undo; everyone on
+# the workbook sees it as the AI's: it lights up in the AI's colour, also for that person, and a
+# box named after the AI stays on it for a moment. It isn't someone on the workbook: it stays out
+# of the people here, of calls and of the workbook list, so it is no ``View`` in ``book.views``.
+AI_USER = "ai"
+AI_NAME = "AI"
+AI_COLOR = "#7C3AED"
+AI_MARK_SECONDS = 30.0
+AI_CHANGES_KEPT = 30
+
+
+@dataclass
+class AiChange:
+    """One accepted change: the revisions it took, whose it is, what it did and where."""
+
+    revs: Tuple[int, ...]
+    peer: str  # the view whose undo holds it
+    name: str  # as the workbook shows it
+    summary: str
+    areas: List[Tuple[str, List[int]]]
+    step: Any  # its step on that undo stack (a ``Transition``), for taking it back
+    at: float = field(default_factory=time.time)
+    closed: bool = False  # its person dismissed the note about it
+
+
+def note_change(book: Any, view: Any, rev: int, before: Any, summary: str) -> Optional[AiChange]:
+    """Remembers what an act of the AI's did to ``book`` (it was at revision ``rev``, the workbook
+    ``before``); nothing when it changed nothing."""
+    if book.rev == rev:
+        return None
+    revs = tuple(c.rev for c in book.changes if c.rev > rev)
+    step = view.undo[-1] if view.undo and view.undo[-1].dst is book.doc.wb else None
+    name = AI_NAME if view.key == AI_USER else f"{AI_NAME} for {view.name}"
+    change = AiChange(revs, view.key, name, short(summary, 120), changed_areas(before, book.doc.wb), step)
+    book.ai_changes.append(change)
+    del book.ai_changes[:-AI_CHANGES_KEPT]
+    return change
+
+
+def seen_change(book: Any, row: Dict[str, Any]) -> Dict[str, Any]:
+    """A row of the room's recent changes (``GridState._publish``), as the AI's when it was: so
+    everyone's grid lights it up in the AI's colour, its person's too, moved cells included."""
+    for change in book.ai_changes:
+        if row["rev"] in change.revs:
+            areas = [[n, list(b)] for n, b in change.areas]
+            return {**row, "author": AI_USER, "name": change.name, "color": AI_COLOR, "areas": areas}
+    return row
+
+
+def presence(book: Any, now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """The AI's box on the workbook, as an entry of the room's ``peers``, for a moment after a
+    change to cells: on its first sheet, around what it changed there."""
+    now = time.time() if now is None else now
+    change = next((c for c in reversed(book.ai_changes) if c.areas), None)
+    if change is None or now - change.at > AI_MARK_SECONDS or not _standing(book, change):
+        return []
+    sheet = change.areas[0][0]
+    boxes = [box for name, box in change.areas if name == sheet][:8]
+    return [{"id": AI_USER, "user": AI_USER, "name": change.name, "color": AI_COLOR, "avatar": "", "sheet": sheet, "active": boxes[0][:2], "ranges": boxes, "editing": None}]
+
+
+def _standing(book: Any, change: AiChange) -> bool:
+    """Whether a change is still on its person's undo (they didn't undo it, the tab is here)."""
+    view = book.ai_view if change.peer == AI_USER else book.views.get(change.peer)
+    return view is not None and any(t is change.step for t in view.undo)
+
+
+def notes(book: Any) -> List[Dict[str, Any]]:
+    """What each person may take back: their latest change by the AI that still stands. The AI's
+    own (made without a tab) are everyone's."""
+    latest: Dict[str, AiChange] = {}
+    for change in book.ai_changes:
+        if not change.closed and _standing(book, change):
+            latest[change.peer] = change
+    return [{"rev": c.revs[-1], "peer": p, "summary": c.summary} for p, c in latest.items()]
+
+
+def change_of(book: Any, rev: int) -> Optional[AiChange]:
+    return next((c for c in book.ai_changes if rev in c.revs), None)
 
 
 def short(text: Any, limit: int) -> str:

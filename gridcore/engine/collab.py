@@ -31,7 +31,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from ..model.cell import Cell
 from ..model.workbook import Workbook
@@ -41,6 +41,8 @@ from .session import DocState, EngineError, Session, commit, p_bool, p_int, para
 UNDO_LIMIT = 100
 # Changes kept for the UI (who changed what, for highlighting).
 CHANGE_LOG = 50
+# How ``changed_areas`` tells changes apart: past these, one box around them all.
+AREA_BOXES, AREA_CELLS = 8, 20_000
 
 # Commands on the server's files or on the session's own list of workbooks: a shared workbook
 # is created, opened, saved and closed by the app around it.
@@ -269,6 +271,16 @@ class SharedBook:
                 if d.wb is not act.before:
                     self._record(view, act, hist, moved)
 
+    def discard(self) -> None:
+        """Drops what the current act did so far: the workbook, and its person's place on it, are
+        as the act found them."""
+        act, d = self._act, self.doc
+        d.undo, d.redo, d.cells_moved = [], [], False
+        if d.wb is not act.before:
+            d.wb = act.before
+            d.calc.rebuild(d.wb)
+        self._enter(act.view)
+
     def _flush(self) -> None:
         """Records what the current act changed so far (undo and redo record their own steps)."""
         act = self._act
@@ -413,6 +425,27 @@ class SharedBook:
             )
         return {"undone" if undo else "redone": label, "kept": kept}
 
+    def take_back(self, view: View, step: Transition) -> Dict[str, Any]:
+        """Undoes one of ``view``'s steps, not only the latest (inside :meth:`act`): what the
+        person did after it stays. As with any undo, what was changed again since is kept, and
+        once cells have moved a step can't be matched any more."""
+        if not any(t is step for t in view.undo):
+            raise EngineError("That was undone already.")
+        self._flush()
+        kept = 0
+        if self.doc.wb is step.dst:
+            back = self._exact(step)
+        elif step.moved or step.epoch_dst != self.epoch:
+            raise EngineError(f"Can't undo “{step.label}”: cells have moved since (rows or columns inserted or deleted, a sort, sheets added or removed).")
+        else:
+            back, kept = self._selective(step)
+        view.undo[:] = [t for t in view.undo if t is not step]
+        view.redo.append(back)
+        del view.redo[:-UNDO_LIMIT]
+        if kept:
+            view.session.messages.append(f"{kept} of the changes you undid had been changed again since; those were kept.")
+        return {"undone": step.label, "kept": kept}
+
     def _exact(self, t: Transition) -> Transition:
         """Nobody changed the workbook since ``t``: go back to its snapshot."""
         d = self.doc
@@ -486,17 +519,66 @@ def _eq(a: Any, b: Any) -> bool:
         return False
 
 
+def _changed_cells(before, after) -> Iterator[Tuple[int, int]]:
+    """The cells whose content or format differs between two versions of a sheet."""
+    for k in before.cells.diff_keys(after.cells):
+        if not _same_input(before.cell(k), after.cell(k)):
+            yield k
+
+
 def _changed_box(before, after) -> Optional[List[int]]:
-    """Bounding box of the cells whose content or format differs between two versions of a sheet."""
+    """Bounding box of the cells that differ between two versions of a sheet."""
     r0 = c0 = r1 = c1 = -1
-    for r, c in before.cells.diff_keys(after.cells):
-        if _same_input(before.cell((r, c)), after.cell((r, c))):
-            continue
+    for r, c in _changed_cells(before, after):
         if r0 < 0:
             r0, c0, r1, c1 = r, c, r, c
         else:
             r0, c0, r1, c1 = min(r0, r), min(c0, c), max(r1, r), max(c1, c)
     return None if r0 < 0 else [r0, c0, r1, c1]
+
+
+def _rectangles(cells: Iterable[Tuple[int, int]]) -> List[List[int]]:
+    """Cells as rectangles, neighbours together; as one when there are many or they scatter."""
+    cells = list(cells)
+    if not cells:
+        return []
+    rows, cols = [r for r, _ in cells], [c for _, c in cells]
+    whole = [min(rows), min(cols), max(rows), max(cols)]
+    if len(cells) > AREA_CELLS:
+        return [whole]
+    boxes: List[List[int]] = []
+    for r, c in cells:
+        box = [r, c, r, c]
+        for b in [b for b in boxes if b[0] - 1 <= r <= b[2] + 1 and b[1] - 1 <= c <= b[3] + 1]:
+            boxes.remove(b)
+            box = [min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3])]
+        boxes.append(box)
+        if len(boxes) > AREA_BOXES:
+            return [whole]
+    return boxes
+
+
+def changed_areas(before: Workbook, after: Workbook) -> List[Tuple[str, List[int]]]:
+    """Where two versions of a workbook differ, moved cells and what a changed formula spills
+    included: ``(sheet name, [r0, c0, r1, c1])``, several for a sheet when the changes lie apart,
+    sheets matched by name (a new sheet counts as a whole)."""
+    was = {s.name: s for s in before.sheets}
+    out: List[Tuple[str, List[int]]] = []
+    for sheet in after.sheets:
+        old = was.get(sheet.name)
+        if old is sheet:
+            continue
+        if old is None:
+            used = sheet.used_range()
+            if used is not None:
+                out.append((sheet.name, [used.r0, used.c0, used.r1, used.c1]))
+            continue
+        for box in _rectangles(_changed_cells(old, sheet)):
+            for (r, c), sr in sheet.spill_ranges.items():
+                if box[0] <= r <= box[2] and box[1] <= c <= box[3]:
+                    box = [min(box[0], sr.r0), min(box[1], sr.c0), max(box[2], sr.r1), max(box[3], sr.c1)]
+            out.append((sheet.name, box))
+    return out
 
 
 def _put_back(ctx, t: Transition, cur: Workbook) -> int:

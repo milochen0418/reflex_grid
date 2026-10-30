@@ -15,6 +15,7 @@ from ..formula.printer import quote_sheet
 from ..model.cell import Cell, Formula
 from ..model.features import CHART_KINDS, Anchor, Chart, Comment, Hyperlink, Image, Series, Sparkline, Table, TableColumn
 from ..model.style import Color
+from ..numfmt import parse as parse_fmt
 from .cmd_data import guess_header
 from .cmd_edit import _activate, _set, resolve_reference
 from .cmd_format import _ranges
@@ -361,11 +362,12 @@ def build_series(wb, si: int, rng: RangeRef, by_rows: Optional[bool], kind: str)
     sh = wb.sheet(si)
     sheet = quote_sheet(sh.name)
 
-    def is_label(v) -> bool:
-        return v is None or isinstance(v, str)
+    def is_label(rc) -> bool:
+        v = sh.value(rc)
+        return v is None or isinstance(v, str) or (isinstance(v, float) and parse_fmt(wb.styles.get(sh.style_id(rc)).num_fmt).is_date())
 
-    top = rng.height > 1 and all(is_label(sh.value((rng.r0, c))) for c in range(rng.c0 + (1 if rng.width > 1 else 0), rng.c1 + 1)) and any(sh.value((rng.r0, c)) is not None for c in range(rng.c0, rng.c1 + 1))
-    left = rng.width > 1 and all(is_label(sh.value((r, rng.c0))) for r in range(rng.r0 + (1 if top else 0), rng.r1 + 1))
+    top = rng.height > 1 and all(is_label((rng.r0, c)) for c in range(rng.c0 + (1 if rng.width > 1 else 0), rng.c1 + 1)) and any(sh.value((rng.r0, c)) is not None for c in range(rng.c0, rng.c1 + 1))
+    left = rng.width > 1 and all(is_label((r, rng.c0)) for r in range(rng.r0 + (1 if top else 0), rng.r1 + 1))
     if kind.startswith("scatter") and rng.width > 1:
         left = True
     data = RangeRef(rng.r0 + (1 if top else 0), rng.c0 + (1 if left else 0), rng.r1, rng.c1)

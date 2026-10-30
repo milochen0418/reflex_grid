@@ -32,6 +32,8 @@ class BookRoom(rx.SharedState):
     peers: List[Dict[str, Any]] = []
     # The latest changes: {"rev", "author", "name", "color", "areas": [[sheet, [r0, c0, r1, c1]]]}.
     changes: List[Dict[str, Any]] = []
+    # What each person can take back of the assistant's changes: {"rev", "peer", "summary"}.
+    ai_notes: List[Dict[str, Any]] = []
     saved: bool = True
     save_error: str = ""
     # Someone deleted the book from the workbook list.
@@ -50,7 +52,7 @@ class BookRoom(rx.SharedState):
         seen = set()
         for p in self.peers:
             user = p.get("user") or p.get("id")
-            if user in seen:
+            if user in seen or user == "ai":  # the assistant's box on the grid isn't a person
                 continue
             seen.add(user)
             name = p.get("name", "") or "?"

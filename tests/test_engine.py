@@ -252,6 +252,19 @@ def test_charts_and_objects():
     assert ch["title"] == "Sales"
 
 
+def test_a_chart_takes_a_date_column_as_its_axis():
+    s = new()
+    s.run("range.setValues", range="A1", values=[["Month", "Total"], ["2026-01-01", 10], ["2026-02-01", 20]])
+    s.run("insert.chart", kind="line", range="A1:B3")
+    ch = objects(s.doc().wb, 0)["charts"][0]
+    assert [x["name"] for x in ch["series"]] == ["Total"] and ch["series"][0]["values"] == [10.0, 20.0]
+    assert ch["categories"] == ["1/1/2026", "2/1/2026"]
+    # Plain numbers stay a series, as in Excel.
+    s.run("range.setValues", range="D1", values=[["Year", "Total"], [2025, 10], [2026, 20]])
+    s.run("insert.chart", kind="line", range="D1:E3")
+    assert len(objects(s.doc().wb, 0)["charts"][1]["series"]) == 2
+
+
 def test_xlsx_round_trip_through_commands():
     s = new()
     s.run("range.setValues", range="A1", values=[["n"], [1], [2]])
