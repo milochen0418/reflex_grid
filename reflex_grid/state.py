@@ -365,6 +365,8 @@ class GridState(rx.State):
             self._peer = secrets.token_hex(6)
         if email:
             user = email
+        elif name:  # signed in without an e-mail (a Relack guest): they keep their nickname
+            user = f"guest-{name}"
         else:
             if not self._guest:
                 self._guest = str(random.randint(1000, 9999))

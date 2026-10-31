@@ -11,3 +11,6 @@ __pycache__/
 
 # E2E testcase artifacts
 testcases/**/output/
+
+# Promo video sources and renders (large)
+docs/videos/

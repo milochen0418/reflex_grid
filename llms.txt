@@ -6,6 +6,7 @@
 - Checked against Microsoft Excel: 457 VBA language and library cases, 158 object-model scenarios, and files Excel opens, saves and ReflexGrid recalculates to Excel's results.
 - Third-party VBA runs too: the published spec workbook of VBA-JSON (MIT, written for Excel by its authors) runs its own suite in ReflexGrid, with the result in the compatibility report. Conditional compilation (#If VBA7/Win64/Mac, #Const) is supported.
 - Excel for the web can't run VBA, ONLYOFFICE runs JavaScript macros only, and Collabora Online runs part of VBA with macros off by default. ReflexGrid runs VBA itself, UserForms included.
+- AI that asks first (with the AI Hub of re_ddns): an assistant changes cells, VBA code and UserForms; each change waits for Accept, shows as the AI's for everyone, and one click takes it back; Claude or a local model
 - Real-time collaboration: shared links, presence, everyone's selection, per-person undo; workbooks are saved on the server as .xlsx (.xlsm with macros).
 - gridcore works without the UI: 479 worksheet functions, dynamic arrays, LET/LAMBDA, structured references, incremental recalculation; reads and writes .xlsx, .xlsm, .csv; runs VBA macros headless, with no Excel installed (`Session().run("macro.run", name="Main")`, or `python -m gridcore.cli run book.xlsm script.json`).
 - Install: clone reflex_grid and reflex_ddns_auth side by side, then `poetry install` and `poetry run ./reflex_rerun.sh` (Python 3.11 or newer).
@@ -21,6 +22,7 @@
 
 ## Optional
 
+- [ReflexGrid introduction](https://youtu.be/196pWZceyas): English, 3:18, October 2026: Excel files, VBA and UserForms, co-editing, AI
 - [Demo video: co-editing, VBA macros and UserForms](https://youtu.be/Zl0tysSTTOI): English, 3:20, October 2026
 - [The same demo in Chinese](https://youtu.be/OvGv0PB3UKU): 3:41, October 2026
 - [Introduction to the first version](https://www.youtube.com/watch?v=I5rBceuf1tM): 1:51, October 2026

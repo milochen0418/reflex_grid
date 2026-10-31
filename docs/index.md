@@ -5,6 +5,8 @@ description: Open-source, self-hosted online Excel. ReflexGrid opens and saves r
 ReflexGrid is a spreadsheet that runs in the browser, made for workbooks that have to keep working as they do
 in Microsoft Excel:
 
+![A ReflexGrid dashboard in the browser: the ribbon, a formula bar, dynamic arrays, data bars and two charts](images/dashboard.png)
+
 - **Excel files in, Excel files out**: real `.xlsx` and `.xlsm` (formulas, styles, tables, charts,
   conditional formats, validation, the VBA project), and CSV or TSV.
 - **Excel VBA macros in the browser**: a VBA editor, `MsgBox` and `InputBox`, event macros such as
@@ -12,15 +14,19 @@ in Microsoft Excel:
   in a sandbox. Excel for the web can't run VBA; ReflexGrid can.
 - **Edit together, live**: share a workbook's link; everyone sees changes at once and each other's
   selections, and undo takes back only your own changes.
+- **AI that asks first**: with the AI Hub of re_ddns, an assistant changes cells, VBA code and UserForms; each
+  change waits for your Accept, shows as the AI's for everyone, and one click takes it back. Claude or a local
+  model, as you choose.
 - **A Python spreadsheet engine**: gridcore calculates 479 Excel functions, with dynamic arrays and
   `LET`/`LAMBDA`, and runs VBA macros headless, with no Excel installed.
 - **Self-hosted, MIT-licensed.**
 
 ## Videos
 
-<a href="https://youtu.be/Zl0tysSTTOI"><img src="https://i.ytimg.com/vi/Zl0tysSTTOI/maxresdefault.jpg" width="640" alt="ReflexGrid demo video: co-editing, VBA macros and UserForms"></a>
+<a href="https://youtu.be/196pWZceyas"><img src="images/video-cover.jpg" width="640" alt="Watch the ReflexGrid introduction on YouTube, 3:18"></a>
 
-- **Co-editing, VBA macros and UserForms**, the latest demo (October 2026):
+- **ReflexGrid introduction**, the latest (October 2026, 3:18): your Excel files, VBA and UserForms, editing together, AI that asks first: [watch](https://youtu.be/196pWZceyas)
+- **Co-editing, VBA macros and UserForms** (October 2026):
   [English](https://youtu.be/Zl0tysSTTOI) (3:20) · [中文](https://youtu.be/OvGv0PB3UKU) (3:41)
 - **Introduction to the first version** (October 2026, 1:51): [watch](https://www.youtube.com/watch?v=I5rBceuf1tM)
 - **DDNS Intent** (October 2026, 2:21): how apps on re_ddns open each other, which is how ReflexGrid's
