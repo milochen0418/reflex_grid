@@ -2,7 +2,10 @@
 // Keys: Tab / Shift+Tab indent, Enter keeps the indent, Ctrl/Cmd+S applies the code, F5 runs the
 // Sub the cursor is in. The code goes to the server on onChange (debounced) and onSave. A new
 // gotoKey puts the caret at the end of line gotoLine (an event procedure the form view opened).
+// With the AI (a hub address): its bar and the change it writes (vba_ai.jsx), and the grey
+// suggestion at the cursor, which Tab takes and Esc dismisses.
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { AiBar, DraftPane } from "./vba_ai.jsx";
 
 const KEYWORDS = new Set(
   (
@@ -82,6 +85,8 @@ function highlightLine(line) {
 }
 
 const PROC_START = /^\s*(?:(?:Public|Private|Friend)\s+)?(?:Static\s+)?(Sub|Function|Property\s+(?:Get|Let|Set))\s+([A-Za-z_][A-Za-z0-9_]*)/i;
+const GHOST_WAIT_MS = 500; // a pause in the typing before a suggestion is asked for
+const GHOST_GIVE_UP_MS = 30000;
 
 // The procedure the cursor is in: its name, or "".
 function procedureAt(text, line) {
@@ -95,13 +100,23 @@ function procedureAt(text, line) {
 }
 
 export function VbaEditor(props) {
-  const { value, docKey, errorLine, readOnly, onChange, onSave, onRun, fontSize, gotoLine, gotoKey } = props;
+  const { value, docKey, errorLine, readOnly, onChange, onSave, onRun, fontSize, gotoLine, gotoKey, module, hub, draft, ghost, suggest, fixable, words, onAi } = props;
   const [text, setText] = useState(value || "");
+  const [shownGhost, setShownGhost] = useState(null); // {at, text}
   const area = useRef(null);
   const pre = useRef(null);
   const gutter = useRef(null);
   const timer = useRef(null);
   const sent = useRef(value || "");
+  const bar = useRef(null);
+  const ghostTimer = useRef(null);
+  const ghostReq = useRef(0); // the suggestion last asked for
+  const ghostSince = useRef(0); // when it was asked, while the answer is awaited
+  const ghostAt = useRef(null); // {text, at}: where it was asked for
+  const canAi = !!hub && !readOnly;
+  // The change for the module on screen.
+  const shown = draft && draft.status && draft.docKey === docKey ? draft : null;
+  const covering = shown && ["writing", "checking", "done"].includes(shown.status);
 
   // Another module (or a reload after someone else's change) replaces the text.
   useEffect(() => {
@@ -129,24 +144,90 @@ export function VbaEditor(props) {
 
   useEffect(() => () => timer.current && clearTimeout(timer.current), []);
 
+  useEffect(() => () => ghostTimer.current && clearTimeout(ghostTimer.current), []);
+
+  // Module changed under a change the AI was writing: that change is over.
+  useEffect(() => {
+    if (draft && draft.status && draft.docKey !== docKey && onAi) onAi({ type: "close" });
+  }, [docKey, draft && draft.seq]);
+
+  const askGhost = () => {
+    const a = area.current;
+    if (!canAi || !suggest || draft && draft.status || !a || document.activeElement !== a) return;
+    const at = a.selectionStart;
+    const v = a.value;
+    if (at !== a.selectionEnd || !v.trim()) return;
+    if (ghostSince.current && Date.now() - ghostSince.current < GHOST_GIVE_UP_MS) return; // one at a time
+    const end = v.indexOf("\n", at);
+    // At the end of a line, or before what closes it; not in a comment.
+    if (!/^[\s)\]"',]*$/.test(v.slice(at, end < 0 ? v.length : end))) return;
+    if (v.slice(v.lastIndexOf("\n", at - 1) + 1, at).trimStart().startsWith("'")) return;
+    ghostReq.current += 1;
+    ghostSince.current = Date.now();
+    ghostAt.current = { text: v, at };
+    onAi({ type: "suggest", req: ghostReq.current, prefix: v.slice(0, at), suffix: v.slice(at) });
+  };
+
+  const clearGhost = () => {
+    if (ghostTimer.current) clearTimeout(ghostTimer.current);
+    ghostTimer.current = null;
+    setShownGhost(null);
+  };
+
+  useEffect(() => {
+    if (!ghost || ghost.req !== ghostReq.current) return;
+    ghostSince.current = 0;
+    const a = area.current;
+    const was = ghostAt.current;
+    if (!a || !was) return;
+    if (a.value !== was.text || a.selectionStart !== was.at) {
+      // Typed on while it was being asked: ask for where the cursor is now.
+      if (!ghostTimer.current) ghostTimer.current = setTimeout(askGhost, GHOST_WAIT_MS);
+    } else if (ghost.text) {
+      setShownGhost({ at: was.at, text: ghost.text });
+    }
+  }, [ghost]);
+
   const change = (t) => {
     setText(t);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => flush(t), 400);
+    clearGhost();
+    if (canAi && suggest) ghostTimer.current = setTimeout(() => {
+      ghostTimer.current = null;
+      askGhost();
+    }, GHOST_WAIT_MS);
   };
 
   const html = useMemo(() => {
     const lines = text.split("\n");
+    const g = shownGhost;
+    const before = g ? text.slice(0, g.at).split("\n") : [];
+    const gLine = before.length - 1;
+    const gCol = g ? before[gLine].length : 0;
+    const grey = (s) => `<span class="vba-ghost" style="color:#9CA3AF">${escapeHtml(s)}</span>`;
     return lines
       .map((l, i) => {
-        const body = highlightLine(l) || " ";
+        let body = highlightLine(l) || " ";
+        if (g && i === gLine) body = highlightLine(l.slice(0, gCol)) + grey(g.text) + highlightLine(l.slice(gCol));
         if (errorLine && i + 1 === errorLine) return `<span style="background:#FDE2E1;display:inline-block;min-width:100%">${body}</span>`;
         return body;
       })
       .join("\n") + "\n";
-  }, [text, errorLine]);
+  }, [text, errorLine, shownGhost]);
 
-  const lineCount = useMemo(() => text.split("\n").length, [text]);
+  const numbers = useMemo(() => {
+    const out = [];
+    const count = text.split("\n").length;
+    const g = shownGhost;
+    const gLine = g ? text.slice(0, g.at).split("\n").length : 0;
+    const extra = g ? g.text.split("\n").length - 1 : 0;
+    for (let i = 1; i <= count; i++) {
+      out.push(i);
+      if (i === gLine) for (let k = 1; k <= extra; k++) out.push(-k); // beside the suggestion's lines
+    }
+    return out;
+  }, [text, shownGhost]);
 
   const syncScroll = () => {
     const a = area.current;
@@ -186,19 +267,126 @@ export function VbaEditor(props) {
     });
   }, [gotoKey]);
 
-  const replaceRange = (a, start, end, insert, selStart, selEnd) => {
-    const t = a.value.slice(0, start) + insert + a.value.slice(end);
-    change(t);
+  // Into the textarea as typing is, so that its Ctrl+Z takes it back.
+  const typeIn = (a, start, end, insert) => {
+    a.focus();
+    a.setSelectionRange(start, end);
+    const before = a.value;
+    const next = before.slice(0, start) + insert + before.slice(end);
+    const done = document.execCommand(insert ? "insertText" : "delete", false, insert);
+    if (!done || a.value !== next) {
+      a.value = next;
+      change(next);
+      a.setSelectionRange(start + insert.length, start + insert.length);
+    }
+    return next;
+  };
+
+  const takeGhost = (a) => {
+    const g = shownGhost;
+    clearGhost();
+    typeIn(a, g.at, g.at, g.text);
+  };
+
+  // Accepts the AI's change: the smallest edit that makes the code what it wrote, applied at once.
+  const accept = () => {
+    const a = area.current;
+    if (!a || !shown || shown.status !== "done") return;
+    const old = a.value;
+    const next = shown.code;
+    let start = 0;
+    const limit = Math.min(old.length, next.length);
+    while (start < limit && old[start] === next[start]) start++;
+    let endOld = old.length;
+    let endNew = next.length;
+    while (endOld > start && endNew > start && old[endOld - 1] === next[endNew - 1]) {
+      endOld--;
+      endNew--;
+    }
+    onAi({ type: "close" });
+    if (next !== old) typeIn(a, start, endOld, next.slice(start, endNew));
+    clearGhost();
+    flush(next);
+    if (onSave) onSave(next);
+    const line = next.slice(0, start).split("\n").length;
     requestAnimationFrame(() => {
-      a.value = t;
-      a.setSelectionRange(selStart, selEnd);
+      const lh = (fontSize || 13) * 1.5;
+      a.scrollTop = Math.max(0, (line - 1) * lh - a.clientHeight / 3);
+      syncScroll();
     });
+  };
+
+  // Keys that answer the change on screen, wherever the keyboard is.
+  useEffect(() => {
+    if (!shown) return undefined;
+    const onKey = (e) => {
+      const take = (f) => {
+        e.preventDefault();
+        e.stopPropagation();
+        f();
+      };
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && shown.status === "done") take(accept);
+      else if (e.key === "Escape" && !e.isComposing) take(() => onAi({ type: "close" }));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // What the bar's request is about: the cursor's line, and the whole lines selected.
+  const selection = () => {
+    const a = area.current;
+    if (!a) return { line: 0, first: 0, last: 0 };
+    const lineAt = (i) => a.value.slice(0, i).split("\n").length;
+    const s = a.selectionStart;
+    const e = a.selectionEnd;
+    if (s === e) return { line: lineAt(s), first: 0, last: 0 };
+    const last = lineAt(a.value[e - 1] === "\n" ? e - 1 : e);
+    return { line: lineAt(s), first: lineAt(s), last };
+  };
+
+  // For the AI Hub's assistant opened on the page (sheet_view.jsx): where the person is.
+  useEffect(() => {
+    const context = () => {
+      const a = area.current;
+      const line = a ? a.value.slice(0, a.selectionStart).split("\n").length : 0;
+      const proc = a ? procedureAt(a.value, line - 1) : "";
+      return `The VBA editor is open on module ${module || "(none)"}, the cursor on line ${line}${proc ? `, in ${proc}` : ""}.`;
+    };
+    window.__vbaContext = context;
+    return () => {
+      if (window.__vbaContext === context) delete window.__vbaContext;
+    };
+  }, [module]);
+
+  const replaceRange = (a, start, end, insert, selStart, selEnd) => {
+    typeIn(a, start, end, insert);
+    a.setSelectionRange(selStart, selEnd);
   };
 
   const onKeyDown = (e) => {
     const a = area.current;
     if (!a) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (shownGhost && e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      takeGhost(a);
+      return;
+    }
+    if (shownGhost && e.key === "Escape") {
+      e.preventDefault();
+      clearGhost();
+      return;
+    }
+    if (canAi && mod && (e.key === "i" || e.key === "I")) {
+      e.preventDefault();
+      if (bar.current) bar.current.focus();
+      return;
+    }
+    if (canAi && e.altKey && e.code === "KeyV") {
+      e.preventDefault();
+      if (bar.current) bar.current.toggleMic();
+      return;
+    }
     if (mod && (e.key === "s" || e.key === "S")) {
       e.preventDefault();
       flush(a.value);
@@ -256,11 +444,9 @@ export function VbaEditor(props) {
     border: 0,
     boxSizing: "border-box",
   };
-  const numbers = [];
-  for (let i = 1; i <= lineCount; i++) numbers.push(i);
 
-  return (
-    <div style={{ display: "flex", width: "100%", height: "100%", background: "#FFFFFF", border: "1px solid #C9CED4", borderRadius: 4, overflow: "hidden" }}>
+  const code = (
+    <div style={{ display: "flex", flex: 1, minHeight: 0, width: "100%", position: "relative" }}>
       <div
         ref={gutter}
         aria-hidden="true"
@@ -268,7 +454,7 @@ export function VbaEditor(props) {
       >
         {numbers.map((n) => (
           <div key={n} style={{ height: lh, color: n === errorLine ? "#C5221F" : undefined, fontWeight: n === errorLine ? 700 : 400 }}>
-            {n}
+            {n > 0 ? n : ""}
           </div>
         ))}
         <div style={{ height: 40 }} />
@@ -291,12 +477,40 @@ export function VbaEditor(props) {
           autoCorrect="off"
           wrap="off"
           onChange={(e) => change(e.target.value)}
-          onBlur={(e) => flush(e.target.value)}
+          onBlur={(e) => {
+            flush(e.target.value);
+            clearGhost();
+          }}
+          onSelect={(e) => {
+            if (shownGhost && e.target.selectionStart !== shownGhost.at) clearGhost();
+          }}
           onScroll={syncScroll}
           onKeyDown={onKeyDown}
           style={{ ...common, position: "absolute", inset: 0, width: "100%", height: "100%", resize: "none", outline: "none", overflow: "auto", background: "transparent", color: "transparent", caretColor: "#111827" }}
         />
       </div>
+      {covering && <DraftPane draft={shown} base={text} highlight={highlightLine} common={common} lineHeight={lh} />}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", background: "#FFFFFF", border: "1px solid #C9CED4", borderRadius: 4, overflow: "hidden" }}>
+      {canAi && (
+        <AiBar
+          ref={bar}
+          draft={shown}
+          hub={hub}
+          suggest={suggest}
+          fixable={fixable}
+          words={words}
+          selection={selection}
+          code={() => (area.current ? area.current.value : text)}
+          apply={accept}
+          onAi={onAi}
+          onReturn={() => area.current && area.current.focus()}
+        />
+      )}
+      {code}
     </div>
   );
 }

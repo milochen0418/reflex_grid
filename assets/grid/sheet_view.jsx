@@ -815,6 +815,7 @@ export function SheetView(props) {
       else if (cell.t) text += ` ${a1(r, c)} shows ${cell.t}.`;
       const e = edRef.current;
       if (e) text += ` The person is typing into ${a1(e.r, e.c)}: ${e.text}`;
+      if (window.__vbaContext) text += ` ${window.__vbaContext()}`;
       return { text };
     };
     window.__ddnsContext = context;

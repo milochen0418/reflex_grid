@@ -3,7 +3,7 @@ the Macros dialog, the dialogs a running macro shows (MsgBox, InputBox), its pro
 bar that says a workbook's macros are off.
 
 The code editor is a local React component (``assets/grid/vba_editor.jsx``), a plain asset like
-the grid (see :mod:`.sheet_view`)."""
+the grid (see :mod:`.sheet_view`), with the AI's bar above the code on re_ddns (``vba_ai_state``)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ from typing import Any, Dict, List
 
 import reflex as rx
 
+from .. import ai
 from ..state import GridState
+from ..vba_ai_state import VbaAiState
+from .ai_views import Intent, open_assistant
 from .ribbon import ACCENT, group, rbtn
 from .userform import form_designer
 
@@ -31,9 +34,18 @@ class VbaEditor(rx.Component):
     font_size: rx.Var[int]
     goto_line: rx.Var[int]
     goto_key: rx.Var[int]
+    module: rx.Var[str]
+    # The AI (``vba_ai``): empty ``hub`` without it.
+    hub: rx.Var[str]
+    draft: rx.Var[Dict[str, Any]]
+    ghost: rx.Var[Dict[str, Any]]
+    suggest: rx.Var[bool]
+    fixable: rx.Var[bool]
+    words: rx.Var[str]
     on_change: rx.EventHandler[lambda code: [code]]
     on_save: rx.EventHandler[lambda code: [code]]
     on_run: rx.EventHandler[lambda code, proc: [code, proc]]
+    on_ai: rx.EventHandler[lambda e: [e]]
 
 
 vba_code_editor = VbaEditor.create
@@ -189,6 +201,7 @@ def _toolbar() -> rx.Component:
             ),
         ),
         tb("trash_2", "Remove", GridState.vba_remove, "Remove the module", "vba-remove", (GridState.vba_kind == "document") | (GridState.vba_module == "") | GridState.vba_locked),
+        *([_sep(), tb("sparkles", "Assistant", [GridState.close_vba, open_assistant()], "Close the editor and ask the AI assistant: it also changes cells and designs forms", "vba-assistant")] if ai.ENABLED and Intent is not None else []),
         rx.spacer(),
         rx.cond(
             is_form,
@@ -383,6 +396,13 @@ def _properties() -> rx.Component:
     )
 
 
+def _fix_button(on_click, id: str = "") -> rx.Component:
+    """Fix with AI: the change it proposes shows in the editor, to accept or reject."""
+    if not ai.ENABLED:
+        return rx.fragment()
+    return rx.button(rx.icon("sparkles", size=12), "Fix with AI", size="1", variant="soft", color_scheme="violet", on_click=on_click, id=id, flex_shrink="0")
+
+
 def _problems() -> rx.Component:
     return rx.vstack(
         rx.cond(
@@ -393,11 +413,10 @@ def _problems() -> rx.Component:
             GridState.vba_diag,
             lambda d: rx.hstack(
                 rx.icon("circle_x", size=13, color="#C5221F"),
-                rx.text(d["module"].to(str) + ", line " + d["line"].to(str) + ": " + d["message"].to(str), size="1", color="#1F2937"),
-                spacing="1",
+                rx.text(d["module"].to(str) + ", line " + d["line"].to(str) + ": " + d["message"].to(str), size="1", color="#1F2937", cursor="pointer", on_click=GridState.vba_goto(d["module"].to(str), d["line"].to(int))),
+                _fix_button([GridState.vba_goto(d["module"].to(str), d["line"].to(int)), VbaAiState.fix], "vba-ai-fix-problem"),
+                spacing="2",
                 align="center",
-                cursor="pointer",
-                on_click=GridState.vba_goto(d["module"].to(str), d["line"].to(int)),
             ),
         ),
         spacing="1",
@@ -494,9 +513,17 @@ def vba_editor_dialog() -> rx.Component:
                                 font_size=13,
                                 goto_line=GridState.vba_goto_line,
                                 goto_key=GridState.vba_goto_key,
+                                module=GridState.vba_module,
+                                hub=ai.hub_address(),
+                                draft=VbaAiState.draft,
+                                ghost=VbaAiState.ghost,
+                                suggest=VbaAiState.suggest != "off",
+                                fixable=GridState.vba_fix_text != "",
+                                words=GridState.vba_words,
                                 on_change=GridState.vba_changed,
                                 on_save=GridState.vba_save,
                                 on_run=GridState.vba_run,
+                                on_ai=VbaAiState.on_event,
                             ),
                         ),
                         flex="1",
@@ -510,8 +537,19 @@ def vba_editor_dialog() -> rx.Component:
                     min_height="0",
                 ),
                 rx.cond(
-                    GridState.vba_status != "",
-                    rx.text(GridState.vba_status, size="1", color=rx.cond(GridState.vba_status.contains("error"), "#C5221F", "#374151"), id="vba-status", padding_x="4px"),
+                    (GridState.vba_status != "") | (GridState.vba_fix_text != ""),
+                    rx.hstack(
+                        rx.text(
+                            rx.cond(GridState.vba_status != "", GridState.vba_status, GridState.vba_fix_text),
+                            size="1",
+                            color=rx.cond(GridState.vba_status.contains("error") | (GridState.vba_status == ""), "#C5221F", "#374151"),
+                            id="vba-status",
+                            padding_x="4px",
+                        ),
+                        rx.cond(GridState.vba_fix_text != "", _fix_button([GridState.vba_form_view_set(False), VbaAiState.fix], "vba-ai-fix")),
+                        spacing="2",
+                        align="center",
+                    ),
                 ),
                 rx.tabs.root(
                     rx.tabs.list(rx.tabs.trigger("Immediate", value="immediate"), rx.tabs.trigger("Problems", value="problems"), size="1"),

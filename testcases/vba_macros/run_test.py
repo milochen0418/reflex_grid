@@ -91,6 +91,18 @@ def caret_in(g: Grid, text: str) -> None:
     )
 
 
+def typing(g: Grid) -> None:
+    """Enter keeps the indent and loses nothing typed right after it; Tab indents; undo works."""
+    area = g.page.locator("#vba-code")
+    area.click()
+    g.page.keyboard.type("Sub Typed()\n    x = 1\ny = 2\n")
+    g.page.keyboard.press("Tab")
+    g.page.keyboard.type("z = 3")
+    assert area.input_value() == "Sub Typed()\n    x = 1\n    y = 2\n        z = 3", area.input_value()
+    g.page.keyboard.press(f"{MOD}+z")
+    assert "z = 3" not in area.input_value(), area.input_value()
+
+
 def body(g: Grid) -> None:
     page = g.page
     # A new module from the Developer tab opens the editor on it.
@@ -100,6 +112,7 @@ def body(g: Grid) -> None:
     page.locator("#vba-mod-Module1").wait_for(state="visible")
     for name in ("ThisWorkbook", "Sheet1"):
         page.locator(f"#vba-mod-{name}").wait_for(state="visible")
+    typing(g)
     set_code(g, CODE)
     assert "error" not in (page.locator("#vba-status").inner_text() if page.locator("#vba-status").count() else ""), page.locator("#vba-status").inner_text()
     g.shot("editor")

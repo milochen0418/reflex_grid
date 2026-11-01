@@ -1,7 +1,8 @@
 """AI in ReflexGrid, through the AI Hub of re_ddns (``reflex_ddns_auth.ai``): AI Fill (a value
 for each row of a selection, written into a column as values, in one undo step) and the formula
 suggested when a cell's entry starts with ``=``. Which model answers is chosen on the AI Hub's
-page (the role ``fast``); the app holds no model, key or address of its own.
+page (the role ``fast``); the app holds no model, key or address of its own. The VBA editor asks
+through here too (``vba_ai``), the role ``coder`` for what it writes.
 
 The AI Hub's assistant works on a workbook through the tools in ``ai_tools``.
 
@@ -34,13 +35,25 @@ ENABLED = hub is not None and bool(os.environ.get("RE_DDNS_API_URL") or os.envir
 APP = (os.environ.get("SERVICE_SUBDOMAIN") or os.environ.get("DDNS_APP_ID") or "grid").strip().lower()
 
 ROLE = "fast"
-USES = "AI Fill (a value for each row of a selection) and the formula suggested when you type = in a cell"
+USES = "AI Fill (a value for each row of a selection), the formula suggested when you type = in a cell, and the grey suggestions in the VBA editor"
+CODE_ROLE = "coder"
+CODE_USES = "Writing and fixing VBA code in the VBA editor, from what you type or say"
 
 
 def declare(app: Any) -> None:
     """Tells the AI Hub what ReflexGrid asks its models for (shown on the hub's page)."""
     if ENABLED:
-        hub.uses(app, fast=USES)
+        hub.uses(app, fast=USES, coder=CODE_USES)
+
+
+def hub_address() -> str:
+    """The AI Hub as browsers reach it ("" without one): the VBA editor's microphone talks to its
+    ears."""
+    if not ENABLED:
+        return ""
+    from reflex_ddns_auth.intent.protocol import app_url
+
+    return app_url(hub.HUB_SUBDOMAIN)
 
 
 # What asking may raise: the hub isn't there or couldn't answer, or the answer took too long.
@@ -59,6 +72,12 @@ async def ask(system: str, prompt: str, *, max_tokens: int, user: str, timeout: 
 
     text = await asyncio.wait_for(collect(), timeout)
     return ("" if reply.stop == "refusal" else text), reply.model
+
+
+def write(system: str, messages: List[Dict[str, str]], user: str) -> Any:
+    """The answer of the model the hub has for :data:`CODE_ROLE`, as it comes (iterate it; it has
+    ``.model`` and ``.stop``); iterating raises one of :data:`FAILED`."""
+    return hub.stream(CODE_ROLE, system, messages, max_tokens=16000, effort="medium", user=user)
 
 
 # ------------------------------------------------------------ the assistant's changes

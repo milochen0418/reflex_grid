@@ -36,6 +36,7 @@ The `run_test.py` script should:
 | `gridcraft_issues` | The browser side of bugs [GridCraft](https://github.com/storytold/gridcraft) fixed (the unit tests are in `tests/test_gridcraft_issues.py`): a column or row header clicked while writing a formula inserts `C:C` / `4:4` (a drag across headers extends it), Enter pastes a copy and ends copy mode, typing right after the name box goes into the cell, Ctrl+Shift+Down scrolls to the end it extends to, a selection down to row 1,048,576 is reached and drawn (past the browsers' scrolling limit), a chart just inserted is selected so Delete removes it (not its data), double-clicking the fill handle fills down beside the data, a list's input message hides while its list is open, Center Across Selection, Shrink to Fit and a merged area's borders as Excel draws them, a `javascript:` link is refused, a finger dragging on the grid pans it, a multi-line value in an unwrapped cell shows on one line, Page Up into frozen rows scrolls the rows below back to the top, and Shift+Arrow on a whole column keeps the view |
 | `collab_call` | Calling everyone on a workbook: who is rung, declining, accepting, joining later; with the call app running, the call itself (needs a `call.join` provider, see below) |
 | `ai_features` | AI against a stand-in AI Hub (`_lib/ai_stub.py`): AI Fill (values and a title in the next free column, one undo, a taken column refused), formula suggestions (Tab, Esc, none while typing on or when off), the page context the hub's assistant gets, the assistant's tools over the platform's routes, those that change a workbook marked for the hub to ask first, and a change by the AI as two people see it: its colour and box for both, not one of the people here, the note and its Undo for the one who accepted it, a table with total row, sort and red rules taken back in one click, a change whose cells moved refused (needs `DDNS_AI_HUB_URL` and `DDNS_AUTH_SECRET`, see below) |
+| `vba_ai` | The AI in the VBA editor against the stand-in AI Hub: a request shown as it is written and as a diff, Accept in one edit that Ctrl+Z takes back, Reject, Stop, going on from a change, selected lines, a question answered in words, a first module in a workbook without macros, an answer that doesn't compile asked again, Fix with AI on compile and run-time errors, grey suggestions (Tab, Esc, off), and the microphone with faked speech: words as they are heard, the pause that sends them, accept and reject by voice, the hub's ears taking over from the browser's (needs `DDNS_AI_HUB_URL` and `DDNS_AUTH_SECRET`, see below) |
 
 ## Running
 
@@ -59,7 +60,7 @@ DDNS_INTENT_PROVIDER_CALL_JOIN=livekit DDNS_INTENT_URL_LIVEKIT=http://localhost:
 poetry run ./run_test_suite.sh collab_call
 ```
 
-`ai_features` runs its stand-in AI Hub itself, where the server is told to find one:
+`ai_features` and `vba_ai` run their stand-in AI Hub themselves, where the server is told to find one:
 
 ```bash
 DDNS_AI_HUB_URL=http://127.0.0.1:8399 DDNS_AUTH_SECRET=any-secret-of-32-characters-or-more \

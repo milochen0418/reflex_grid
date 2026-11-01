@@ -18,6 +18,7 @@ was checked against Excel, and what doesn't work.
 | Events | `Worksheet_Change`, `Worksheet_SelectionChange`, `Worksheet_Activate`/`Deactivate`, and the `Workbook_Sheet…` events run when people edit — after someone turns macros on (the security bar, or Developer › Macros On), as Excel's "Enable Content". Turning them on also runs `Workbook_Open` / `Auto_Open`. Edits made by macros fire `Worksheet_Change` too, as in Excel |
 | Undo | A whole macro run is one undo step (also across its dialogs), and so is an edit together with what its `Worksheet_Change` did. On a shared workbook it is the person's own step, like any other edit |
 | In documents | A UserForm can live in a CoDoc in MD document (the README's [Workbooks in documents](../README.md#workbooks-in-documents)): the same form and code, one for each person, shown modeless, opening again when it unloads |
+| AI | On re_ddns with the AI Hub: a bar above the code writes or changes it from what you type or say, **Fix with AI** answers compile and run-time errors, grey suggestions follow your typing. See [AI in the editor](#ai-in-the-editor) |
 | Together | Everyone on a shared workbook sees a macro's changes as they happen (including while it waits on a dialog); dialogs and forms show only to the person who ran the macro (or whose edit fired the event), and each person has their own forms |
 
 Commands (usable from the Python API like every other command): `macro.list`, `macro.getModule`,
@@ -191,6 +192,33 @@ workbook two people can use the same form at once, each their own instance, and 
 workbook for everyone, as their edits do. The compiled project (with its module-level variables) is shared,
 as before: editing the code, or `End`, resets it, which unloads everyone's forms, as resetting the project
 does in Excel.
+
+## AI in the editor
+
+With the [AI Hub](../README.md#with-re_ddns-sign-in-and-calls), the code editor has a bar above the code. The role
+`coder` writes and fixes, `fast` suggests; the hub's page chooses the models.
+
+- **Ask** (Cmd/Ctrl+I): say what you want. The AI knows the workbook (its sheets and first rows, tables, names,
+  forms and their controls, the other modules), the module and where the cursor is. What it writes shows as it
+  comes, then as a diff over the code: **Accept** (Cmd/Ctrl+Enter), **Reject** (Esc), or ask for more changes from
+  there. Selected lines are all it writes; a question gets an answer in words and leaves the code alone.
+- **Nothing is lost.** The AI answers with the procedures it adds or changes, and each goes in by its name: a
+  procedure that exists is replaced, a new one goes after the cursor, new declarations go up with the others, and
+  `' REMOVE Name` takes one out. Whatever the answer leaves out stays, even with a model that forgets the rest.
+  Accept is an ordinary edit of the code: applied at once, and Ctrl+Z in the code takes it back.
+- **It compiles before you see it.** An answer goes through the same compiler as the Compile button; one that
+  brings a compile error is asked again with the error, twice at most, and the diff says when one remains.
+- **Fix with AI** stands beside a compile or run-time error. A compile error is fixed in its procedure; a
+  run-time error may be fixed anywhere in the module.
+- **Speak** (the microphone, Alt+V): the words appear in the bar as you say them, and a pause of about two seconds
+  sends them, unless you type or press Esc. While a change is on screen, *accept* (接受, 好) and *reject* (拒絕, 不要)
+  answer it, and any other sentence asks for more changes; with an error on screen, *fix* (修正) fixes it. The words go
+  to the hub's Whisper, which is told the workbook's names and the words of VBA, so that 巨集 isn't heard as 聚集;
+  until it is ready, the browser's speech recognition listens.
+- **Grey suggestions** follow the typing: Tab takes one, Esc dismisses it, **Suggest** turns them off. One that the
+  compiler stumbles on doesn't show. Models that write the code out again work too: only what they add shows.
+
+**Assistant** closes the editor and opens the hub's assistant, which also changes cells and designs forms.
 
 ## Security
 

@@ -513,3 +513,24 @@ def test_evaluate_check_tries_a_formula_as_typed_without_storing_it():
         with pytest.raises(EngineError):
             s.run("formulas.evaluate", formula=bad, cell="B4", check=True)
     assert s.run("cell.get", cell="B4")["input"] == "" and len(s.doc().undo) == undo
+
+
+def test_table_rename_follows_formulas_and_refuses_taken_names():
+    s = Session()
+    s.new_workbook()
+    s.run("range.setValues", range="A1", values=[["Item", "Qty"], ["Pen", 3], ["Ink", 4]])
+    s.run("insert.table", range="A1:B3", header=True, name="Orders")
+    s.run("cell.set", cell="D1", input="=SUM(Orders[Qty])")
+    s.run("formulas.defineName", name="Taken", refersTo="=Sheet1!$A$1")
+    with pytest.raises(EngineError, match="Name Manager"):
+        s.run("table.rename", name="taken", table="Orders")
+    s.run("table.rename", name="銷售表", table="Orders")
+    wb = s.doc().wb
+    assert wb.sheets[0].tables[0].name == "銷售表"
+    assert wb.sheets[0].cell((0, 3)).formula.text == "SUM(銷售表[Qty])"
+    assert wb.sheets[0].value((0, 3)) == 7
+    for bad in ("A1", "two words", ""):
+        with pytest.raises(EngineError):
+            s.run("table.rename", name=bad, table="銷售表")
+    s.run("edit.undo")
+    assert s.doc().wb.sheets[0].tables[0].name == "Orders"

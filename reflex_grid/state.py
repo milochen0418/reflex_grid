@@ -154,6 +154,8 @@ class GridState(rx.State):
     vba_diag: List[Dict[str, Any]] = []
     vba_error_line: int = 0
     vba_status: str = ""
+    vba_run_error: str = ""
+    table_name_key: int = 0
     vba_output: List[str] = []
     vba_immediate: str = ""
     macro_prompt: Dict[str, Any] = {}
@@ -305,6 +307,22 @@ class GridState(rx.State):
         """The room the AI Hub's assistant opens on: this workbook, as this tab's person (their
         Accept makes the AI's change theirs, and their undo takes it back: ``ai_tools``)."""
         return f"{self.book}~{(self.me or {}).get('peer', '')}"
+
+    @rx.var
+    def vba_words(self) -> str:
+        """The workbook's own words, for the ears of the VBA editor's microphone."""
+        names = [m["sheet"] if m["kind"] == "document" else m["name"] for m in self.vba_modules]
+        return ", ".join(n for n in names if n and n != "(workbook)")[:200]
+
+    @rx.var
+    def vba_fix_text(self) -> str:
+        """The error of the module on screen, when there is one to ask the AI to fix."""
+        if not self.vba_module or self.vba_locked:
+            return ""
+        if self.vba_run_error:
+            return self.vba_run_error
+        d = next((x for x in self.vba_diag if x["module"].lower() == self.vba_module.lower()), None)
+        return f"Compile error: {d['message']}" if d else ""
 
     @rx.var
     def ai_props(self) -> Dict[str, Any]:
@@ -880,6 +898,27 @@ class GridState(rx.State):
         self._focus()
         blur = rx.call_script("document.activeElement && document.activeElement.blur()")
         return [out, blur] if out is not None else blur
+
+    async def _rename_table(self, name: str):
+        """Renames the table at the selection. The box starts over either way, so that it shows
+        the table's name, the old one when the new one is refused."""
+        self.table_name_key += 1
+        table = str((self.ui or {}).get("table") or "")
+        name = name.strip()
+        if not table or not name or name == table:
+            return None
+        return await self.cmd("table.rename", {"name": name, "table": table})
+
+    @rx.event
+    async def rename_table(self, name: str):
+        return await self._rename_table(name)
+
+    @rx.event
+    async def rename_table_from_form(self, form: Dict[str, Any]):
+        """Enter in the table's name: rename, and give the keyboard back to the grid."""
+        out = await self._rename_table(str(form.get("name", "")))
+        self._focus()
+        return _both(out, rx.call_script("document.activeElement && document.activeElement.blur()"))
 
     @rx.event
     async def follow(self, peer: str):
@@ -1932,6 +1971,7 @@ class GridState(rx.State):
         other = module.lower() != (self.vba_module or "").lower()
         self.vba_module = module
         self.vba_error_line = line
+        self.vba_run_error = ""
         self.vba_dirty = False
         if not module or self.vba_locked:
             self.vba_code, self.vba_version, self.vba_kind = "", "", ""
@@ -2021,6 +2061,7 @@ class GridState(rx.State):
                 except EngineError:
                     pass
                 self.vba_status = text
+                self.vba_run_error = text if status == "error" else ""
                 return None
             if status == "cancelled":
                 return rx.toast.info("The macro was stopped.", position="bottom-center")
@@ -2189,6 +2230,7 @@ class GridState(rx.State):
         if code != self.vba_code:
             self.vba_code = code
             self.vba_dirty = True
+            self.vba_run_error = ""
 
     async def _vba_edit(self, f, apply_first: bool = True):
         """Runs ``f(session)`` on the project (after applying the editor's code) and refreshes

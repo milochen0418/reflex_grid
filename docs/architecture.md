@@ -125,6 +125,9 @@ exactly puts its epoch back, so earlier transitions become undoable again.
 - **Calls** (`reflex_grid/call.py`, from CoDoc in MD): the call's members and its private id stay in the
   process (`CallStore`); the room carries what everyone must see (how many are in it, who is ringing, whom it
   rings and who answered). The call runs in the app chosen for the DDNS Intent `call.join`.
+- **AI in the VBA editor** (`reflex_grid/vba_ai.py` words the requests, merges answers into a module and tries
+  them with the compiler; `vba_ai_state.py` runs them; `assets/grid/vba_ai.jsx` is the bar and the diff,
+  `vba_voice.js` the microphone): see [docs/vba.md](vba.md#ai-in-the-editor).
 - **AI** (`reflex_grid/ai.py`, `ai_tools.py`, `components/ai_views.py`): only on re_ddns with its AI Hub,
   which chooses the models (`reflex_ddns_auth.ai`). The hub's assistant reads workbooks through tools
   (`reflex_ddns_auth.tools`) that take a snapshot under the book's lock, and gets what the page shows from

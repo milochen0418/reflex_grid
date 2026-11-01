@@ -569,11 +569,31 @@ def view_tab() -> rx.Component:
     )
 
 
+def table_name_box() -> rx.Component:
+    """The table's name, typed over as in Excel: Enter or leaving the box renames the table."""
+    name = GridState.ui["table"].to(str)
+    return rx.el.form(
+        rx.el.input(
+            name="name",
+            default_value=name,
+            key=name + ":" + GridState.table_name_key.to(str),
+            on_blur=GridState.rename_table,
+            id="rb-table-name",
+            title="Rename the table",
+            spell_check=False,
+            auto_complete="off",
+            style={"width": "96px", "height": "24px", "padding": "0 4px", "fontSize": "13px", "fontWeight": "600", "color": "#111827", "background": "#FFFFFF", "border": "1px solid #C9CED4", "borderRadius": "3px"},
+        ),
+        on_submit=GridState.rename_table_from_form,
+        reset_on_submit=False,
+    )
+
+
 def table_tab() -> rx.Component:
     return rx.hstack(
         group(
             "Properties",
-            rx.vstack(rx.text("Table Name:", size="1"), rx.text(GridState.ui["table"].to(str), size="2", weight="bold"), spacing="1"),
+            rx.vstack(rx.text("Table Name:", size="1"), table_name_box(), spacing="1"),
         ),
         group(
             "Tools",

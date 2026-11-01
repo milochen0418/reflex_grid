@@ -69,6 +69,43 @@ def toast(g: Grid, text: str) -> None:
     g.page.locator("[data-sonner-toast]", has_text=text).first.wait_for(state="visible", timeout=6000)
 
 
+def table_name(g: Grid) -> None:
+    """The Table Design tab's name box: typed over, Enter or leaving it renames the table; a name
+    that can't be used is refused and the box goes back."""
+    page = g.page
+    g.select("B2")
+    page.click("#tab-table-design")
+    box = page.locator("#rb-table-name")
+    wait_name = "n => document.getElementById('rb-table-name') && document.getElementById('rb-table-name').value === n"
+    page.wait_for_function(wait_name, arg="Table1")
+
+    def rename(name: str) -> None:
+        page.locator("#rb-table-name").click()
+        page.keyboard.press(f"{MOD}+a")
+        page.keyboard.type(name)
+
+    rename("Sales")
+    page.keyboard.press("Enter")
+    page.wait_for_function(wait_name, arg="Sales")
+    page.wait_for_function("() => document.activeElement.id !== 'rb-table-name'")
+    # Back in the grid, the keyboard is the grid's; the name stays when the selection comes back.
+    g.select("C3")
+    assert box.input_value() == "Sales"
+    # Refused: it says why, and the box shows the table's name again.
+    rename("A1")
+    page.keyboard.press("Enter")
+    page.get_by_text("The name that you entered is not valid.").first.wait_for()
+    page.wait_for_function(wait_name, arg="Sales")
+    # Leaving the box renames too, and a Chinese name is a name.
+    rename("銷售表")
+    page.locator("#tab-table-design").click()
+    page.wait_for_function(wait_name, arg="銷售表")
+    # It is one undo step.
+    g.select("C3")
+    page.keyboard.press(f"{MOD}+z")
+    page.wait_for_function(wait_name, arg="Sales")
+
+
 def body(g: Grid) -> None:
     page = g.page
     rows = [["Region", "Q1", "Q2", "Q3"], ["North", "10", "-12", "5"], ["South", "20", "18", "-3"], ["East", "15", "22", "9"], ["West", "8", "-11", "14"]]
@@ -212,6 +249,7 @@ def body(g: Grid) -> None:
     assert page.locator("#dlg-table-range").input_value() == "A1:D5"
     g.dialog_ok("insertTable")
     page.locator(".rg-filter-btn").nth(3).wait_for(state="visible")
+    table_name(g)
     insert(g, "Pictures", "I10")
     page.locator('#dlg-insertPicture input[type="file"]').set_input_files({"name": "green.png", "mimeType": "image/png", "buffer": png(90, 60)})
     page.locator(".rg-image").wait_for(state="visible")

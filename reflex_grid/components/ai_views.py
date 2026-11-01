@@ -4,6 +4,8 @@ render nothing."""
 
 from __future__ import annotations
 
+from typing import Any
+
 import reflex as rx
 
 from .. import ai
@@ -17,16 +19,21 @@ except ImportError:  # no platform: no assistant
     Intent = None
 
 
-def ai_button() -> rx.Component:
+def open_assistant() -> Any:
     """Opens the AI Hub's assistant on this workbook (the ``ai.assist`` intent), in a dialog that
-    stays open beside the grid; Alt+A from the grid does the same."""
+    stays open beside the grid."""
+    return Intent.start(None, "ai.assist", keep_alive=True, single=True, label="AI assistant", in_app=ai.APP, room=GridState.ai_room)
+
+
+def ai_button() -> rx.Component:
+    """The title bar's way to the assistant; Alt+A from the grid does the same."""
     if not ai.ENABLED or Intent is None:
         return rx.fragment()
     return rx.tooltip(
         rx.button(
             rx.icon("sparkles", size=14),
             "AI",
-            on_click=Intent.start(None, "ai.assist", keep_alive=True, single=True, label="AI assistant", in_app=ai.APP, room=GridState.ai_room),
+            on_click=open_assistant(),
             size="1",
             variant="outline",
             id="ai-assist",

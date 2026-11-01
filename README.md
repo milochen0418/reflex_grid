@@ -20,7 +20,7 @@ and Microsoft Excel without conversion. It is written in Python, with [Reflex](h
 
 | 479 | 231 | 749 of 757 | 1,030 |
 |---|---|---|---|
-| worksheet functions, with dynamic arrays and `LET`/`LAMBDA` | commands: every action in the app is one you can script | published comparison cases that [matched Microsoft Excel](https://milochen0418.github.io/reflex_grid/compatibility.html) | unit tests on every change, plus 13 browser suites |
+| worksheet functions, with dynamic arrays and `LET`/`LAMBDA` | commands: every action in the app is one you can script | published comparison cases that [matched Microsoft Excel](https://milochen0418.github.io/reflex_grid/compatibility.html) | unit tests on every change, plus 14 browser suites |
 
 ![A ReflexGrid dashboard in the browser: the ribbon, a formula bar, dynamic arrays, data bars and two charts](docs/images/dashboard.png)
 
@@ -112,6 +112,10 @@ a local one through Ollama, so your data can stay on your machine.
 |---|---|
 | ![AI Fill has labelled each customer comment](docs/images/ai-fill.png) | ![A suggested formula under the cell; Tab takes it](docs/images/ai-suggestion.png) |
 
+**In the VBA editor**, the AI writes macros from what you type or say. Press ⌘I, or click the microphone and speak;
+the change shows as a diff, already tried by ReflexGrid's compiler, for you to accept or reject, by voice too. A
+compile or run-time error gets a **Fix with AI** button, and grey suggestions follow your typing (Tab takes one).
+
 ### Checked against Excel
 
 The [Excel compatibility report](https://milochen0418.github.io/reflex_grid/compatibility.html) is public: ReflexGrid
@@ -170,7 +174,7 @@ forms included, or when you want a spreadsheet engine you can script from Python
 | Macros (VBA) | Developer tab, VBA editor (modules, class modules, UserForms with a form designer — Toolbox and Properties window —, import/export `.bas`/`.cls`/`.frm`+`.frx`, compile errors, Immediate window), Macros dialog (Alt+F8), `MsgBox`/`InputBox` dialogs, UserForms (shown from their design; `Initialize`/`Show`/`Hide`/`Unload`/`QueryClose`, control events, `ControlSource`/`RowSource`, modal and modeless), Stop for long macros, VBA functions in formulas, event macros (off until enabled, like Excel's *Enable Content*), a macro run as one undo step; the Excel object model macros use (`Range`, `Cells`, `Worksheets`, `Application`, tables, filters, names, formats…); no file, shell, network or COM access ([details and limits](docs/vba.md)) |
 | Files | Open `.xlsx`/`.xlsm`/`.csv`/`.tsv` (upload), download `.xlsx` (`.xlsm` with macros), export CSV, print (with the sheet's page setup), save as web page, document properties; workbooks are saved on the server as `.xlsx` (`.xlsm` with macros) while you edit |
 | Together | Workbook list (search, filters, who is editing now, new, upload, download, delete), shared links, presence (avatars, "N here"), everyone's selection and typing cell in their colour, changes highlighted for a moment, per-person sheets, zoom and undo, a shared title, calls |
-| AI (on re_ddns, with its AI Hub) | The hub's assistant opened on a workbook (title bar **AI**, Alt+A) reads it, explains its formulas, and changes it after your **Accept**: cells, formats, charts, VBA code and UserForms; everyone sees the change light up as the AI's, and **Undo** on its note takes it back whatever you did after it; **AI Fill** (Data tab) writes a value for each selected row into a column, in one undo step; typing `=` in a cell suggests a formula, checked by the engine before it shows (Tab takes it; Formulas › Formula Suggestions turns it off) — see [below](#with-re_ddns-sign-in-and-calls) |
+| AI (on re_ddns, with its AI Hub) | The hub's assistant opened on a workbook (title bar **AI**, Alt+A) reads it, explains its formulas, and changes it after your **Accept**: cells, formats, charts, VBA code and UserForms; everyone sees the change light up as the AI's, and **Undo** on its note takes it back whatever you did after it; **AI Fill** (Data tab) writes a value for each selected row into a column, in one undo step; typing `=` in a cell suggests a formula, checked by the engine before it shows (Tab takes it; Formulas › Formula Suggestions turns it off); in the VBA editor, a bar above the code writes or changes it from what you type or say and shows the change as a diff to accept, **Fix with AI** answers compile and run-time errors, and grey suggestions follow your typing — see [below](#with-re_ddns-sign-in-and-calls) |
 
 ### Excel compatibility
 
@@ -328,7 +332,8 @@ install a few apps by hand and they work.
 4. Install a call app, e.g. **LiveKit Audio Chat (self-hosted)**, **LiveKit Video Chat** or **LiveKit Avatar
    Chat**: **Call everyone** rings the people on the workbook and opens the call in a dialog. With several
    call apps installed, whoever starts the call picks one.
-5. Install the **AI Hub** for the AI: **AI** in the title bar, **AI Fill** and formula suggestions.
+5. Install the **AI Hub** for the AI: **AI** in the title bar, **AI Fill**, formula suggestions and the AI in
+   the VBA editor.
 
 Apps on re_ddns open each other in dialogs through **DDNS Intents** (a call is the intent `call.join`); this
 video explains the idea: [DDNS Intent](https://www.youtube.com/watch?v=Y5YKXsWkrxg).
@@ -350,6 +355,13 @@ asks for. A suggestion is a formula the engine has tried in the cell first (`for
 `check`): one with a syntax error, one that refers to its own cell, gives an error or refers only to empty
 cells never shows. Pick a model that answers without thinking first (e.g. `qwen2.5-coder:7b-instruct`):
 a suggestion is only useful within a second or two.
+
+The VBA editor asks the hub too: the role `coder` writes and fixes code, `fast` gives the grey suggestions. The
+AI answers with the procedures it adds or changes, and they go into the module by their names, so what it leaves
+out stays whatever the model does. Each answer is compiled first (one that doesn't compile is asked again, with
+the error), and nothing reaches the workbook until you accept it. The microphone streams to the hub's Whisper
+(the socket of its talking AI), told the workbook's own words, or uses the browser's speech recognition until
+that is ready. See [docs/vba.md](docs/vba.md#ai-in-the-editor).
 
 On re_ddns each workbook is also a file in its shared collection `spreadsheets`: one item per workbook,
 `spreadsheets/by-app/grid/<id>/book.xlsx` (`book.xlsm` with macros) under the host's collections folder
@@ -427,9 +439,9 @@ lists the macro limits.
 
 ## 中文簡介
 
-**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：479 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。搭配 re_ddns 的 AI Hub，AI 助手可以幫你改工作表、寫 VBA、設計 UserForm，每次修改都要你按 Accept 才生效，並可一鍵退回；模型可選 Claude 或本機模型。MIT 授權。最新介紹影片：[英文](https://youtu.be/196pWZceyas)，約 3 分鐘；示範影片：[中文](https://youtu.be/OvGv0PB3UKU)；[全部影片](https://milochen0418.github.io/reflex_grid/#videos)。
+**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：479 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。搭配 re_ddns 的 AI Hub，AI 助手可以幫你改工作表、寫 VBA、設計 UserForm，每次修改都要你按 Accept 才生效，並可一鍵退回；VBA 編輯器裡可以打字或用說的請 AI 寫程式，編譯或執行出錯時按 Fix with AI 修正；模型可選 Claude 或本機模型。MIT 授權。最新介紹影片：[英文](https://youtu.be/196pWZceyas)，約 3 分鐘；示範影片：[中文](https://youtu.be/OvGv0PB3UKU)；[全部影片](https://milochen0418.github.io/reflex_grid/#videos)。
 
-**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：479 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。搭配 re_ddns 的 AI Hub，AI 助手可以帮你改工作表、写 VBA、设计 UserForm，每次修改都要你按 Accept 才生效，并可一键撤回；模型可选 Claude 或本地模型。MIT 许可。最新介绍视频：[英文](https://youtu.be/196pWZceyas)，约 3 分钟；演示视频：[中文](https://youtu.be/OvGv0PB3UKU)；[全部视频](https://milochen0418.github.io/reflex_grid/#videos)。
+**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：479 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。搭配 re_ddns 的 AI Hub，AI 助手可以帮你改工作表、写 VBA、设计 UserForm，每次修改都要你按 Accept 才生效，并可一键撤回；VBA 编辑器里可以打字或用说的请 AI 写代码，编译或运行出错时按 Fix with AI 修复；模型可选 Claude 或本地模型。MIT 许可。最新介绍视频：[英文](https://youtu.be/196pWZceyas)，约 3 分钟；演示视频：[中文](https://youtu.be/OvGv0PB3UKU)；[全部视频](https://milochen0418.github.io/reflex_grid/#videos)。
 
 ## Tests
 
@@ -439,6 +451,7 @@ poetry run ./run_test_suite.sh smoke_home         # Playwright end-to-end suites
 poetry run ./run_test_suite.sh collab_live        # three people editing one workbook
 poetry run ./run_test_suite.sh vba_macros         # the VBA editor, macro dialogs, event macros, .xlsm
 poetry run ./run_test_suite.sh vba_userforms      # UserForms: modal and modeless, the editor's form view
+poetry run ./run_test_suite.sh vba_ai             # the AI in the VBA editor (needs the variables in testcases/README.md)
 poetry run python scripts/excel_vba_oracle_mac.py --objects   # macros compared with Microsoft Excel (Mac, opt-in)
 ```
 

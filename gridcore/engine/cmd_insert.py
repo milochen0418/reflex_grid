@@ -288,8 +288,10 @@ def table_rename(s, p):
     if check_name(new) is not None:
         raise EngineError("The name that you entered is not valid.")
     loc = d.wb.table(new)
-    if (loc is not None and d.wb.sheets[loc[0]].tables[loc[1]].id != t.id) or any(dn.name.lower() == new.lower() for dn in d.wb.names):
+    if loc is not None and d.wb.sheets[loc[0]].tables[loc[1]].id != t.id:
         raise EngineError("The name that you entered already exists. Enter a unique name.")
+    if any(dn.name.lower() == new.lower() for dn in d.wb.names):
+        raise EngineError(f"{new} is already a defined name. Delete or rename it in Formulas › Name Manager first.")
     old = t.name
 
     def fn(ctx, sm, tt):
