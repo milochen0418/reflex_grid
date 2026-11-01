@@ -8,6 +8,7 @@
 - Excel for the web can't run VBA, ONLYOFFICE runs JavaScript macros only, and Collabora Online runs part of VBA with macros off by default. ReflexGrid runs VBA itself, UserForms included.
 - AI that asks first (with the AI Hub of re_ddns): an assistant changes cells, VBA code and UserForms; each change waits for Accept, shows as the AI's for everyone, and one click takes it back; Claude or a local model
 - Real-time collaboration: shared links, presence, everyone's selection, per-person undo; workbooks are saved on the server as .xlsx (.xlsm with macros).
+- Workbooks in documents: a CoDoc in MD document shows a workbook's cells read only and live, and its UserForms working; a form is the only way to change anything from the document.
 - gridcore works without the UI: 479 worksheet functions, dynamic arrays, LET/LAMBDA, structured references, incremental recalculation; reads and writes .xlsx, .xlsm, .csv; runs VBA macros headless, with no Excel installed (`Session().run("macro.run", name="Main")`, or `python -m gridcore.cli run book.xlsm script.json`).
 - Install: clone reflex_grid and reflex_ddns_auth side by side, then `poetry install` and `poetry run ./reflex_rerun.sh` (Python 3.11 or newer).
 

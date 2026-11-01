@@ -33,7 +33,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from gridcore.engine import DocState, EngineError, Session, SharedBook, open_bytes
 from gridcore.engine.samples import SAMPLES, new_sample
@@ -120,6 +120,8 @@ class Book(SharedBook):
         # through when no tab opened it: that one is on the book only while it acts.
         self.ai_changes: List[Any] = []
         self.ai_view: Optional[Any] = None
+        # Called after every change: the tables other apps' pages show of it (``embed.live``).
+        self.watchers: Set[Callable[[], None]] = set()
         super().__init__(doc, meta.id)
         self.meta = meta
         self.saved_rev = 0
@@ -134,6 +136,15 @@ class Book(SharedBook):
     @property
     def dirty(self) -> bool:
         return self.rev != self.saved_rev
+
+    def people(self) -> List[Any]:
+        """The views of the people on the book. A form on another app's page has a view, to run
+        in, but whoever uses it isn't on the workbook."""
+        return [v for v in self.views.values() if not v.info.get("embed")]
+
+    def wake(self) -> None:
+        for fn in list(self.watchers):
+            fn()
 
     def color_for(self, user: str) -> str:
         """The person's colour on this book: the one their other tabs use, else a free one."""
@@ -257,7 +268,7 @@ class BookStore:
         for book_id, book in books:
             with book.lock:
                 people: Dict[str, dict] = {}
-                for v in book.views.values():
+                for v in book.people():
                     u = v.info.get("user") or v.key
                     people.setdefault(u, {"user": u, "name": v.name, "color": v.info.get("color", ""), "avatar": v.info.get("avatar", "")})
             if people:
@@ -378,6 +389,7 @@ class BookStore:
                     if book._timer is not None:
                         book._timer.cancel()
                         book._timer = None
+                    book.wake()
         return book
 
     def file_bytes(self, book_id: str) -> Optional[Tuple[bytes, str]]:
@@ -412,6 +424,7 @@ class BookStore:
             t.daemon = True
             book._timer = t
             t.start()
+        book.wake()
 
     def save(self, book: Book) -> bool:
         """Writes the book's workbook now (the snapshot is read under the book's lock, the file
@@ -469,13 +482,13 @@ class BookStore:
         now = time.time() if now is None else now
         closed = []
         with self._lock:
-            candidates = [b for b in self._open.values() if not b.views and now - b.last_active > IDLE_CLOSE]
+            candidates = [b for b in self._open.values() if not b.views and not b.watchers and now - b.last_active > IDLE_CLOSE]
         for book in candidates:
             if book.dirty and not self.save(book):
                 continue
             with self._lock:
                 with book.lock:
-                    if book.views or book.dirty:
+                    if book.views or book.watchers or book.dirty:
                         continue
                     book.closed = True
                     self._open.pop(book.key, None)

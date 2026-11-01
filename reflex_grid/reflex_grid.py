@@ -19,8 +19,8 @@ from .components.dialogs import all_dialogs
 from .components.manager import manager_page
 from .components.ribbon import ribbon
 from .components.sheet_view import sheet_view
-from .components.userform import forms_layer
-from .components.vba import macro_bar, vba_dialogs
+from .components.userform import forms_layer, user_forms
+from .components.vba import macro_bar, macro_prompt_dialog, macro_running_dialog, vba_dialogs
 from .room import BookRoom
 from .state import AuthState, GridState
 from .workbooks import ManagerState
@@ -86,6 +86,32 @@ def index() -> rx.Component:
     )
 
 
+def form_embed() -> rx.Component:
+    """A workbook's UserForm on another app's page: the form, what its code asks (there must be room
+    for that dialog, the page is as tall as the form), and nothing else of the workbook."""
+    return rx.box(
+        light_only(),
+        rx.cond(GridState.embed_error != "", rx.text(GridState.embed_error, size="2", color="#B91C1C", padding="12px", id="embed-error")),
+        user_forms(
+            forms=GridState.vba_forms,
+            pictures=GridState.vba_form_pictures,
+            waiting=GridState.vba_form_waiting,
+            blocked=GridState.vba_forms_blocked,
+            design=False,
+            inline=True,
+            on_event=GridState.embed_event,
+            id="userforms",
+        ),
+        macro_prompt_dialog(),
+        macro_running_dialog(),
+        id="embed-page",
+        min_height=rx.cond(GridState.macro_prompt.length() > 0, "300px", "0"),
+        padding="1px",
+        overflow_x="auto",
+        background="#FFFFFF",
+    )
+
+
 FONT_FACES = "".join(
     f"@font-face {{ font-family: 'Carlito'; font-style: {style}; font-weight: {weight}; font-display: swap; src: url('/fonts/carlito-latin-{weight}-{style}.woff2') format('woff2'); }}\n"
     for weight in (400, 700)
@@ -137,12 +163,18 @@ app = rx.App(
 _auth_on_load = [AuthState.load_auth] if AuthState is not None else []
 
 try:
-    from reflex_ddns_auth.intent import install_intent_host
+    from reflex_ddns_auth.intent import install_intent_host, intent
+
+    from .components.pick import pick_page
+    from .pick import PickState
 
     # Intent dialogs (calls) are hosted once, above every page, so a call survives going back
     # to the workbook list.
     install_intent_host(app)
     app.extra_app_wraps[(8, "ReflexGridCallKeepalive")] = lambda stateful: rx.fragment(call_keepalive())
+    # What other apps ask for (see embed.py): a form to use on their page, and choosing what to show.
+    intent(app, action="grid.form", on_open=GridState.open_embed_form, title="UserForm", params={"book": str, "form": str}, required=("book", "form"))(form_embed)
+    intent(app, action="grid.pick", on_open=PickState.load, title="Choose from a workbook")(pick_page)
 except ImportError:
     pass
 

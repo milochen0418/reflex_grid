@@ -227,7 +227,7 @@ class CallState(rx.State):
             # Switching calls: the old dialog's on_cancel comes too late to know which one.
             CallStore.leave(self.current_book, token)
         book = STORE.get(book_id)
-        invited = sorted({v.info.get("user", "") for v in list(book.views.values())} - {""}) if book is not None else []
+        invited = sorted({v.info.get("user", "") for v in book.people()} - {""}) if book is not None else []
         call = CallStore.join(book_id, token, Member(id=user_id, name=name), now, app, invited=invited)
         self.current_book = book_id
         self._call_id = call["call_id"]

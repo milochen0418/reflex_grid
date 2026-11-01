@@ -3,7 +3,9 @@
 ``POST /_reflex_grid/bye``: a tab that is closing (or reloading) says goodbye with
 ``navigator.sendBeacon`` — a websocket message wouldn't get out of a page that is going away.
 It names the tab by its Reflex client token, which only that tab knows, so nobody can make
-someone else leave."""
+someone else leave.
+
+``/_reflex_grid/embed/…``: a workbook's cells on another app's page (:mod:`.embed`)."""
 
 from __future__ import annotations
 
@@ -13,9 +15,9 @@ import json
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 
-from . import sessions
+from . import embed, sessions
 from .books import STORE
 from .state import push
 
@@ -42,4 +44,8 @@ async def bye(request: Request) -> Response:
     return Response(status_code=204)
 
 
-api = Starlette(routes=[Route(BYE_PATH, bye, methods=["POST"])])
+api = Starlette(routes=[
+    Route(BYE_PATH, bye, methods=["POST"]),
+    Route(embed.TABLE_PATH, embed.table_page, methods=["GET"]),
+    WebSocketRoute(embed.LIVE_PATH, embed.live),
+])

@@ -59,9 +59,10 @@ def peek(token: str) -> Optional[Entry]:
 
 
 def tokens_on(book_id: str) -> List[str]:
-    """Client tokens of the tabs showing ``book_id``, most recently active first."""
+    """Client tokens of the tabs showing ``book_id``, most recently active first (a form on another
+    app's page shows no book)."""
     with _LOCK:
-        on = [(e.last_used, k) for k, e in _SESSIONS.items() if e.book_id == book_id and e.view is not None]
+        on = [(e.last_used, k) for k, e in _SESSIONS.items() if e.book_id == book_id and e.view is not None and not e.view.info.get("embed")]
     return [k for _, k in sorted(on, reverse=True)]
 
 

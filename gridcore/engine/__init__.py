@@ -14,6 +14,7 @@ from . import (  # noqa: F401  (imported for command registration)
     cmd_sheet,
     cmd_view,
     cmd_whatif,
+    embed,
 )
 from . import macro as _macro  # noqa: F401  (VBA: worksheet functions and event macros)
 from .cmd_file import open_bytes

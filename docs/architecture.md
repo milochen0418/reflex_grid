@@ -90,6 +90,15 @@ exactly puts its epoch back, so earlier transitions become undoable again.
   `changes`, whether it is saved, whether it was deleted, and the call. Cells are not in the room: a sheet can
   hold millions and each person scrolls elsewhere, so each tab keeps its own window in `GridState`, and a tab
   that drew an older revision than the room's asks for its window again (a `sync` event).
+- **Other apps' pages** (`reflex_grid/embed.py`, `pick.py`; references in `gridcore/engine/embed.py`): cells to
+  read and UserForms to use, in a CoDoc in MD document. A table is a small page of the backend, not a Reflex
+  page: it reads the workbook's snapshot, draws it outside the book's lock (one drawing per snapshot and
+  reference, shared by everyone showing it) and sends it again over a websocket whenever `Book.wake` says the
+  book changed. A `Book` with `watchers` stays open, though nobody is on it. A form is the intent `grid.form`:
+  a `GridState` with `embed_form` set, which draws no cells (`_refresh` returns), whose view is marked `embed`
+  (so it is left out of `Book.people()`: the room's `peers`, the workbook list, a call), and which isn't linked
+  to the room: a document's readers leave without unlinking and would pile up on it, so `_publish` hands the
+  news to a tab that is linked (`push`).
 - **Sessions** (`reflex_grid/sessions.py`): one engine `CollabSession` per browser tab, keyed by Reflex's
   client token and kept in the backend process, with the tab's book and view. Reflex state carries only what
   the browser needs to draw.

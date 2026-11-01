@@ -18,9 +18,9 @@ and Microsoft Excel without conversion. It is written in Python, with [Reflex](h
 [AI that asks first](https://youtu.be/196pWZceyas?t=125) ·
 [Checked against Excel](https://youtu.be/196pWZceyas?t=161)
 
-| 479 | 230 | 749 of 757 | 996 |
+| 479 | 231 | 749 of 757 | 1,030 |
 |---|---|---|---|
-| worksheet functions, with dynamic arrays and `LET`/`LAMBDA` | commands: every action in the app is one you can script | published comparison cases that [matched Microsoft Excel](https://milochen0418.github.io/reflex_grid/compatibility.html) | unit tests on every change, plus 12 browser suites |
+| worksheet functions, with dynamic arrays and `LET`/`LAMBDA` | commands: every action in the app is one you can script | published comparison cases that [matched Microsoft Excel](https://milochen0418.github.io/reflex_grid/compatibility.html) | unit tests on every change, plus 13 browser suites |
 
 ![A ReflexGrid dashboard in the browser: the ribbon, a formula bar, dynamic arrays, data bars and two charts](docs/images/dashboard.png)
 
@@ -78,6 +78,22 @@ everyone** right from the title bar. See [Working together](#working-together).
 | Everyone in their colour | Call everyone |
 |---|---|
 | ![Three people on one workbook: Ann's cell and Ben's selection in their colours](docs/images/together.gif) | ![A call with the three people on the workbook, in a dialog over it](docs/images/call.png) |
+
+### In your documents
+
+A workbook's cells and UserForms can live in a [CoDoc in MD](https://github.com/milochen0418/codoc_in_md)
+document. People read the cells there, live, and enter data on the form right where the document explains it:
+a new row shows in the document's table at once.
+
+```
+{%grid a2094d9b90 form=OrderForm %}        the UserForm, working
+{%grid a2094d9b90 range=Orders %}          an Excel table: it grows with the table
+{%grid a2094d9b90 range=Sheet1!A1:D %}     down to wherever the data in columns A to D ends
+{%grid a2094d9b90 range=Sheet1!A1:D20 %}   these cells and no others
+```
+
+**Cells are read only there, and a UserForm is the only way to change anything from a document.** A table is a
+plain page with nothing to edit with: no event reaches the workbook from it. See [Workbooks in documents](#workbooks-in-documents).
 
 ### AI that asks first
 
@@ -271,6 +287,34 @@ What people on a workbook share, and what is their own:
   times); a workbook with macros is `books/<id>.xlsm`. Installed from the re_ddns App Store, they are saved
   in its shared collection instead ([below](#with-re_ddns-sign-in-and-calls)).
 
+## Workbooks in documents
+
+In the document, **Document › Insert from Excel** opens this app's `grid.pick` dialog: choose a workbook, then one of its
+UserForms, tables or names, or drag over cells. On the workbook, **Insert › Embed** gives the same lines for
+what is selected, to copy. The line goes in the document as text, and any line can be typed by hand.
+
+**What a reference means.** A click on a cell means the block of data around it. A selection that is a table
+means the table. A selection down to the last row of its data follows new rows (`Sheet1!A1:D`), and one that
+stops above it stays those cells; the dialog lets you choose. Formulas that show nothing yet (`=IF(A5="","",…)`
+filled down) don't count as data, and a dynamic array's spilled rows do. Hidden rows and sheets aren't shown.
+A table of more than 1,000 rows shows its first row and the latest ones.
+
+**A table** is `GET /_reflex_grid/embed/table?book=<id>&range=<reference>`, a small page of its own and not a
+Reflex page, with a websocket that sends the cells again when they change. It loads at once however many a
+document holds, it has no state, no events and no view of the workbook, and whoever reads it isn't among the
+people on the workbook.
+
+**A form** is the intent `grid.form` (`/intent/grid-form?book=<id>&form=<name>`). Each person gets their own form,
+with the form's code running as it does on the workbook: opening the document runs `UserForm_Initialize`, what a
+form writes is that person's edit (the workbook's list of changes names them), event macros run if someone has
+turned them on, a `MsgBox` shows over the form. It is shown modeless whatever its design says, so it holds no
+macro thread while it sits in a document. A form that unloads itself (the OK of a form for entering data) opens
+again for the next entry.
+
+**What this doesn't do.** "Read only" describes the document: ReflexGrid has no per-person permissions, so whoever
+has a workbook's id and reaches this app can still open the workbook itself and edit it. An address that leads
+nowhere stays one: `grid.form`, the table page and `grid.pick` never create a workbook.
+
 ## With re_ddns: sign-in and calls
 
 ReflexGrid runs fine on its own (everyone is a guest). Sign-in and **Call everyone** come from
@@ -417,7 +461,7 @@ gridcore/                 the spreadsheet engine (no UI dependencies)
   vba/                    the VBA language: lexer, parser, compiler, runtime, VBA's library, the Forms
                           object model (msforms.py)
   engine/                 sessions, commands (cmd_*.py), undo/redo, clipboard, fill, viewport payloads,
-                          several people on one workbook (collab.py)
+                          several people on one workbook (collab.py), references for documents (embed.py)
     macro/                Excel's object model for VBA, macro runs, event macros, VBA worksheet functions
 reflex_grid/              the Reflex app
   state.py                bridges a tab's UI events to the shared workbook it shows
@@ -426,11 +470,14 @@ reflex_grid/              the Reflex app
   sessions.py             per-tab engine sessions (kept outside Reflex state)
   workbooks.py            the workbook list
   call.py                 calls on a workbook (DDNS Intent call.join)
-  api.py                  the backend's own route (a closing tab's goodbye)
+  embed.py                a workbook on other apps' pages: the read-only table page and its live socket
+  pick.py                 the grid.pick dialog: what of a workbook to show there
+  api.py                  the backend's own routes (a closing tab's goodbye, embed.py's)
   components/             workbook list, ribbon, dialogs, chrome, calls, macros (vba.py), UserForms
-                          (userform.py), and the grid's Reflex wrapper
+                          (userform.py), grid.pick (pick.py), and the grid's Reflex wrapper
 assets/grid/              the grid itself, a React component (sheet_view.jsx, sheet_charts.jsx), the
-                          VBA code editor (vba_editor.jsx) and UserForms (userform.jsx)
+                          VBA code editor (vba_editor.jsx), UserForms (userform.jsx) and choosing cells
+                          (cell_picker.jsx)
 tests/                    unit tests
 testcases/                Playwright E2E suites
 docs/architecture.md      design notes

@@ -417,7 +417,11 @@ def insert_tab() -> rx.Component:
         group("Sparklines", menu("activity", "Sparklines", [
             (label, GridState.open_dialog("sparkline", {"kind": kind})) for label, kind in (("Line", "line"), ("Column", "column"), ("Win/Loss", "stacked"))
         ], big=True)),
-        group("Links", rbtn("link", "Link", dlg("hyperlink"), "Insert Link (Ctrl+K)", big=True)),
+        group(
+            "Links",
+            rbtn("link", "Link", dlg("hyperlink"), "Insert Link (Ctrl+K)", big=True),
+            rbtn("code_xml", "Embed", dlg("embed"), "Show these cells or a UserForm in a CoDoc in MD document", big=True, id="rb-embed"),
+        ),
         group("Comments", rbtn("message_square", "Comment", dlg("note", threaded=True), big=True), rbtn("sticky_note", "Note", dlg("note"), big=True)),
         group("Symbols", rbtn("square_function", "Function", dlg("insertFunction"), "Insert Function", big=True)),
         spacing="0",

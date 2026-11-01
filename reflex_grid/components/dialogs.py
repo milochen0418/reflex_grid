@@ -604,6 +604,33 @@ def hyperlink() -> rx.Component:
     )
 
 
+def embed_row(e) -> rx.Component:
+    return rx.vstack(
+        rx.text(e["label"], size="2", weight="medium", color="#111827"),
+        rx.text(e["note"], size="1", color="#6B7280"),
+        rx.hstack(
+            rx.input(value=e["code"], read_only=True, size="1", flex="1", class_name="rg-embed-code"),
+            rx.button(rx.icon("copy", size=12), "Copy", size="1", variant="soft", color_scheme="gray", on_click=[rx.set_clipboard(e["code"]), rx.toast.success("Copied. Paste it into the document.", position="bottom-center")]),
+            spacing="2",
+            width="100%",
+            align="center",
+        ),
+        spacing="1",
+        width="100%",
+    )
+
+
+def embed() -> rx.Component:
+    return shell(
+        "embed",
+        "Embed in a document",
+        rx.text("Paste a line into a CoDoc in MD document. Cells show there read only, and follow the workbook live; a UserForm works there, and it is the only way to change anything from the document.", size="1", color="#4B5563"),
+        rx.vstack(rx.foreach(GridState.dlg["embeds"].to(list[dict[str, str]]), embed_row), spacing="4", width="100%", margin_top="8px", max_height="50vh", overflow_y="auto", padding_right="4px"),
+        footer=rx.hstack(rx.spacer(), rx.button("Close", variant="soft", color_scheme="gray", on_click=GridState.close_dialog), width="100%", margin_top="12px"),
+        width="560px",
+    )
+
+
 def note() -> rx.Component:
     """A note, or a comment thread: what was said, and a box for a reply."""
     replying = GridState.dlg_list.length() > 0
@@ -845,6 +872,7 @@ def all_dialogs() -> rx.Component:
         text_to_columns(),
         insert_function(),
         hyperlink(),
+        embed(),
         note(),
         size_dialogs(),
         cells_dialogs(),

@@ -17,6 +17,7 @@ was checked against Excel, and what doesn't work.
 | Worksheet functions | A public `Function` in a standard module can be used in formulas (`=Twice(A1)`, `Application.Caller`, arrays spill), recalculated like built-in functions |
 | Events | `Worksheet_Change`, `Worksheet_SelectionChange`, `Worksheet_Activate`/`Deactivate`, and the `Workbook_Sheet…` events run when people edit — after someone turns macros on (the security bar, or Developer › Macros On), as Excel's "Enable Content". Turning them on also runs `Workbook_Open` / `Auto_Open`. Edits made by macros fire `Worksheet_Change` too, as in Excel |
 | Undo | A whole macro run is one undo step (also across its dialogs), and so is an edit together with what its `Worksheet_Change` did. On a shared workbook it is the person's own step, like any other edit |
+| In documents | A UserForm can live in a CoDoc in MD document (the README's [Workbooks in documents](../README.md#workbooks-in-documents)): the same form and code, one for each person, shown modeless, opening again when it unloads |
 | Together | Everyone on a shared workbook sees a macro's changes as they happen (including while it waits on a dialog); dialogs and forms show only to the person who ran the macro (or whose edit fired the event), and each person has their own forms |
 
 Commands (usable from the Python API like every other command): `macro.list`, `macro.getModule`,

@@ -30,6 +30,10 @@ _BORDER = {
     "thick": "3px solid",
     "double": "3px double",
 }
+# The rules of a table from :func:`table_markup`.
+TABLE_CSS = """.sheet td { padding: 0 3px; overflow: hidden; line-height: 1.15; }
+.sheet th { background: #F3F4F6; border: 1px solid #C0C0C0; font: 9pt Arial, sans-serif; color: #444; }
+.sheet .f { display: flex; justify-content: space-between; }"""
 PAPER_CSS = {"Letter": "letter", "Legal": "legal", "A4": "A4", "A3": "A3", "A5": "A5", "B4": "B4", "B5": "B5", "Tabloid": "11in 17in", "Ledger": "17in 11in", "Executive": "7.25in 10.5in"}
 
 
@@ -97,15 +101,11 @@ def _css(st: Style, theme, look=None, tx: Optional[dict] = None, numeric: bool =
     return ";".join(out)
 
 
-def sheet_html(wb, si: int, rng: Optional[RangeRef] = None, title: str = "", for_print: bool = True) -> str:
+def table_markup(wb, si: int, rng: RangeRef, for_print: bool = False, headings: bool = False, rows: Optional[List[int]] = None) -> str:
+    """Cells as a styled ``<table class='sheet'>`` (:data:`TABLE_CSS`): those of ``rng``, on the
+    rows of ``rows`` when given, else on all its rows that aren't hidden."""
     sh = wb.sheet(si)
     pr = sh.print
-    if rng is None:
-        rng = pr.print_area
-    if rng is None:
-        used = sh.used_range()
-        rng = RangeRef(0, 0, used.r1, used.c1) if used is not None else RangeRef(0, 0, 0, 0)
-    rng = RangeRef(rng.r0, rng.c0, min(rng.r1, rng.r0 + 20000), min(rng.c1, rng.c0 + 500))
     theme = wb.theme
     cf = CfCache(wb, si) if sh.cond_formats else None
     looks: Dict[int, dict] = {t.id: table_style_colors(t.style, theme) for t in sh.tables}
@@ -119,18 +119,19 @@ def sheet_html(wb, si: int, rng: Optional[RangeRef] = None, title: str = "", for
             if rc != m.start:
                 covered.add(rc)
     cols = [c for c in range(rng.c0, rng.c1 + 1) if not sh.is_col_hidden(c)]
-    rows = [r for r in range(rng.r0, rng.r1 + 1) if not sh.is_row_hidden(r)]
+    if rows is None:
+        rows = [r for r in range(rng.r0, rng.r1 + 1) if not sh.is_row_hidden(r)]
     grid = "1px solid #D0D0D0" if pr.gridlines or not for_print else None
     parts: List[str] = []
     parts.append("<table class='sheet'>")
-    parts.append("<colgroup>" + ("<col style='width:32px'>" if pr.headings else "") + "".join(f"<col style='width:{sh.col_width(c):g}px'>" for c in cols) + "</colgroup>")
-    if pr.headings:
+    parts.append("<colgroup>" + ("<col style='width:32px'>" if headings else "") + "".join(f"<col style='width:{sh.col_width(c):g}px'>" for c in cols) + "</colgroup>")
+    if headings:
         parts.append("<tr><th></th>" + "".join(f"<th>{col_to_letters(c)}</th>" for c in cols) + "</tr>")
     from .viewport import _table_cell_look
 
     for r in rows:
         cells = [f"<tr style='height:{sh.row_height(r):g}px'>"]
-        if pr.headings:
+        if headings:
             cells.append(f"<th>{r + 1}</th>")
         for c in cols:
             rc = (r, c)
@@ -170,7 +171,19 @@ def sheet_html(wb, si: int, rng: Optional[RangeRef] = None, title: str = "", for
         cells.append("</tr>")
         parts.append("".join(cells))
     parts.append("</table>")
-    body = "\n".join(parts)
+    return "\n".join(parts)
+
+
+def sheet_html(wb, si: int, rng: Optional[RangeRef] = None, title: str = "", for_print: bool = True) -> str:
+    sh = wb.sheet(si)
+    pr = sh.print
+    if rng is None:
+        rng = pr.print_area
+    if rng is None:
+        used = sh.used_range()
+        rng = RangeRef(0, 0, used.r1, used.c1) if used is not None else RangeRef(0, 0, 0, 0)
+    rng = RangeRef(rng.r0, rng.c0, min(rng.r1, rng.r0 + 20000), min(rng.c1, rng.c0 + 500))
+    body = table_markup(wb, si, rng, for_print=for_print, headings=pr.headings)
     paper = PAPER_CSS.get(pr.paper, "letter")
     left, right, top, bottom, _hdr, _ftr = pr.margins
     page_css = f"@page {{ size: {paper} {pr.orientation}; margin: {top}in {right}in {bottom}in {left}in; }}"
@@ -187,9 +200,7 @@ def sheet_html(wb, si: int, rng: Optional[RangeRef] = None, title: str = "", for
 {page_css}
 body {{ margin: 0; font-family: Calibri, Carlito, 'Segoe UI', Arial, sans-serif; }}
 .sheet {{ border-collapse: collapse; table-layout: fixed; {center} }}
-.sheet td {{ padding: 0 3px; overflow: hidden; line-height: 1.15; }}
-.sheet th {{ background: #F3F4F6; border: 1px solid #C0C0C0; font: 9pt Arial, sans-serif; color: #444; }}
-.sheet .f {{ display: flex; justify-content: space-between; }}
+{TABLE_CSS}
 .hf {{ text-align: center; font: 9pt Calibri, Carlito, Arial, sans-serif; margin: 4px 0; }}
 </style></head><body>
 {f'<div class="hf">{header}</div>' if header else ''}

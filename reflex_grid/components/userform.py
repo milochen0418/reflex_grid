@@ -22,6 +22,8 @@ class UserForms(rx.Component):
     blocked: rx.Var[bool]
     # The VBA editor's picture of a form's design.
     design: rx.Var[bool]
+    # In the flow of a page shown inside another app's, not a window over the workbook.
+    inline: rx.Var[bool]
     on_event: rx.EventHandler[lambda e: [e]]
 
 

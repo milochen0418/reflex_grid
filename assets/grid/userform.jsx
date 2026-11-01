@@ -8,7 +8,8 @@
 //
 // <UserForms forms={[...]} waiting={id} blocked={bool} design={false} onEvent={(e) => ...} />
 // With design={true} the form is a still picture of its design (the VBA editor's form view);
-// double-clicking a control asks for its event procedure.
+// double-clicking a control asks for its event procedure. With inline={true} the form works, in the
+// flow of a page shown inside another app's: see InlineForms.
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 export const PX = 4 / 3;
@@ -696,7 +697,7 @@ export function walk(list, f) {
 
 // ------------------------------------------------------------------ a form
 
-function FormWindow({ form, active, inert, design, onEvent, z, pictures }) {
+function FormWindow({ form, active, inert, design, inline, onEvent, z, pictures }) {
   const [pos, setPos] = useState(null);
   const [values, setValues] = useState({});
   const pending = useRef({});
@@ -708,13 +709,15 @@ function FormWindow({ form, active, inert, design, onEvent, z, pictures }) {
   const rootRef = useRef(null);
   const w = px(form.insideWidth);
   const h = px(form.insideHeight);
+  // In the flow of the page, not a window over it.
+  const still = design || inline;
 
   // Where the form starts: centred (StartUpPosition 1, 2, 3) or where its Left/Top say.
   useLayoutEffect(() => {
     if (pos !== null) return;
     const vw = window.innerWidth || 1200;
     const vh = window.innerHeight || 800;
-    if (design) setPos({ x: 0, y: 0 });
+    if (still) setPos({ x: 0, y: 0 });
     else if (form.startUp === 0) setPos({ x: Math.max(0, Math.min(px(form.left), vw - w - 12)), y: Math.max(0, Math.min(px(form.top), vh - h - TITLE_H - 12)) });
     else setPos({ x: Math.max(8, (vw - w) / 2), y: Math.max(8, (vh - h - TITLE_H) / 2) });
   }, []);
@@ -739,6 +742,8 @@ function FormWindow({ form, active, inert, design, onEvent, z, pictures }) {
   // The code moved the focus (SetFocus) or the form just opened (its first control has it).
   useEffect(() => {
     if (design || inert || !form.active || pos === null) return;
+    // On another app's page the keyboard stays where the person is typing.
+    if (inline && !document.hasFocus()) return;
     const root = rootRef.current;
     if (!root) return;
     const el = root.querySelector(`[data-control="${CSS.escape(form.active)}"] input, [data-control-input="${CSS.escape(form.active)}"], [data-control="${CSS.escape(form.active)}"]`);
@@ -836,7 +841,7 @@ function FormWindow({ form, active, inert, design, onEvent, z, pictures }) {
   // Dragging by the title bar.
   const drag = useRef(null);
   const onTitleDown = (e) => {
-    if (design || e.button !== 0) return;
+    if (still || e.button !== 0) return;
     drag.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
@@ -863,14 +868,14 @@ function FormWindow({ form, active, inert, design, onEvent, z, pictures }) {
         e.stopPropagation();
       }}
       style={{
-        position: design ? "relative" : "fixed",
-        left: design ? 0 : pos.x,
-        top: design ? 0 : pos.y,
+        position: still ? "relative" : "fixed",
+        left: still ? 0 : pos.x,
+        top: still ? 0 : pos.y,
         zIndex: z,
         width: w + 2,
         background: "#FFFFFF",
         border: active ? "1px solid #0078D7" : "1px solid #9A9A9A",
-        boxShadow: design ? "none" : "0 8px 28px rgba(0,0,0,.28)",
+        boxShadow: still ? "none" : "0 8px 28px rgba(0,0,0,.28)",
         colorScheme: "light",
         color: "#000000",
         userSelect: "none",
@@ -882,22 +887,24 @@ function FormWindow({ form, active, inert, design, onEvent, z, pictures }) {
         onPointerMove={onTitleMove}
         onPointerUp={onTitleUp}
         onDoubleClick={() => design && onEvent({ form: form.id, event: { event: "design", control: "" } })}
-        style={{ height: TITLE_H, display: "flex", alignItems: "center", padding: "0 0 0 8px", background: "#FFFFFF", cursor: design ? "default" : "move", fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", fontSize: 12, color: active ? "#000000" : "#6B6B6B" }}
+        style={{ height: TITLE_H, display: "flex", alignItems: "center", padding: "0 0 0 8px", background: "#FFFFFF", cursor: still ? "default" : "move", fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", fontSize: 12, color: active ? "#000000" : "#6B6B6B" }}
       >
         <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{form.caption}</span>
-        <button
-          type="button"
-          aria-label="Close"
-          data-form-close={form.name}
-          disabled={inert && !design}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => !design && send({ event: "close" })}
-          style={{ width: 40, height: TITLE_H, border: "none", background: "transparent", fontSize: 14, color: "#222", cursor: "default" }}
-          onMouseEnter={(e) => !design && (e.currentTarget.style.background = "#E81123")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          ✕
-        </button>
+        {inline ? null : (
+          <button
+            type="button"
+            aria-label="Close"
+            data-form-close={form.name}
+            disabled={inert && !design}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => !design && send({ event: "close" })}
+            style={{ width: 40, height: TITLE_H, border: "none", background: "transparent", fontSize: 14, color: "#222", cursor: "default" }}
+            onMouseEnter={(e) => !design && (e.currentTarget.style.background = "#E81123")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            ✕
+          </button>
+        )}
       </div>
       <div
         onClick={(e) => e.target === e.currentTarget && has(form, "click") && send({ event: "click" })}
@@ -911,10 +918,54 @@ function FormWindow({ form, active, inert, design, onEvent, z, pictures }) {
   );
 }
 
+// The form on another app's page: it stays there, in the flow, as long as the page does. It keeps
+// the workbook open by saying the page is there, asks for a new form when the last one closes (the
+// OK of a form for entering data unloads it: the next entry starts here), and tells the page around
+// it how much room it takes (a number, for whoever embeds it).
+function InlineForms({ list, waiting, blocked, send, pictures }) {
+  const root = useRef(null);
+  const open = useRef(false);
+  useEffect(() => {
+    const t = setInterval(() => send({ embed: "ping" }), 10000);
+    return () => clearInterval(t);
+  }, [send]);
+  useEffect(() => {
+    if (list.length) open.current = true;
+    else if (open.current && !blocked) {
+      open.current = false;
+      send({ embed: "closed" });
+    }
+  }, [list.length, blocked]);
+  useEffect(() => {
+    const page = root.current && root.current.closest("#embed-page");
+    if (!page || window.parent === window) return undefined;
+    const tell = () => window.parent.postMessage({ type: "reflex-grid-embed", height: Math.ceil(page.getBoundingClientRect().height) }, "*");
+    const seen = new ResizeObserver(tell);
+    seen.observe(page);
+    // A browser doesn't run a ResizeObserver in a frame out of sight.
+    const drawn = new MutationObserver(tell);
+    drawn.observe(page, { childList: true, subtree: true });
+    return () => {
+      seen.disconnect();
+      drawn.disconnect();
+    };
+  }, []);
+  const top = list.find((f) => f.id === waiting) || null;
+  return (
+    <div ref={root} style={{ display: "inline-flex", flexDirection: "column", gap: 8 }}>
+      {list.map((f) => {
+        const isTop = top ? f.id === top.id : true;
+        return <FormWindow key={f.id} form={f} active={isTop && !blocked} inert={blocked || !isTop} design={false} inline={true} onEvent={send} z={1} pictures={pictures} />;
+      })}
+    </div>
+  );
+}
+
 export function UserForms(props) {
-  const { forms, waiting, blocked, design, onEvent, pictures } = props;
+  const { forms, waiting, blocked, design, inline, onEvent, pictures } = props;
   const list = Array.isArray(forms) ? forms : [];
   const send = useCallback((e) => onEvent && onEvent(e), [onEvent]);
+  if (inline) return <InlineForms list={list} waiting={waiting} blocked={blocked} send={send} pictures={pictures} />;
   if (!list.length) return null;
   if (design) {
     return (

@@ -10,6 +10,7 @@ a tab that drew an older revision than the room's asks for its window again (``s
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import os
@@ -32,6 +33,7 @@ from gridcore.numfmt import parse as parse_fmt
 
 from . import ai, call, sessions
 from .books import STORE, Book, clean_title, valid_id
+from .embed import GONE, embed_choices
 from .room import BookRoom, room_token
 
 try:
@@ -48,6 +50,7 @@ CATEGORIES = sorted({f["category"] for f in FUNCTIONS})
 PEER_IDLE = 30
 # Events that only redraw this tab: the server's answer never moves its selection.
 _PASSIVE = frozenset({"viewport", "sync", "ping", "presence", "objectSelect"})
+_TASKS: set = set()
 
 
 # The event the VBA editor opens when a control is double-clicked in the form view, and the
@@ -174,6 +177,9 @@ class GridState(rx.State):
     vba_goto_line: int = 0
     vba_goto_key: int = 0
     vba_reopen: bool = False
+    # A UserForm on another app's page (``/intent/grid-form``), and why it can't show.
+    embed_form: str = ""
+    embed_error: str = ""
     # AI through the AI Hub (``ai.py``): the AI Fill running in this tab (rows done, of how many,
     # what it does), the formula suggested for the cell being typed into, and whether suggestions
     # are on (remembered in the browser). Rows and answers stay on the server.
@@ -340,7 +346,7 @@ class GridState(rx.State):
         # A tab that reloaded (and so left) comes back with its own view and undo history.
         before = entry.view if entry.book_id == book.key else None
         view = book.join(me["peer"], entry.session, me["name"], view=before)
-        view.info.update(user=me["user"], email=me.get("email", ""), avatar=me.get("avatar", ""))
+        view.info.update(user=me["user"], email=me.get("email", ""), avatar=me.get("avatar", ""), embed=bool(self.embed_form))
         if not view.info.get("color"):
             view.info["color"] = book.color_for(me["user"])
         entry.book_id, entry.view = book.key, view
@@ -377,6 +383,8 @@ class GridState(rx.State):
 
     def _refresh(self, entry: sessions.Entry, book: Book, view: View, seq: Optional[int] = None, extra_ui: Optional[Dict[str, Any]] = None, passive: bool = False) -> None:
         """Recomputes what this tab draws (inside ``book.act(view)``)."""
+        if self.embed_form:  # a form on another app's page: no cells to draw
+            return
         s = entry.session
         d = s.doc()
         wb = d.wb
@@ -451,9 +459,14 @@ class GridState(rx.State):
     def _publish(self, room: BookRoom, book: Book) -> None:
         """Shows the book as it is now to everyone on it: revision, title, who is where, recent
         changes, saving and the call. Only what changed is assigned, so only that is sent."""
+        if self.embed_form:
+            task = asyncio.create_task(push(book.key))
+            _TASKS.add(task)
+            task.add_done_callback(_TASKS.discard)
+            return
         with book.lock:
             rev, title = book.rev, book.meta.title
-            peers = [_peer_json(v) for v in book.views.values()] + ai.presence(book)
+            peers = [_peer_json(v) for v in book.people()] + ai.presence(book)
             who = {v.key: (v.name, v.info.get("color", "#5F6368")) for v in book.views.values()}
             changes = [
                 ai.seen_change(book, {"rev": c.rev, "author": c.author, "name": who.get(c.author, ("", "#5F6368"))[0], "color": who.get(c.author, ("", "#5F6368"))[1], "areas": [[n, list(r)] for n, r in c.areas]})
@@ -495,6 +508,7 @@ class GridState(rx.State):
         book_id = path.rstrip("/").rsplit("/", 1)[-1] if path else ""
         if not valid_id(book_id):
             return rx.redirect("/")
+        self.embed_form, self.embed_error = "", ""
         await self._identify()
         if not self.functions:
             self.functions = FUNCTIONS
@@ -1035,6 +1049,9 @@ class GridState(rx.State):
             # Alt+F11: the VBA editor isn't one of the small dialogs.
             self._vba_load(s, str(params.get("module") or ""))
             self.vba_open = True
+            return
+        if name == "embed":
+            self.dialog, self.dlg, self.dlg_error = "embed", {"embeds": embed_choices(self.book, s.execute("embed.info", {}))}, ""
             return
         if name == "macros":
             macros = s.execute("macro.list", {}).get("macros", [])
@@ -2113,8 +2130,6 @@ class GridState(rx.State):
     @rx.event(background=True)
     async def macro_pump(self):
         """Runs a long macro in time slices, letting everyone else work in between."""
-        import asyncio
-
         while True:
             await asyncio.sleep(0.03)
             async with self:
@@ -2302,6 +2317,63 @@ class GridState(rx.State):
         except (TypeError, ValueError):
             return None
         return await self._macro_step("macro.formEvent", {"form": fid, "event": ev})
+
+    @rx.event
+    async def open_embed_form(self, params: Dict[str, Any]):
+        """``grid.form``: one of a workbook's UserForms on another app's page. The form is the
+        person's only way into the workbook there: this tab draws no cells, has no ribbon and isn't
+        among the people on the book, nor in its room (a document's readers come and go without
+        leaving it, and each would stay on the room's list). What the form changes reaches the room
+        through a tab that is in it (``_publish``), and the tables on other pages by themselves."""
+        book_id, name = str(params.get("book") or ""), str(params.get("form") or "")
+        self.embed_form, self.embed_error = name, ""
+        self.vba_forms, self.vba_form_pictures, self.vba_form_waiting = [], {}, 0
+        self.macro_prompt, self.macro_busy = {}, False
+        await self._identify()
+        if not STORE.exists(book_id):
+            self.embed_error = GONE
+            return None
+        book = STORE.open(book_id, creator=self.me)
+        self.book, self.book_gone = book_id, False
+        self._join(self._entry(), book)
+        return await self._embed_show()
+
+    async def _embed_show(self):
+        """Opens the form. Modeless, whatever its design says: its code runs the same, and a
+        modal form would hold one of the server's few macro threads as long as a document is open."""
+        entry, book, view = self._bound()
+        if book is None:
+            self.embed_error = GONE
+            return None
+        self.macro_label = self.embed_form
+        out = None
+        with book.act(view) as s:
+            try:
+                out = self._macro_after(s, s.execute("macro.showForm", {"name": self.embed_form, "modal": False}))
+            except EngineError as ex:
+                self.embed_error = str(ex).split("\n", 1)[0]
+        self._publish(None, book)
+        return out
+
+    @rx.event
+    async def embed_event(self, e: Dict[str, Any]):
+        """From the form on another app's page: what the person did on it, that it closed (the next
+        one opens, for the next entry), or that the page is still there."""
+        if not isinstance(e, dict) or not self.embed_form:
+            return None
+        what = e.get("embed")
+        if what == "ping":
+            entry, book, view = self._bound()
+            if book is not None:
+                with book.act(view):
+                    pass
+                book.prune(PEER_IDLE)
+                STORE.close_idle()
+        elif what == "closed":
+            return await self._embed_show()
+        else:
+            return await self.form_event(e)
+        return None
 
     @rx.event
     async def vba_form_view_set(self, on: bool):
