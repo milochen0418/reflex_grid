@@ -55,6 +55,9 @@ class Section:
     kind: str = "number"  # number | date | text | general
     thousands: bool = False
     scale: int = 0
+    # Scaling commas after a scientific section's exponent (`0.0E+0,`): they don't change what it
+    # shows, but "Set precision as displayed" keeps three digits fewer for each.
+    exp_scale: int = 0
     percent: int = 0
     has_at: bool = False
     has_digits: bool = False
@@ -523,6 +526,8 @@ def analyze(raw: _Raw) -> Section:
                 replace = ("lit", "")
             elif seen_digit and not next_digit:
                 sec.scale += 1
+                if seen_exp:
+                    sec.exp_scale += 1
                 replace = ("lit", "")
             else:
                 replace = ("lit", ",")

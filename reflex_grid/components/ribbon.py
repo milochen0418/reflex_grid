@@ -485,7 +485,7 @@ def formulas_tab() -> rx.Component:
         ),
         group(
             "Calculation",
-            menu("calculator", "Calculation Options", [("Automatic", c("formulas.calculationOptions", mode="auto")), ("Automatic Except for Data Tables", c("formulas.calculationOptions", mode="autoNoTable")), ("Manual", c("formulas.calculationOptions", mode="manual")), "-", ("Enable Iterative Calculation", c("formulas.calculationOptions", iterative=True)), ("Disable Iterative Calculation", c("formulas.calculationOptions", iterative=False))], big=True),
+            menu("calculator", "Calculation Options", [("Automatic", c("formulas.calculationOptions", mode="auto")), ("Automatic Except for Data Tables", c("formulas.calculationOptions", mode="autoNoTable")), ("Manual", c("formulas.calculationOptions", mode="manual")), "-", ("Enable Iterative Calculation", c("formulas.calculationOptions", iterative=True)), ("Disable Iterative Calculation", c("formulas.calculationOptions", iterative=False)), "-", ("Set Precision as Displayed…", dlg("precisionAsDisplayed")), ("Use Full Precision", c("formulas.calculationOptions", precisionAsDisplayed=False))], big=True),
             rbtn("refresh_cw", "Calculate Now", c("formulas.calculateNow"), "Calculate Now (F9)", big=True),
         ),
         *([group("AI", rbtn("sparkles", "Formula Suggestions", GridState.toggle_ai_suggest, "Suggest a formula when you type = in a cell (on or off)", big=True, active=GridState.ai_props["suggest"].to(bool), id="rb-ai-suggest"))] if ai.ENABLED else []),
@@ -552,6 +552,12 @@ def view_tab() -> rx.Component:
                 [rbtn("grid_3x3", "Gridlines", c("view.gridlines"), active=GridState.geometry["gridlines"], show_label=True)],
                 [rbtn("panel_top", "Headings", c("view.headings"), active=GridState.geometry["headings"], show_label=True)],
                 [rbtn("square_function", "Formulas", c("formulas.showFormulas"), active=GridState.geometry["formulas"], show_label=True)],
+            ),
+            # This workbook's display options (File › Options › Advanced in Excel).
+            stack2(
+                [rbtn("panel_bottom", "Sheet Tabs", c("view.showSheetTabs"), active=GridState.book_view["sheetTabs"], show_label=True, id="rb-sheet-tabs")],
+                [rbtn("move_horizontal", "Horizontal Scroll Bar", c("view.showHorizontalScrollBar"), active=GridState.book_view["hScroll"], show_label=True, id="rb-hscroll")],
+                [rbtn("move_vertical", "Vertical Scroll Bar", c("view.showVerticalScrollBar"), active=GridState.book_view["vScroll"], show_label=True, id="rb-vscroll")],
             ),
         ),
         group(

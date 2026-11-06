@@ -593,10 +593,16 @@ def insert_function() -> rx.Component:
 # ---------------------------------------------------------------- insert / review
 
 
+def confirm() -> rx.Component:
+    """An OK/Cancel question, as Excel asks it: dropped cells that would replace data, turning on
+    "Set precision as displayed"."""
+    return shell("confirm", "ReflexGrid", rx.text(D["message"].to(str), size="2", id="dlg-confirm-text"), width="420px")
+
+
 def hyperlink() -> rx.Component:
     return shell(
         "hyperlink",
-        "Insert Link",
+        rx.cond(D["editing"].to(bool), "Edit Hyperlink", "Insert Link"),
         text_field("Text to display", "text"),
         text_field("Address", "target", placeholder="https://example.com or Sheet2!A1", id="dlg-target"),
         text_field("ScreenTip", "tooltip"),
@@ -784,7 +790,7 @@ def upload_dialogs() -> rx.Component:
             rx.upload(
                 rx.vstack(rx.icon("folder_open", size=28, color="#6B7280"), rx.text("Drop an .xlsx, .csv or .tsv file here, or click to choose one.", size="2", color="#4B5563", text_align="center"), align="center", spacing="2"),
                 id="open_upload",
-                accept={"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx", ".xlsm"], "text/csv": [".csv"], "text/tab-separated-values": [".tsv", ".txt"]},
+                accept={"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx", ".xlsm"], "text/csv": [".csv"], "text/tab-separated-values": [".tsv", ".txt"], "application/vnd.ms-excel": [".xls"], "text/html": [".html", ".htm"]},
                 max_files=1,
                 multiple=False,
                 on_drop=GridState.open_upload(rx.upload_files(upload_id="open_upload")),
@@ -872,6 +878,7 @@ def all_dialogs() -> rx.Component:
         text_to_columns(),
         insert_function(),
         hyperlink(),
+        confirm(),
         embed(),
         note(),
         size_dialogs(),

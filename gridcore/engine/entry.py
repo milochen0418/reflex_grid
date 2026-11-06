@@ -15,6 +15,7 @@ from ..functions import lookup
 from ..model.cell import Cell, Formula
 from ..model.features import Validation
 from ..numfmt import parse as parse_fmt
+from .ranges import top_left
 from .session import EngineError
 
 AUTO_DATE = (
@@ -109,13 +110,13 @@ def validation_at(sheet, rc: Tuple[int, int]) -> Optional[Validation]:
 
 def _rule_expr(text: str, v: Validation, rc: Tuple[int, int]):
     """A validation formula evaluated for ``rc``: relative parts are relative to the rule's
-    top-left cell."""
+    top-left cell, the lowest row and column of all its areas, as Excel writes them."""
     body = text[1:] if text.startswith("=") else text
     try:
         e = parse(body)
     except ParseError:
         return None
-    top = v.ranges[0].start if v.ranges else rc
+    top = top_left(v.ranges) or rc
     return shift_relative(e, rc[0] - top[0], rc[1] - top[1])
 
 
@@ -180,14 +181,17 @@ def _compare(op: str, x: float, a: Value, b: Value) -> bool:
     }.get(op, True)
 
 
-def is_valid(wb, si: int, rc: Tuple[int, int], value: Value, v: Validation) -> bool:
+def is_valid(wb, si: int, rc: Tuple[int, int], value: Value, v: Validation, before=None) -> bool:
+    """Whether ``value`` in ``rc`` passes ``v``. ``before``: the workbook before the entry, whose
+    list is the one the dropdown showed (a source that takes in the cell itself doesn't list the
+    value being typed, as in Excel)."""
     if value is None or value == "":
         return v.allow_blank or v.kind == "any"
     k = v.kind
     if k == "any":
         return True
     if k == "list":
-        items = list_items(wb, si, v, rc)
+        items = list_items(before if before is not None else wb, si, v, rc)
         if isinstance(value, float):
             from .display import fmt
 
@@ -225,11 +229,12 @@ def is_valid(wb, si: int, rc: Tuple[int, int], value: Value, v: Validation) -> b
     return _compare(v.operator, value, a, b)
 
 
-def check_entry(wb, si: int, rc: Tuple[int, int], value: Value) -> Optional[Tuple[Validation, str]]:
-    """The rule an entered value breaks (and its message), or ``None``."""
+def check_entry(wb, si: int, rc: Tuple[int, int], value: Value, before=None) -> Optional[Tuple[Validation, str]]:
+    """The rule an entered value breaks (and its message), or ``None``. ``before``: the workbook
+    before the entry (see :func:`is_valid`)."""
     sh = wb.sheet(si)
     v = validation_at(sh, rc) if sh is not None else None
-    if v is None or not v.show_error or is_valid(wb, si, rc, value, v):
+    if v is None or not v.show_error or is_valid(wb, si, rc, value, v, before):
         return None
     msg = v.error_message or "This value doesn't match the data validation restrictions defined for this cell."
     if v.error_title:

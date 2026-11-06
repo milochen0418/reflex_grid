@@ -23,6 +23,16 @@ class CalcSettings:
 
 
 @dataclass
+class WorkbookView:
+    """Display options for this workbook (File › Options › Advanced in Excel), saved with it as the
+    attributes of ``<workbookView>``."""
+
+    show_sheet_tabs: bool = True
+    show_horizontal_scroll: bool = True
+    show_vertical_scroll: bool = True
+
+
+@dataclass
 class DocProps:
     title: str = ""
     subject: str = ""
@@ -45,6 +55,7 @@ class Workbook:
         self.calc = CalcSettings()
         self.active_sheet = 0
         self.props = DocProps()
+        self.view = WorkbookView()
         self.protected_structure = False
         self.structure_password: Optional[str] = None
         # Named cell styles (Cell Styles gallery): name -> style.
@@ -76,6 +87,7 @@ class Workbook:
         w.names = copy.deepcopy(self.names)
         w.calc = copy.deepcopy(self.calc)
         w.props = copy.deepcopy(self.props)
+        w.view = copy.deepcopy(self.view)
         w.cell_styles = list(self.cell_styles)
         w._owned = set()
         self._owned = set()

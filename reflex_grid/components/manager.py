@@ -301,6 +301,9 @@ def new_menu() -> rx.Component:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx", ".xlsm"],
                 "text/csv": [".csv"],
                 "text/tab-separated-values": [".tsv", ".txt"],
+                # A web app's "Export to Excel" is often a web page saved as .xls: its table opens.
+                "application/vnd.ms-excel": [".xls"],
+                "text/html": [".html", ".htm"],
             },
             max_files=1,
             multiple=False,

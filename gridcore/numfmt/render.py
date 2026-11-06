@@ -367,19 +367,19 @@ def _blank_range(toks: List[tuple], lo: int, hi: int, spaces: bool, pieces: List
             pieces[i] = s
 
 
-def _render_fraction(sec: Section, x: float, pieces: List[str], lits: List[Optional[str]]) -> None:
-    """A fraction section is ``[whole] [sep] num [lit] / [lit] den``, rendered the way Excel does."""
-    toks = sec.toks
+def _fraction_layout(toks: List[tuple]) -> Optional[tuple]:
+    """Where a fraction section's parts are: ``(slash, num_start, whole_idx, num_idx, sep_start,
+    fixed_den, den_start, den_end, den_idx)``, or ``None`` for no fraction."""
 
     def is_digit(i: int) -> bool:
         return 0 <= i < len(toks) and toks[i][0] == "digit"
 
     slash = next((i for i, t in enumerate(toks) if t[0] == "slash"), None)
     if slash is None:
-        return
+        return None
     num_last = next((i for i in range(slash - 1, -1, -1) if is_digit(i)), None)
     if num_last is None:
-        return
+        return None
     num_start = num_last
     while num_start > 0 and is_digit(num_start - 1):
         num_start -= 1
@@ -406,10 +406,12 @@ def _render_fraction(sec: Section, x: float, pieces: List[str], lits: List[Optio
         while is_digit(den_end):
             den_end += 1
     den_idx = _digit_indices(toks, den_start, den_end)
+    return slash, num_start, whole_idx, num_idx, sep_start, fixed_den, den_start, den_end, den_idx
 
-    def has_q(idx: List[int]) -> bool:
-        return any(toks[i] == ("digit", "?") for i in idx)
 
+def _fraction_parts(layout: tuple, x: float) -> Tuple[float, int, int]:
+    """The whole part, numerator and denominator a fraction section shows for ``x`` ≥ 0."""
+    _slash, _num_start, whole_idx, _num_idx, _sep, fixed_den, _ds, _de, den_idx = layout
     has_whole = bool(whole_idx)
     if has_whole:
         whole, f = math.floor(x), x - math.floor(x)
@@ -423,6 +425,101 @@ def _render_fraction(sec: Section, x: float, pieces: List[str], lits: List[Optio
     if has_whole and num >= den and den > 0:
         whole += num // den
         num %= den
+    return whole, num, den
+
+
+def shown_value(sec: Section, v: float) -> Optional[float]:
+    """The number a number section shows for ``v`` (its size), as a value: what "Set precision as
+    displayed" stores (GridCraft PR 1366). ``None`` when the section shows no digits (``"x"``) or
+    the result isn't finite. It uses the display's own rounding, so 1.005 with ``0.00`` gives
+    1.01, and 0.123456 with ``0.00%`` gives 0.1235 (the nearest double to the decimal shown)."""
+    if not sec.has_digits or not math.isfinite(v):
+        return None
+    x = abs(v)
+    if sec.percent > 0 and not sec.exp:
+        x *= 100.0 ** min(sec.percent, 20)
+    if sec.scale > 0 and not sec.exp:
+        x /= 1000.0 ** min(sec.scale, 110)
+    if not math.isfinite(x):
+        return None
+    if x == 0.0:
+        return 0.0
+    # `%` and scaling are undone by moving the decimal point in the digits shown, so the result is
+    # the nearest double to that decimal rather than a product with its own rounding error.
+    pct = 0 if sec.exp else min(sec.percent, 20)
+    shift = 3 * min(max(sec.scale, 0), 110) - 2 * pct
+    toks = sec.toks
+    if sec.fraction:
+        layout = _fraction_layout(toks)
+        if layout is None:
+            return None
+        whole, num, den = _fraction_parts(layout, x)
+        den = max(den, 1)
+        shown = (whole * den + num) / den * 10.0 ** shift
+    else:
+        n = len(toks)
+        point = next((i for i, t in enumerate(toks) if t[0] == "point"), None)
+        exp = next((i for i, t in enumerate(toks) if t[0] == "exp"), None)
+        frac_end = exp if exp is not None else n
+        frac_idx = _digit_indices(toks, point + 1, frac_end) if point is not None else []
+        if exp is not None:
+            # Observed in Excel 16 for Mac: the stored value keeps one digit plus the fraction
+            # digits, whatever the integer placeholders (`##0.0E+0` stores 123456.789 as 120000
+            # though it shows `123.5E+3`), two more for each `%` and three fewer for each scaling
+            # comma after the exponent, though neither changes what the section shows: `0.0%E+0`
+            # stores 12345 as 12350, `0.0E+0,` as 0 and `0.00E+00,` stores 98765.4 as 100000.
+            keep = 1 + len(frac_idx) + 2 * min(sec.percent, 20) - 3 * min(sec.exp_scale, 110)
+            return _scientific_shown(x, keep)
+        int_s, frac_s = fixed(x, len(frac_idx))
+        try:
+            shown = float(f"0{int_s}.{frac_s}0e{shift}")
+        except (ValueError, OverflowError):
+            return None
+    return shown if math.isfinite(shown) else None
+
+
+def _scientific_shown(x: float, keep: int) -> Optional[float]:
+    """``x`` > 0 kept to ``keep`` significant digits, rounded half away from zero on its 15-digit
+    decimal form; ``keep`` ≤ 0 rounds to a power of ten above its first digit (0, or the next
+    power when that digit is 5 or more and ``keep`` is 0)."""
+    digits, xe = decimal_digits(x)
+    try:
+        if keep <= 0:
+            shown = 10.0 ** (xe + 1) if keep == 0 and digits[0] >= 5 else 0.0
+        elif keep >= len(digits):
+            shown = float("".join(chr(48 + d) for d in digits) + f"e{xe - len(digits) + 1}")
+        else:
+            kept = list(digits[:keep])
+            e = xe
+            if digits[keep] >= 5:
+                i = keep - 1
+                while i >= 0 and kept[i] == 9:
+                    kept[i] = 0
+                    i -= 1
+                if i < 0:
+                    kept = [1] + kept[:-1]
+                    e += 1
+                else:
+                    kept[i] += 1
+            shown = float("".join(chr(48 + d) for d in kept) + f"e{e - keep + 1}")
+    except OverflowError:
+        return None
+    return shown if math.isfinite(shown) else None
+
+
+def _render_fraction(sec: Section, x: float, pieces: List[str], lits: List[Optional[str]]) -> None:
+    """A fraction section is ``[whole] [sep] num [lit] / [lit] den``, rendered the way Excel does."""
+    toks = sec.toks
+    layout = _fraction_layout(toks)
+    if layout is None:
+        return
+    slash, num_start, whole_idx, num_idx, sep_start, fixed_den, den_start, den_end, den_idx = layout
+
+    def has_q(idx: List[int]) -> bool:
+        return any(toks[i] == ("digit", "?") for i in idx)
+
+    has_whole = bool(whole_idx)
+    whole, num, den = _fraction_parts(layout, x)
     whole_s = fixed(whole, 0)[0] if whole >= 1.0 else ""
     num_zero_ph = any(toks[i] == ("digit", "0") for i in num_idx)
     if has_whole and num == 0 and not num_zero_ph:

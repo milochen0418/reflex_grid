@@ -297,7 +297,8 @@ def sheet_tabs() -> rx.Component:
             ),
         )
 
-    return rx.hstack(
+    # A workbook can hide its sheet tabs (File › Options › Advanced in Excel).
+    return rx.cond(GridState.book_view["sheetTabs"], rx.hstack(
         rx.icon_button(rx.icon("chevron_left", size=14), variant="ghost", size="1", color_scheme="gray", on_click=GridState.cmd("sheet.previous", {})),
         rx.icon_button(rx.icon("chevron_right", size=14), variant="ghost", size="1", color_scheme="gray", on_click=GridState.cmd("sheet.next", {})),
         rx.hstack(rx.foreach(GridState.sheet_tabs, tab), spacing="0", overflow_x="auto", max_width="70%", class_name="rg-sheet-tabs"),
@@ -310,7 +311,8 @@ def sheet_tabs() -> rx.Component:
         border_top="1px solid #D5D9DE",
         width="100%",
         flex_shrink="0",
-    )
+        id="rg-sheet-tab-bar",
+    ))
 
 
 def status_bar() -> rx.Component:

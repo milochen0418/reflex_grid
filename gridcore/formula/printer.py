@@ -58,6 +58,14 @@ def quote_sheet(name: str) -> str:
     return name
 
 
+def unquote_sheet(text: str) -> str:
+    """A sheet name as a formula writes it (``'Bob''s'``, ``Sales``) back to the name (``Bob's``)."""
+    t = text.strip()
+    if len(t) >= 2 and t[0] == "'" and t[-1] == "'":
+        return t[1:-1].replace("''", "'")
+    return t
+
+
 def sheet_prefix(s) -> str:
     if s is None:
         return ""

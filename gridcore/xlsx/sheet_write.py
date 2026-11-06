@@ -513,7 +513,8 @@ def _quote(t: str) -> str:
 
 def _cf_rule_xml(cf: CondFormat, priority: int, out) -> str:
     rule = cf.rule
-    tl = a1(cf.ranges[0].r0, cf.ranges[0].c0) if cf.ranges else "A1"
+    # The rule's formulas are relative to the top-left cell of all its areas, as Excel writes them.
+    tl = a1(min(r.r0 for r in cf.ranges), min(r.c0 for r in cf.ranges)) if cf.ranges else "A1"
     stop = ' stopIfTrue="1"' if cf.stop_if_true else ""
     st = rule.style or Style()
 

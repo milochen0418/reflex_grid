@@ -7,7 +7,7 @@ from typing import List
 
 from ..core.value import Array, CellError, Value, XlError, to_number
 from .criteria import Criterion
-from .registry import MAX_CELLS, A, Arg, Ctx, S, VAR, fn
+from .registry import MAX_CELLS, A, Arg, Ctx, S, VAR, alias, fn
 from .util import (
     array_val,
     as_array,
@@ -255,6 +255,11 @@ def _ceiling_precise(args, ctx):
 @fn("ISO.CEILING", 1, 2, M, S, "ISO.CEILING(number, [significance])", "Rounds a number up to the nearest integer or multiple of significance.")
 def _iso_ceiling(args, ctx):
     return _ceiling_precise(args, ctx)
+
+
+# ECMA.CEILING is CEILING under a second name, a Compatibility function (GridCraft #2776, measured in
+# Excel). Excel reads it from a file without the `_xlfn.` prefix.
+alias("ECMA.CEILING", "CEILING", "Rounds a number up to a multiple of significance.", "Compatibility")
 
 
 @fn("FLOOR", 2, 2, M, S, "FLOOR(number, significance)", "Rounds a number down, toward zero.")

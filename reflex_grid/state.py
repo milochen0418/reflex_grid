@@ -23,11 +23,12 @@ from typing import Any, Dict, List, Optional, Set
 import reflex as rx
 
 from gridcore.core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, col_to_letters, letters_to_col
-from gridcore.engine import EngineError, Session, View, geometry, objects, ui_state, viewport
+from gridcore.engine import Confirm, EngineError, Session, View, geometry, objects, ui_state, viewport
 from gridcore.engine.cmd_file import MIMES, encode, workbook_format
 from gridcore.engine.cmd_format import CELL_STYLE_NAMES, FORMAT_PRESETS  # noqa: F401
 from gridcore.engine.display import value_text
 from gridcore.engine.samples import SAMPLES
+from gridcore.engine.selection import jump
 from gridcore.functions import all_functions
 from gridcore.numfmt import parse as parse_fmt
 
@@ -78,6 +79,10 @@ def _select_new_object(s: Session, before: Set[int]) -> Optional[Dict[str, Any]]
     Delete then removes the object, not the data under the selection (as in Excel)."""
     new = _object_ids(s) - before
     return {"selectObject": {"n": secrets.token_hex(4), "id": min(new)}} if new else None
+
+
+# The commands the OK of the confirm dialog may run, with the parameters it passes on.
+_CONFIRMED = {"edit.moveCells": ("from", "to", "copy"), "formulas.calculationOptions": ("precisionAsDisplayed",)}
 
 
 def _rng(g) -> str:
@@ -199,6 +204,12 @@ class GridState(rx.State):
     @rx.var
     def ribbon(self) -> Dict[str, Any]:
         return self.ui.get("ribbon", {}) if self.ui else {}
+
+    @rx.var
+    def book_view(self) -> Dict[str, bool]:
+        """Display options for this workbook: sheet tabs and scroll bars (GridCraft #3101)."""
+        bv = (self.ui.get("bookView") if self.ui else None) or {}
+        return {k: bool(bv.get(k, True)) for k in ("sheetTabs", "hScroll", "vScroll")}
 
     @rx.var
     def sheet_tabs(self) -> List[Dict[str, Any]]:
@@ -650,8 +661,27 @@ class GridState(rx.State):
                                 self._run(s, "home.rowHeight", {"rows": spans, "height": size})
                 elif t == "fill":
                     self._run(s, "edit.autoFill", {"source": e["source"], "target": e["target"], "mode": e.get("mode", "series")})
+                elif t == "pastePicture":
+                    # A picture on the system clipboard with no text (a screenshot, an image copied
+                    # in a browser) lands as a picture at the active cell, as in Excel (GridCraft #699).
+                    if e.get("tooLarge"):
+                        raise EngineError("The picture is too large (20 MB at most).")
+                    before = _object_ids(s)
+                    self._run(s, "insert.picture", {"data": str(e.get("data") or ""), "name": str(e.get("name") or "Picture.png")})
+                    extra.update(_select_new_object(s, before) or {})
+                elif t == "jump":
+                    # Ctrl+arrow while pointing at cells in a formula: where it lands at the edge of
+                    # the data, without moving the selection (GridCraft #2918).
+                    frm = e.get("from") or [0, 0]
+                    to = jump(s.doc().sheet, (int(frm[0]), int(frm[1])), int(e.get("dr") or 0), int(e.get("dc") or 0))
+                    extra["jump"] = {"seq": seq, "r": to[0], "c": to[1]}
                 elif t == "move":
-                    self._run(s, "edit.moveCells", {"from": e["from"], "to": e["to"], "copy": bool(e.get("copy"))})
+                    params = {"from": e["from"], "to": e["to"], "copy": bool(e.get("copy"))}
+                    try:
+                        self._run(s, "edit.moveCells", {**params, "ask": True})
+                    except Confirm as q:
+                        # Dropping cells onto data asks first, as in Excel (GridCraft #3136).
+                        self.dialog, self.dlg, self.dlg_error = "confirm", {"message": str(q), "command": "edit.moveCells", "params": params}, ""
                 elif t == "filter":
                     self._open_filter(s, int(e["r"]), int(e["c"]), e.get("table"))
                 elif t == "link":
@@ -721,6 +751,12 @@ class GridState(rx.State):
         r = self._run(s, cid, params)
         msgs = s.messages[:]
         s.messages.clear()
+        if cid == "formulas.autoSum" and isinstance(r, dict) and r.get("edit"):
+            # Nothing to add up nearby: the cell opens with `=SUM()`, the caret between the
+            # parentheses, ready to point at cells, as in Excel (GridCraft #2778).
+            text = str(r.get("formula") or "=SUM()")
+            self.edit_request = {"seq": (self.edit_request or {}).get("seq", 0) + 1, "text": text, "caret": len(text) - 1, "mode": "enter"}
+            return None
         if cid == "data.removeDuplicates" and isinstance(r, dict):
             return rx.toast.info(f"{r.get('removed', 0)} duplicate values found and removed; {r.get('remaining', 0)} unique values remain.", position="bottom-center")
         if cid == "edit.find" and isinstance(r, dict) and "count" in r:
@@ -1133,7 +1169,7 @@ class GridState(rx.State):
             dlg["orig"] = dict(dlg)
         elif name in ("find", "replace"):
             last = s.last_find or {}
-            dlg = {"mode": name, "what": last.get("what", ""), "with": "", "matchCase": bool(last.get("matchCase", False)), "wholeCell": bool(last.get("wholeCell", False)), "within": last.get("within", "sheet"), "lookIn": last.get("lookIn", "formulas"), "results": [], "status": ""}
+            dlg = {"mode": name, "what": last.get("what", ""), "with": "", "matchCase": bool(last.get("matchCase", False)), "wholeCell": bool(last.get("wholeCell", False)), "within": "workbook" if last.get("within") == "workbook" else "sheet", "lookIn": last.get("lookIn", "formulas"), "results": [], "status": ""}
         elif name == "goTo":
             dlg = {"reference": "", "special": "blanks"}
         elif name == "pasteSpecial":
@@ -1187,8 +1223,10 @@ class GridState(rx.State):
         elif name == "insertFunction":
             dlg = {"search": "", "category": "Most Used", "selected": "SUM"}
         elif name == "hyperlink":
-            link = ui.get("link")
-            dlg = {"target": link or "", "text": "", "tooltip": ""}
+            # Editing a link starts from its address, display text and ScreenTip (GridCraft #2876).
+            link = sh.hyperlinks.get(sel.active)
+            text = value_text(d.wb, sh, sel.active) if sh.value(sel.active) is not None else ""
+            dlg = {"target": link.target if link is not None else "", "text": text, "orig_text": text, "tooltip": (link.tooltip or "") if link is not None else "", "editing": link is not None}
         elif name == "note":
             from gridcore.engine.cmd_insert import _one_kind
 
@@ -1270,6 +1308,10 @@ class GridState(rx.State):
             if ch is None:
                 raise EngineError("Select a chart first.")
             dlg = {"id": ch.id, "range": ch.source or ""}
+        elif name == "precisionAsDisplayed":
+            # Excel's warning when "Set precision as displayed" is turned on.
+            dlg = {"message": "Data will permanently lose accuracy.", "command": "formulas.calculationOptions", "params": {"precisionAsDisplayed": True}}
+            name = "confirm"
         elif name == "aiFill":
             rng = sel.current()
             used = sh.used_range()
@@ -1342,6 +1384,13 @@ class GridState(rx.State):
 
     def _dialog_action(self, s: Session, name: str, action: str, d: Dict[str, Any]):
         run = lambda cid, **p: s.execute(cid, p)
+        if name == "confirm":
+            # A question the engine or the ribbon asks first (Excel's OK/Cancel): OK runs its command.
+            cid = str(d.get("command") or "")
+            if cid not in _CONFIRMED:
+                raise EngineError("Nothing to confirm.")
+            run(cid, **{k: v for k, v in (d.get("params") or {}).items() if k in _CONFIRMED[cid]})
+            return None, False
         if name == "aiFill":
             return self._ai_fill_prepare(s, d), False
         if name == "formatCells":
@@ -1383,7 +1432,13 @@ class GridState(rx.State):
                 run("home.borders", preset=d["borderPreset"], style=d.get("borderStyle", "thin"), color=d.get("borderColor") or "#000000")
             return None, False
         if name in ("find", "replace"):
-            common = {"what": d.get("what", ""), "matchCase": d.get("matchCase"), "wholeCell": d.get("wholeCell"), "within": d.get("within", "sheet"), "lookIn": d.get("lookIn", "formulas")}
+            within = d.get("within", "sheet")
+            sel = s.doc().selection
+            if within == "sheet" and not (sel.is_single_cell() or (len(sel.ranges) == 1 and sel.current() == s.doc().sheet.merge_at(sel.active))):
+                # As in Excel, a selected range (more than one cell) limits the search on the
+                # sheet to it (GridCraft #3224).
+                within = "selection"
+            common = {"what": d.get("what", ""), "matchCase": d.get("matchCase"), "wholeCell": d.get("wholeCell"), "within": within, "lookIn": d.get("lookIn", "formulas")}
             if action == "findAll":
                 r = s.execute("edit.find", {**common, "all": True})
                 d["results"] = r["matches"][:500]
@@ -1535,7 +1590,8 @@ class GridState(rx.State):
                 run("insert.removeHyperlink")
                 return None, False
             p = {"target": d.get("target", "")}
-            if d.get("text"):
+            # The display text as it was is left out, so a number or formula there stays.
+            if d.get("text") and d.get("text") != d.get("orig_text"):
                 p["text"] = d["text"]
             if d.get("tooltip"):
                 p["tooltip"] = d["tooltip"]

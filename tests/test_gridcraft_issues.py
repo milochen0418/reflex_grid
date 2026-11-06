@@ -1422,3 +1422,481 @@ def test_an_explicit_range_keeps_its_blanks_and_a_padded_stack_is_capped():
         assert display(cell(s, f)) == "#NUM!", f
     assert time.time() - t < 10
     assert cell(s, "=ROWS(HSTACK(SEQUENCE(3),SEQUENCE(2,2)))") == 3 and cell(s, "=COLUMNS(VSTACK(SEQUENCE(1,3),SEQUENCE(2)))") == 3
+
+
+# ---------------------------------------------------------------- GridCraft's issues closed 2026-10-27 to 2026-11-06
+
+
+def test_clear_leaves_the_rows_a_filter_hides():
+    # #1419: Delete and the Clear commands on a filtered selection cleared the rows the filter hid.
+    # Excel leaves them; rows hidden by hand are cleared, and a macro's Range.ClearContents clears
+    # every row of its range, as in Excel.
+    s = new()
+    s.run("range.setValues", range="A1", values=[["Name", "Status"], ["John", "Active"], ["Mary", "Inactive"], ["David", "Active"], ["Sarah", "Inactive"]])
+    s.run("home.bold", range="A2:A5")
+    s.run("review.newNote", cell="A3", text="note")
+    s.run("selection.set", cell="A1")
+    s.run("data.filter")
+    s.run("data.filterColumn", col="B", criterion={"kind": "values", "values": ["Active"]})
+    s.run("edit.clearContents", range="A2:A5")
+    assert [val(s, f"A{r}") for r in range(2, 6)] == [None, "Mary", None, "Sarah"]
+    wb = s.doc().wb
+    bold = lambda a: s.doc().wb.styles.get(s.doc().wb.sheet(0).style_id(RangeRef.parse(a).start)).font.bold
+    s.run("edit.clearFormats", range="A2:A5")
+    assert not bold("A2") and bold("A3")
+    s.run("edit.clearAll", range="A2:B5")
+    assert (val(s, "B2"), val(s, "B3")) == (None, "Inactive")
+    assert (2, 0) in s.doc().wb.sheet(0).comments
+    s.run("data.clearFilter")
+    s.run("home.hideRows", rows="5:5")
+    s.run("edit.clearContents", range="A3:A5")
+    assert (val(s, "A3"), val(s, "A5")) == (None, None)
+    # A macro clears the rows the filter hides too.
+    s = new()
+    s.run("range.setValues", range="A1", values=[["Name"], ["a"], ["b"], ["a"]])
+    s.run("selection.set", cell="A1")
+    s.run("data.filter")
+    s.run("data.filterColumn", col="A", criterion={"kind": "values", "values": ["a"]})
+    s.run("macro.addModule", name="Module1", code='Sub C()\n    Range("A2:A4").ClearContents\nEnd Sub')
+    assert s.run("macro.run", name="C")["status"] == "done"
+    assert [val(s, f"A{r}") for r in range(2, 5)] == [None, None, None]
+
+
+def test_clearing_links_and_notes_respects_sheet_protection():
+    # PR 3244: Clear Hyperlinks and Clear Comments took a locked cell's link and note away on a
+    # protected sheet.
+    s = new()
+    s.run("cell.set", cell="A1", input="x")
+    s.run("insert.hyperlink", cell="A1", target="https://example.com")
+    s.run("review.newNote", cell="A1", text="note")
+    s.run("review.protectSheet")
+    for cid in ("edit.clearHyperlinks", "edit.clearComments", "edit.clearAll", "insert.removeHyperlink"):
+        with pytest.raises(EngineError, match="protected"):
+            s.run(cid, range="A1")
+    sh = s.doc().wb.sheet(0)
+    assert (0, 0) in sh.hyperlinks and (0, 0) in sh.comments
+    s.run("review.unprotectSheet")
+    s.run("edit.clearHyperlinks", range="A1")
+    assert (0, 0) not in s.doc().wb.sheet(0).hyperlinks
+
+
+def test_ecma_ceiling_is_ceiling():
+    # #2776, Excel's table from the issue.
+    s = new()
+    for args, want in [("1.5,1", 2), ("-1.5,1", -1), ("-1.5,-1", -2), ("2.5,2", 4), ("-2.5,2", -2), ("-2.5,-2", -4), ("2.5,0", 0), ("0,1", 0), ("1.234,0.1", 1.3), ("TRUE,1", 1)]:
+        assert cell(s, f"=ECMA.CEILING({args})") == cell(s, f"=CEILING({args})") == want, args
+    for args, want in [("1.5,-1", "#NUM!"), ('1.5,"x"', "#VALUE!"), ("1/0,1", "#DIV/0!")]:
+        assert ev(f"=ECMA.CEILING({args})") == want, args
+    s.run("cell.set", cell="A1", input="=ECMA.CEILING(1.5,1)")
+    assert "<f>ECMA.CEILING(1.5,1)</f>" in part(s, "xl/worksheets/sheet1.xml")  # Excel reads it with no prefix
+
+
+def test_newer_functions_keep_their_xlfn_prefix():
+    # #2775: STOCKHISTORY, TRANSLATE and DETECTLANGUAGE lost `_xlfn.` on save, so Excel no longer
+    # knew them; Excel saves COPILOT without one.
+    body = (
+        '<sheetData><row r="1"><c r="A1"><f>_xlfn.STOCKHISTORY("MSFT",DATE(2020,1,1))</f><v>0</v></c>'
+        '<c r="B1"><f>_xlfn.TRANSLATE("hi","en","fr")</f><v>0</v></c><c r="C1"><f>_xlfn.DETECTLANGUAGE("hi")</f><v>0</v></c>'
+        '<c r="D1"><f>COPILOT("hi")</f><v>0</v></c></row></sheetData>'
+    )
+    xml = part(open_data(minimal_xlsx(body), "a.xlsx"), "xl/worksheets/sheet1.xml")
+    for f in ('_xlfn.STOCKHISTORY("MSFT",DATE(2020,1,1))', '_xlfn.TRANSLATE("hi","en","fr")', '_xlfn.DETECTLANGUAGE("hi")', '<f>COPILOT("hi")'):
+        assert f in xml, f
+
+
+def test_lifted_lookups_stop_past_their_work_budget():
+    # #2716: a lookup lifted over an array of needles searched the whole vector for each, so one
+    # cell ran for days. Past the budget it is #NUM! at once; ordinary ones work as before, and a
+    # binary search isn't metered.
+    s = new()
+    t = time.time()
+    assert display(cell(s, "=ROWS(XMATCH(SEQUENCE(1048576),-SEQUENCE(1048576)))")) == "#NUM!"
+    for f in ("XMATCH(SEQUENCE(501),-SEQUENCE(100000))", "MATCH(SEQUENCE(501),-SEQUENCE(100000),0)", "VLOOKUP(SEQUENCE(501),-SEQUENCE(100000),1,FALSE)", "XLOOKUP(SEQUENCE(501),-SEQUENCE(100000),SEQUENCE(100000))", "HLOOKUP(SEQUENCE(3052),-SEQUENCE(1,16384),1,FALSE)"):
+        assert display(cell(s, f"=ROWS({f})")) == "#NUM!", f
+    assert time.time() - t < 5
+    assert cell(s, "=ROWS(MATCH(SEQUENCE(2000),SEQUENCE(100000)))") == 2000  # approximate: by halves
+    assert cell(s, "=ROWS(LOOKUP(SEQUENCE(2000),SEQUENCE(100000)))") == 2000
+    s.run("range.setValues", range="B1", values=[[10, 1], [20, 2], [30, 3], [40, 4], [50, 5]])
+    assert [cell(s, f) for f in ("=SUM(XMATCH({30;50;10},B1:B5))", "=SUM(XLOOKUP({20;40},B1:B5,C1:C5))", "=SUM(VLOOKUP({30,10},B1:C5,2,FALSE))", "=SUM(MATCH({25,50},B1:B5))")] == [9, 6, 4, 7]
+    assert cell(s, "=ROWS(INDEX(SEQUENCE(1048576),SEQUENCE(1000)))") == 1000  # not a scan
+
+
+def test_rules_on_several_areas_are_written_for_their_top_left_cell():
+    # #3152: a validation or conditional format on several areas reads its relative formulas from
+    # the top-left cell of all of them (the lowest row and column), whatever order they are listed
+    # in, as Excel writes them; the first area listed was taken.
+    s = new()
+    s.run("range.setValues", range="F26:F27", values=[[4], [5]])
+    s.run("data.validation", range="H62:H68,H26:H27,H93:H95", kind="custom", f1="=MOD($H26,$F26)=0")
+    for at, x, ok in [("H26", "4", True), ("H26", "8", True), ("H26", "3", False), ("H27", "10", True), ("H27", "4", False)]:
+        if ok:
+            s.run("cell.set", cell=at, input=x)
+        else:
+            with pytest.raises(EngineError):
+                s.run("cell.set", cell=at, input=x)
+    s.run("range.setValues", range="D2:D6", values=[[1], [0], [0], [1], [0]])
+    s.run("home.conditionalFormat", range="D5:D6,D2:D3", rule={"type": "expression", "formula": "=D2>0", "preset": "lightRed"})
+    from gridcore.engine.cf import CfCache
+
+    cache = CfCache(s.doc().wb, 0)
+    assert [bool(cache.look(RangeRef.parse(a).start) and cache.look(RangeRef.parse(a).start).style) for a in ("D2", "D3", "D5", "D6")] == [True, False, True, False]
+    # A relative list source is read from the cell being checked; a source that takes in the cell
+    # doesn't list the value being typed.
+    s = new()
+    s.run("range.setValues", range="B1", values=[["a"], ["b"], ["c"], ["d"], ["e"]])
+    s.run("data.validation", range="A3:A4,A1:A2", kind="list", f1="=$B1:$B2")
+    assert s.run("data.validationAt", cell="A4")["items"] == ["d", "e"]
+    s = new()
+    s.run("range.setValues", range="A1:A2", values=[["x"], ["y"]])
+    s.run("data.validation", range="A2:A3", kind="list", f1="=$A1:$A2")
+    with pytest.raises(EngineError):
+        s.run("cell.set", cell="A3", input="new")
+    # When the top-left cell goes, the formulas are rewritten for the new one.
+    s = new()
+    s.run("data.validation", range="A1:A9", kind="custom", f1="=A1>10")
+    s.run("data.clearValidation", range="A1")
+    v = s.doc().wb.sheet(0).validations[0]
+    assert v.f1 == "A2>10"
+    s.run("cell.set", cell="A2", input="20")
+    with pytest.raises(EngineError):
+        s.run("cell.set", cell="A3", input="5")
+    # A copy of part of a rule reads the same relative cells from its new place.
+    s = new()
+    s.run("range.setValues", range="B1:B10", values=[[i] for i in range(1, 11)])
+    s.run("home.conditionalFormat", range="A1:A10", rule={"type": "expression", "formula": "=B1>5", "preset": "lightRed"})
+    s.run("edit.copy", range="A5:A6")
+    s.run("selection.set", cell="C5")
+    s.run("edit.paste")
+    rules = [cf for cf in s.doc().wb.sheet(0).cond_formats if any(r.contains((4, 2)) for r in cf.ranges)]
+    assert rules and rules[0].rule.formulas[0].lstrip("=") == "D5>5"
+    # The file says the same (containsText's generated formula is written for the top-left too).
+    s = new()
+    s.run("home.conditionalFormat", range="C5:C6,C2:C3", rule={"type": "containsText", "text": "x", "preset": "lightRed"})
+    assert "SEARCH(&quot;x&quot;,C2)" in part(s, "xl/worksheets/sheet1.xml") or 'SEARCH("x",C2)' in part(s, "xl/worksheets/sheet1.xml")
+
+
+def test_macros_name_ranges_on_a_sheet_whose_name_needs_quotes():
+    # #2012: names qualified by a quoted sheet name (`'Bob''s'!Total`) lost the sheet.
+    s = new()
+    s.run("sheet.rename", name="Bob's")
+    s.run("cell.set", cell="A1", input="5")
+    code = '''Sub T()
+    ActiveWorkbook.Names.Add Name:="'Bob''s'!Local1", RefersTo:="='Bob''s'!$A$1"
+    Range("A2").Name = "'Bob''s'!Local2"
+    Range("B1").Value = Range("A1").Name.Name
+End Sub'''
+    s.run("macro.addModule", name="Module1", code=code)
+    assert s.run("macro.run", name="T")["status"] == "done"
+    assert [(n.name, n.scope) for n in s.doc().wb.names] == [("Local1", 0), ("Local2", 0)]
+    assert val(s, "B1") == "Bob''s'!Local1"  # `'Bob''s'!Local1` written as a value: its first ' is the text prefix
+
+
+def test_find_and_replace_within_the_selection():
+    # #3224: with a range selected, Find and Replace searched the whole sheet (and Replace All
+    # changed cells outside the range). `within: selection` searches the selected cells; the
+    # Find dialog passes it whenever more than one cell is selected, as Excel does.
+    s = new()
+    s.run("range.setValues", range="A1", values=[["pear", "pear"], ["plum", "pear"], ["pear", "fig"], ["pear", "pear"]])
+    s.run("selection.set", range="B1:B4")
+    hits = s.run("edit.find", what="pear", all=True, within="selection")["matches"]
+    assert [h["cell"] for h in hits] == ["B1", "B2", "B4"]
+    assert [s.run("edit.find", what="pear", within="selection")["cell"] for _ in range(3)] == ["B2", "B4", "B1"]
+    sel = s.doc().selection
+    assert (sel.a1(), sel.active) == ("B1:B4", (0, 1))
+    with pytest.raises(EngineError):
+        s.run("edit.find", what="plum", within="selection")
+    assert s.run("edit.replace", what="pear", **{"with": "kiwi"}, all=True, within="selection") == {"replaced": 3}
+    assert [val(s, a) for a in ("A1", "B1", "B4", "A4")] == ["pear", "kiwi", "kiwi", "pear"]
+    assert len(s.run("edit.find", what="pear", all=True)["matches"]) == 3  # the sheet, as before
+
+
+def test_copy_quotes_only_cells_with_tabs_or_line_breaks():
+    # #2225: a cell holding a quote was copied in quotes; Excel quotes only text with a tab or a
+    # line break (checked in Excel 16 for Mac). Pasting this copy pastes the cells, as Excel's own
+    # copy does; the text pasted elsewhere splits as Excel splits it (`"hi" there` loses its quotes).
+    s = new()
+    for at, x in [("A1", 'say "hi"'), ("A2", "plain"), ("A3", '"hi" there'), ("A4", 'x "q"\ny'), ("A5", "tab\tinside")]:
+        s.run("cell.set", cell=at, input=x)
+    text = s.run("edit.copy", range="A1:A5")["text"]
+    assert text == 'say "hi"\nplain\n"hi" there\n"x ""q""\ny"\n"tab\tinside"\n'
+    s.run("selection.set", cell="C1")
+    s.run("edit.paste", text=text)
+    assert [val(s, f"C{r}") for r in range(1, 6)] == ['say "hi"', "plain", '"hi" there', 'x "q"\ny', "tab\tinside"]
+    s.run("edit.clearClipboard")
+    s.run("selection.set", cell="E1")
+    s.run("edit.paste", text=text)
+    assert [val(s, f"E{r}") for r in range(1, 6)] == ['say "hi"', "plain", "hi there", 'x "q"\ny', "tab\tinside"]
+
+
+def test_pasted_text_splits_as_excel_splits_it():
+    # Excel 16 for Mac, ⌘V of plain text: a field starting with a quote is quoted up to a lone
+    # quote, and what follows is added as it is; a quote that never closes takes in the rest. GridCraft
+    # (PR 3231) kept `"hi" there` and split `"a⇥b"x` into three cells; Excel doesn't.
+    from gridcore.engine.cmd_edit import parse_tsv
+
+    for text, want in [
+        ('"hi" there\tx\n', [["hi there", "x"]]),
+        ('say "hi"\n', [['say "hi"']]),
+        ('"a\tb"x\tc', [["a\tbx", "c"]]),
+        ('"x ""q""\ny"\tz\n', [['x "q"\ny', "z"]]),
+        ('"quoted"\tw\n', [["quoted", "w"]]),
+        ('"abc\tdef\nghi', [["abc\tdef\nghi"]]),
+        ('"a""b"\tc\n', [['a"b', "c"]]),
+        ('"a"b"c\td\n', [['ab"c', "d"]]),
+        (' "a"\tb\n', [[' "a"', "b"]]),
+        ('""\tx\n', [["", "x"]]),
+        ('"a\nb"c\td\n', [["a\nbc", "d"]]),
+        ('"a"  \tb\n', [["a  ", "b"]]),
+        ('x\t"a\nb', [["x", "a\nb"]]),
+        ('"a\tb\n', [["a\tb\n"]]),
+        ('p\t"q"r"s\tt\n', [["p", 'qr"s', "t"]]),
+    ]:
+        assert parse_tsv(text) == want, text
+    t = time.time()
+    assert len(parse_tsv('"x\t' * 50000)[0]) == 25001  # linear, whatever the quotes
+    assert time.time() - t < 2
+
+
+def test_drag_and_drop_asks_before_replacing_data():
+    # #3136: dropping cells onto data replaced it without asking. With `ask` (the grid's drag and
+    # drop), cells holding data or showing spilled values ask first; a macro's Cut doesn't ask.
+    from gridcore.engine import Confirm
+
+    s = new()
+    s.run("range.setValues", range="A1:B3", values=[["Apple", "Kiwi"], ["Pear", "Plum"], ["Fig", "Lime"]])
+    with pytest.raises(Confirm, match="There's already data here. Do you want to replace it?"):
+        s.run("edit.moveCells", **{"from": "B1:B3", "to": "A1", "ask": True})
+    assert (val(s, "A1"), val(s, "B1")) == ("Apple", "Kiwi")
+    s.run("edit.moveCells", **{"from": "B1:B3", "to": "A1"})
+    assert (val(s, "A1"), val(s, "A3"), val(s, "B1")) == ("Kiwi", "Lime", None)
+    # Onto empty cells, or overlapping only the moved cells themselves, nothing is asked.
+    s.run("edit.moveCells", **{"from": "A1:A3", "to": "A2", "ask": True})
+    assert val(s, "A4") == "Lime"
+    # A copy (Option-drag in Excel 16 for Mac) replaces the cells there without asking.
+    s.run("edit.moveCells", **{"from": "A2:A4", "to": "A3", "ask": True, "copy": True})
+    assert (val(s, "A3"), val(s, "A5")) == ("Kiwi", "Lime")
+    s = new()
+    s.run("cell.set", cell="A1", input="=SEQUENCE(3)")
+    s.run("range.setValues", range="C2:C3", values=[["Kiwi"], ["Plum"]])
+    with pytest.raises(Confirm):
+        s.run("edit.moveCells", **{"from": "C2:C3", "to": "A2", "ask": True})
+
+
+def test_a_spilled_cell_shows_its_anchors_formula():
+    # #1297: the formula bar of a cell showing a spilled value shows the anchor's formula (greyed
+    # in the grid); the anchor shows it as its own; protection that hides it hides it here too.
+    from gridcore.engine.viewport import ui_state
+
+    s = new()
+    s.run("cell.set", cell="A1", input="=SEQUENCE(3)")
+    got = []
+    for a in ("A1", "A2", "A4"):
+        s.run("selection.set", cell=a)
+        u = ui_state(s)
+        got.append((u["formulaBar"], u["spillFormula"]))
+    assert got == [("=SEQUENCE(3)", None), ("", "=SEQUENCE(3)"), ("", None)]
+    s.run("home.formatCells", range="A1", protection={"hidden": True})
+    s.run("review.protectSheet")
+    s.run("selection.set", cell="A2")
+    assert ui_state(s)["spillFormula"] is None
+
+
+def test_next_corner_of_the_selection():
+    # #1442: Ctrl+. moves the active cell clockwise to the next corner; the area stays selected
+    # and Shift+arrows then move the corner opposite the new active cell.
+    s = new()
+    s.run("selection.set", range="B2:D4", active="B2")
+    assert [s.run("selection.nextCorner")["active"] for _ in range(4)] == ["D2", "D4", "B4", "B2"]
+    assert s.doc().selection.a1() == "B2:D4"
+    s.run("selection.nextCorner")
+    s.run("selection.move", dr=0, dc=1, extend=True)
+    assert s.doc().selection.a1() == "C2:D4"
+    s.run("selection.set", range="B2:D2", active="B2")
+    assert [s.run("selection.nextCorner")["active"] for _ in range(2)] == ["D2", "B2"]
+    s.run("selection.set", range="C5")
+    assert s.run("selection.nextCorner")["active"] == "C5"
+    # A corner in a hidden column is skipped.
+    s.run("home.hideColumns", cols="D:D")
+    s.run("selection.set", range="B2:D4", active="B2")
+    assert [s.run("selection.nextCorner")["active"] for _ in range(2)] == ["B4", "B2"]
+
+
+def test_sheet_tabs_and_scroll_bars_can_be_hidden_and_stay_so():
+    # #3101: the workbook's Show sheet tabs / scroll bars settings were lost on save; now they are
+    # commands, saved with the workbook and undoable.
+    s = new()
+    assert s.run("view.showSheetTabs") == {"on": False}
+    s.run("view.showVerticalScrollBar", on=False)
+    assert 'showVerticalScroll="0"' in part(s, "xl/workbook.xml") and 'showSheetTabs="0"' in part(s, "xl/workbook.xml")
+    v = roundtrip(s).doc().wb.view
+    assert (v.show_sheet_tabs, v.show_horizontal_scroll, v.show_vertical_scroll) == (False, True, False)
+    s.run("edit.undo")
+    assert s.doc().wb.view.show_vertical_scroll
+    body = '<sheetData/>'
+    s2 = open_data(minimal_xlsx(body, workbook_extra='<bookViews><workbookView showHorizontalScroll="0"/></bookViews>'), "v.xlsx")
+    assert not s2.doc().wb.view.show_horizontal_scroll and s2.doc().wb.view.show_sheet_tabs
+
+
+def test_a_doughnut_keeps_its_hole_and_first_slice_angle():
+    # #1823: every series is a ring (drawn by the grid); the hole size and first slice angle are
+    # kept (they were written as 50 and 0 whatever the file said); a new doughnut has Excel's 75.
+    s = new()
+    s.run("range.setValues", range="A1", values=[["x", "a", "b"], ["p", 1, 2], ["q", 3, 4]])
+    s.run("selection.set", range="A1:C3")
+    s.run("insert.chart", kind="doughnut")
+    ch = s.doc().wb.sheet(0).charts[0]
+    assert (ch.hole_size, ch.first_slice_angle) == (75, 0)
+    s.run("chart.update", id=ch.id, holeSize=40, firstSliceAngle=450)
+    xml = part(s, "xl/charts/chart1.xml")
+    assert '<c:firstSliceAng val="90"/><c:holeSize val="40"/>' in xml
+    ch2 = roundtrip(s).doc().wb.sheet(0).charts[0]
+    assert (ch2.kind, ch2.hole_size, ch2.first_slice_angle, len(ch2.series)) == ("doughnut", 40, 90, 2)
+    from gridcore.engine.viewport import chart_data
+
+    d = chart_data(s.doc().wb, 0, s.doc().wb.sheet(0).charts[0])
+    assert (d["holeSize"], d["firstSliceAngle"], len(d["series"])) == (40, 90, 2)
+
+
+def test_precision_as_displayed_rounds_as_excel_stores():
+    # #1343: "Set precision as displayed" was read and saved but never applied. Values each format
+    # stores, observed in Excel through COM (GridCraft's table), all checked again in Excel 16 for
+    # Mac, with typed, reformatted and formula values and a protected sheet's constants.
+    from gridcore.numfmt import parse as parse_fmt
+
+    cases = [
+        ("0", 527.91, 528.0), ("0", 2.5, 3.0), ("0", -2.5, -3.0), ("0.00", 1.005, 1.01), ("0.00", 1.23456, 1.23), ("#.##", 1.2, 1.2),
+        ("0.0??", 1.23456, 1.235), ("0%", 0.123456, 0.12), ("0.00%", 0.123456, 0.1235), ("$#,##0.00", 1234.5678, 1234.57),
+        ("0.0,,", 1234567.891, 1200000.0), ("#,##0,", 1234567.891, 1235000.0), ("# ?/?", 0.3333333, 1.0 / 3.0), ("# ?/8", 0.3, 0.25),
+        ("0.00E+00", 123456.789, 123000.0), ("##0.0E+0", 123456.789, 120000.0), ("###.00E+0", 98765.4, 98800.0),
+        ("0.00;(0.0)", -1.23456, -1.2), ("0.00;-0.00;\"zero\"", 0.001, 0.0), ("General", 1.0 / 3.0, 1.0 / 3.0), ("m/d/yyyy", 45000.75, 45000.75),
+        ("mm:ss.0", 0.0001234567, 0.0001234567), ("@", 1.23456, 1.23456), ('"x"', 1.23456, 1.23456), (";;;", 1.23456, 1.23456),
+        ("[<1]0.00;0", 2.0 + 1.0 / 3.0, 2.33), ("[<1]0.00;0", -10.0 / 3.0, -3.0), ("[>1]0.0;0.000", 1.0 / 3.0, 0.3), ("[<1]0.00", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1]0.00;@", -2.0 - 1.0 / 3.0, -2.33), ("0.0;;0.000", -2.0 - 1.0 / 3.0, -2.333), (";0.0", 2.0 + 1.0 / 3.0, 2.3), ("0.0;[Red];0.000", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+    ]
+    # Excel 16 for Mac: in a scientific section each `%` keeps two more digits and each scaling
+    # comma after the exponent three fewer, though neither changes what it shows (GridCraft leaves
+    # a `%` there whole).
+    cases += [
+        ("0.0%E+0", 12345.0, 12350.0), ("0%E+0", 12345.0, 12300.0), ("0.0%E+0", 0.000123456, 0.0001235), ("0.0%%E+0", 12345.678, 12345.7),
+        ("##0.0%E+0", 123456.789, 123500.0), ("0.0E+0%", 12345.0, 12350.0), ("0.0%E+00", 98765.4321, 98770.0),
+        ("0.0E+0,", 12345.0, 0.0), ("0.000E+0,", 12345.678, 10000.0), ("0.0E+0,,", 1234567.0, 0.0), ("0.00E+00,", 98765.4321, 100000.0),
+        ("##0.0E+0,", 123456.789, 0.0), ("0.0%E+0,", 12345.0, 10000.0), ("0.0,E+0", 12345.0, 12000.0),
+    ]
+    for code, n, want in cases:
+        assert parse_fmt(code).round_as_displayed(n) == pytest.approx(want, rel=1e-15, abs=0), (code, n)
+    z = parse_fmt("0.00").round_as_displayed(-0.004)
+    assert z == 0.0 and math.copysign(1, z) == 1
+    # In a workbook: turning it on rounds the constants for good, formulas round their results,
+    # a typed or reformatted number is stored as it shows, spilled values too, and undo goes back.
+    s = new()
+    s.run("cell.set", cell="A1", input="1.234")
+    s.run("home.numberFormat", range="A1:A3", format="0.00")
+    s.run("cell.set", cell="A2", input="=A1*3")
+    s.run("cell.set", cell="B1", input="=A1*1000")
+    assert s.run("formulas.calculationOptions", precisionAsDisplayed=True)["precisionAsDisplayed"]
+    assert (val(s, "A1"), val(s, "A2"), val(s, "B1")) == (1.23, 3.69, 1230)
+    s.run("cell.set", cell="A3", input="2.3456")
+    assert val(s, "A3") == 2.35
+    s.run("home.numberFormat", range="A3", format="0.0")
+    assert val(s, "A3") == 2.4
+    s.run("cell.set", cell="C1", input="=SEQUENCE(3,1,0.123,0.111)")
+    s.run("home.numberFormat", range="C1:C3", format="0.0")
+    assert [val(s, f"C{r}") for r in (1, 2, 3)] == [0.1, 0.2, 0.3]
+    s.run("edit.undo")
+    assert val(s, "C2") == pytest.approx(0.234)
+    assert 'fullPrecision="0"' in part(s, "xl/workbook.xml")
+    s.run("formulas.calculationOptions", precisionAsDisplayed=False)
+    s.run("cell.set", cell="A3", input="2.3456")
+    assert val(s, "A3") == 2.3456
+    # A locked constant on a protected sheet keeps its value; VBA switches it too.
+    s = new()
+    s.run("cell.set", cell="A1", input="1.234")
+    s.run("home.numberFormat", range="A1", format="0.0")
+    s.run("review.protectSheet")
+    s.run("formulas.calculationOptions", precisionAsDisplayed=True)
+    assert val(s, "A1") == 1.234
+    s = new()
+    s.run("cell.set", cell="A1", input="1.234")
+    s.run("home.numberFormat", range="A1", format="0.0")
+    s.run("macro.addModule", name="Module1", code='Sub P()\n    Range("B1").Value = ThisWorkbook.PrecisionAsDisplayed\n    ThisWorkbook.PrecisionAsDisplayed = True\nEnd Sub')
+    assert s.run("macro.run", name="P")["status"] == "done"
+    assert (val(s, "B1"), val(s, "A1"), s.doc().wb.calc.precision_as_displayed) == (False, 1.2, True)
+
+
+def test_google_sheets_export_wrappers_open_as_their_formulas():
+    # #2871: Google Sheets writes `IFERROR(__xludf.DUMMYFUNCTION("<formula>"),<value>)` for functions
+    # it thinks Excel lacks. When ReflexGrid calculates every function inside, the formula opens
+    # as itself (so it recalculates); a Google-only function keeps the wrapper and its value.
+    body = (
+        '<sheetData><row r="1"><c r="A1"><f>IFERROR(__xludf.DUMMYFUNCTION("SUM(ROW(B1:B3))"),6)</f><v>6</v></c>'
+        '<c r="B1" t="str"><f>IFERROR(__xludf.DUMMYFUNCTION("GOOGLETRANSLATE(""hi"",""en"",""fr"")"),"salut")</f><v>salut</v></c>'
+        '<c r="C1"><f>1+IFERROR(__xludf.DUMMYFUNCTION("1+2"),3)*2</f><v>7</v></c></row></sheetData>'
+    )
+    s = open_data(minimal_xlsx(body), "google.xlsx")
+    assert inp(s, "A1") == "=SUM(ROW(B1:B3))" and val(s, "A1") == 6
+    assert inp(s, "B1").startswith("=IFERROR(__XLUDF.DUMMYFUNCTION(") and val(s, "B1") == "salut"
+    assert inp(s, "C1") == "=1+(1+2)*2" and val(s, "C1") == 7
+
+
+def test_set_values_reports_what_typed_input_read_and_keeps_text_with_parse_false():
+    # #2255: range.setValues read strings by typed input without a word ("05.04.2026" became a
+    # date): the result names them. `parse: false` keeps every string as text, "" clearing.
+    s = new()
+    r = s.run("range.setValues", range="A1", values=[["05.04.2026", "02/11/2026", "2.500", "4.25 %", "=1+1", "'keep", "text", 3]])
+    assert r["convertedCount"] == 4
+    assert r["converted"][0] == {"cell": "A1", "input": "05.04.2026", "stored": "5/4/2026"}
+    assert [c["cell"] for c in r["converted"]] == ["A1", "B1", "C1", "D1"]
+    long = s.run("range.setValues", range="J1", values=[["9" * 100]])["converted"][0]["input"]
+    assert len(long) == 33 and long.endswith("…")
+    r = s.run("range.setValues", range="A3", parse=False, values=[["05.04.2026", "2.500", "'keep", "=1+1", "", 3]])
+    assert r["convertedCount"] == 0
+    assert [val(s, f"{c}3") for c in "ABCDEF"] == ["05.04.2026", "2.500", "'keep", 2, None, 3]
+    s.run("range.setValues", range="E3", values=[["x"]])
+    s.run("range.setValues", range="E3", parse=False, values=[[""]])
+    assert s.run("cell.get", cell="E3")["value"] is None
+    assert roundtrip(s).run("cell.get", cell="A3")["value"] == "05.04.2026"
+
+
+def test_a_web_page_saved_as_xls_opens_its_table():
+    # #3166: a web app's "Export to Excel" is often an HTML table named .xls; it opened as lines of
+    # markup. Its table opens as a sheet: values read as typed, <th> bold and centred, <x:Name>
+    # names the sheet, spans laid out, and a page in Big5 keeps its characters.
+    page = (
+        '﻿<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8">'
+        "<!--[if gte mso 9]><xml><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Orders</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></xml><![endif]-->"
+        "</head><body><table><thead><tr><th>Item</th><th>Qty</th><th>Code</th></tr></thead><tbody>"
+        '<tr><td>Kiwi &amp;\n Lime</td><td>12</td><td>007</td></tr><tr><td>Plum</td><td x:num="4.5">4,50</td><td>042</td></tr>'
+        "<tr><td rowspan=2>Two<br>lines</td><td colspan=2>wide</td></tr><tr><td>x</td><td>y</td></tr></tbody></table></body></html>"
+    )
+    s = open_data(base64.b64encode(page.encode("utf-8")).decode(), "orders.xls")
+    d = s.doc()
+    sh = d.wb.sheet(0)
+    assert sh.name == "Orders" and "is a web page (HTML)" in d.warnings[0]
+    assert [[val(s, f"{c}{r}") for c in "ABC"] for r in range(1, 6)] == [
+        ["Item", "Qty", "Code"], ["Kiwi & Lime", 12, 7], ["Plum", 4.5, 42], ["Two\nlines", "wide", None], [None, "x", "y"]
+    ]
+    st = d.wb.styles.get(sh.style_id((0, 0)))
+    assert st.font.bold and st.align.h == "center" and not d.wb.styles.get(sh.style_id((1, 0))).font.bold
+    big5 = "<html><head><meta http-equiv='Content-Type' content='text/html; charset=big5'></head><body><table><tr><td>交易日期</td><td>金額</td></tr><tr><td>2026/11/01</td><td>1,234</td></tr></table></body></html>"
+    s = open_data(base64.b64encode(big5.encode("big5")).decode(), "bank.xls")
+    assert [val(s, a) for a in ("A1", "B1", "B2")] == ["交易日期", "金額", 1234] and inp(s, "A2") == "11/1/2026"
+    assert open_data(base64.b64encode(page.encode("utf-8")).decode(), "orders.html").doc().warnings == []
+    assert val(open_data(base64.b64encode(b"<b>,1\nx,2\n").decode(), "notes.csv"), "B2") == 2  # still a CSV
+    assert inp(open_data(base64.b64encode(b"<html><body><p>no table</p></body></html>").decode(), "x.html"), "A1").startswith("<html>")
+
+
+def test_files_with_these_fixes_read_back_in_openpyxl_too():
+    # The workbook view's flags, a doughnut's hole and angle and the new `_xlfn.` names, read by
+    # another library.
+    s = new()
+    s.run("view.showSheetTabs", on=False)
+    s.run("range.setValues", range="A1", values=[["x", "a"], ["p", 1], ["q", 3]])
+    s.run("selection.set", range="A1:B3")
+    s.run("insert.chart", kind="doughnut")
+    s.run("cell.set", cell="D1", input='=STOCKHISTORY("MSFT",DATE(2020,1,1))')
+    raw = base64.b64decode(s.run("file.saveBytes")["data"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        wb = openpyxl.load_workbook(io.BytesIO(raw))
+    assert wb.views[0].showSheetTabs is False
+    assert wb.active["D1"].value == '=_xlfn.STOCKHISTORY("MSFT",DATE(2020,1,1))'

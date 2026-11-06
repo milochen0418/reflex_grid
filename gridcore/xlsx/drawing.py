@@ -295,7 +295,20 @@ def read_chart(root: ET.Element) -> Optional[Chart]:
             x_title = x_title or _rich_title(child(ax, "title"))
         elif n == "valAx":
             y_title = y_title or _rich_title(child(ax, "title"))
-    return Chart(id=0, kind=kind, title=title, series=series, legend=legend, data_labels=data_labels, gridlines=gridlines, x_title=x_title, y_title=y_title)
+    ch = Chart(id=0, kind=kind, title=title, series=series, legend=legend, data_labels=data_labels, gridlines=gridlines, x_title=x_title, y_title=y_title)
+    if kind in ("pie", "doughnut"):
+        # A doughnut's hole and the first slice's angle (GridCraft PR 1827): 75 % and 0° when absent.
+        hole = _int_val(child_val(first, "holeSize")) if kind == "doughnut" else None
+        ch.hole_size = min(max(hole if hole is not None else 75, 10), 90)
+        ch.first_slice_angle = (_int_val(child_val(first, "firstSliceAng")) or 0) % 360
+    return ch
+
+
+def _int_val(v: Optional[str]) -> Optional[int]:
+    try:
+        return int(float((v or "").strip()))
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------- writing
@@ -424,7 +437,9 @@ def write_chart(wb, sheet_index: int, ch: Chart) -> str:
         axes = "cat"
     elif k in ("pie", "doughnut"):
         s.append(f'<c:{"pieChart" if k == "pie" else "doughnutChart"}><c:varyColors val="1"/>')
-        group_end = ('<c:firstSliceAng val="0"/></c:pieChart>' if k == "pie" else '<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>')
+        angle = int(getattr(ch, "first_slice_angle", 0) or 0) % 360
+        hole = min(max(int(getattr(ch, "hole_size", 75) or 75), 10), 90)
+        group_end = f'<c:firstSliceAng val="{angle}"/></c:pieChart>' if k == "pie" else f'<c:firstSliceAng val="{angle}"/><c:holeSize val="{hole}"/></c:doughnutChart>'
         axes = None
     elif k.startswith("area"):
         grouping = "percentStacked" if k == "areastacked100" else ("stacked" if k == "areastacked" else "standard")

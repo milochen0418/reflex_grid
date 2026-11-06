@@ -4,7 +4,11 @@ moving end, the last row reached and drawn, a new chart selected so Delete remov
 double-clicking the fill handle, a validation's input message under its open list, Center Across
 Selection, Shrink to Fit and a merged area's borders, links that may not run script, panning the
 grid with a finger, a multi-line value in an unwrapped cell on one line, Page Up into frozen rows
-scrolling the rows below back to the top, and Shift+Arrow on a whole column keeping the view."""
+scrolling the rows below back to the top, and Shift+Arrow on a whole column keeping the view. Then
+GridCraft's issues closed 2026-10-27 to 2026-11-06: AutoSum's caret, Ctrl+., Ctrl+Shift+Down while
+pointing, a spilled cell's formula, dropping onto data (a move asks, a copy doesn't), a linked cell's menu and dialog, Find in a
+selected range, copying quotes, hidden sheet tabs and scroll bars, pasting a picture, doughnut rings,
+Set Precision as Displayed and a web page saved as .xls."""
 
 import sys
 from pathlib import Path
@@ -279,6 +283,250 @@ def body(g: Grid) -> None:
         assert t.name_box() == "A1", t.name_box()
     finally:
         ctx.close()
+
+    november(g)
+
+
+def menu_items(g: Grid, a1: str) -> list:
+    """The labels of a cell's context menu (it stays open)."""
+    x, y = g._exact_center(a1)
+    g.page.mouse.click(x, y, button="right")
+    g.page.locator(".rg-menu-item").first.wait_for(state="visible")
+    return [g.page.locator(".rg-menu-item").nth(i).inner_text().split("\n")[0].strip() for i in range(g.page.locator(".rg-menu-item").count())]
+
+
+def menu_pick(g: Grid, label: str) -> None:
+    g.page.locator(".rg-menu-item", has_text=label).first.dispatch_event("mousedown")
+    g.wait_idle(0.3)
+
+
+def november(g: Grid) -> None:
+    """GridCraft's issues closed from 2026-10-27 to 2026-11-06, on a workbook of their own."""
+    page = g.page
+    base = page.url.split("/book/")[0]
+    g.open(base)
+
+    # GridCraft #2778: AutoSum with nothing to add up opens =SUM() with the caret between the
+    # parentheses, ready to point (nothing happened before).
+    g.click("B2")
+    page.keyboard.press("Alt+Equal")
+    page.wait_for_function("() => document.querySelector('#rg-editor').value === '=SUM()'", timeout=8000)
+    g.wait_idle(0.2)
+    assert page.evaluate("() => document.querySelector('#rg-editor').selectionStart") == 5
+    page.keyboard.type("3,4")
+    page.keyboard.press("Enter")
+    g.wait_text("B2", "7")
+
+    # GridCraft #1442: Ctrl+. walks the corners of the selection clockwise; the range stays selected.
+    for a, t in (("D4", "tl"), ("F4", "tr"), ("F6", "br"), ("D6", "bl")):
+        g.type_in(a, t)
+    g.select("D4:F6")
+    page.focus("#rg-editor")
+    seen = []
+    for _ in range(4):
+        g.key(f"{MOD}+Period")
+        g.wait_idle(0.3)
+        seen.append(g.formula_bar())
+    assert seen == ["tr", "br", "bl", "tl"], seen
+    page.locator(".rg-selection").wait_for(state="visible")
+
+    # GridCraft #2918: Ctrl+Shift+Down while pointing extends the pointed range to the edge of the data.
+    for r in range(1, 6):
+        g.type_in(f"H{r}", str(r))
+    g.click("J1")
+    page.keyboard.type("=SUM(")
+    g.click("H1")
+    page.wait_for_function("() => document.querySelector('#rg-editor').value === '=SUM(H1'", timeout=8000)
+    page.keyboard.press(f"{MOD}+Shift+ArrowDown")
+    page.wait_for_function("() => document.querySelector('#rg-editor').value === '=SUM(H1:H5'", timeout=8000)
+    page.keyboard.type(")")
+    page.keyboard.press("Enter")
+    g.wait_text("J1", "15")
+
+    # GridCraft #1297: a cell showing a spilled value shows its anchor's formula, greyed.
+    g.type_in("L1", "=SEQUENCE(3)")
+    g.click("L2")
+    page.wait_for_function("() => document.querySelector('#rg-formula-bar').placeholder === '=SEQUENCE(3)'", timeout=8000)
+    assert g.formula_bar() == ""
+    g.click("L1")
+    g.wait_formula_bar("=SEQUENCE(3)")
+    assert not page.locator("#rg-formula-bar").get_attribute("placeholder")
+
+    # GridCraft #3136: dropping cells onto data asks first: Cancel keeps both, OK replaces.
+    g.type_in("A10", "keep")
+    g.type_in("C10", "move")
+
+    def drag_border(src: str, dst: str) -> None:
+        g.click(src)
+        x, y, w, h = g.cell_rect(src)
+        page.mouse.move(x + 1, y + h / 2)
+        page.mouse.down()
+        tx, ty = g._exact_center(dst)
+        page.mouse.move(tx + 1, ty, steps=8)
+        page.mouse.up()
+        g.wait_idle(0.3)
+
+    drag_border("C10", "A10")
+    page.locator("#dlg-confirm").wait_for(state="visible")
+    assert "There's already data here" in page.locator("#dlg-confirm-text").inner_text()
+    page.click("#dlg-cancel")
+    page.locator("#dlg-confirm").wait_for(state="detached")
+    g.wait_text("A10", "keep")
+    assert g.text("C10") == "move"
+    drag_border("C10", "A10")
+    page.locator("#dlg-confirm").wait_for(state="visible")
+    g.dialog_ok("confirm")
+    g.wait_text("A10", "move")
+    assert g.text("C10") in (None, ""), g.text("C10")
+    # A copy (Ctrl or ⌘ held; Option in Excel for Mac) replaces the data without asking, as Excel does.
+    g.type_in("A11", "keep2")
+    g.type_in("C11", "copy2")
+    g.click("C11")
+    x, y, w, h = g.cell_rect("C11")
+    page.mouse.move(x + 1, y + h / 2)
+    page.keyboard.down(MOD)
+    page.mouse.down()
+    tx, ty = g._exact_center("A11")
+    page.mouse.move(tx + 1, ty, steps=8)
+    page.mouse.up()
+    page.keyboard.up(MOD)
+    g.wait_text("A11", "copy2")
+    assert g.text("C11") == "copy2" and page.locator("#dlg-confirm").count() == 0
+
+    # GridCraft #2876 and #2120: a linked cell's menu edits, opens or removes its link; editing
+    # starts from its text, address and ScreenTip, and keeps a formula there.
+    page.evaluate("() => { window.__opened = null; window.open = (u) => { window.__opened = u; return null; }; }")
+    g.type_in("A12", "=1+2")
+    g.click("A12")
+    page.click("#tab-insert")
+    page.get_by_role("button", name="Link", exact=True).click()
+    page.locator("#dlg-hyperlink").wait_for(state="visible")
+    assert page.input_value("#dlg-text") == "3"
+    page.fill("#dlg-target", "https://example.com/a")
+    page.fill("#dlg-tooltip", "tip")
+    g.dialog_ok("hyperlink")
+    labels = menu_items(g, "A12")
+    assert "Edit Hyperlink…" in labels and "Open Hyperlink" in labels and "Remove Hyperlink" in labels and "Link…" not in labels, labels
+    menu_pick(g, "Edit Hyperlink…")
+    page.locator("#dlg-hyperlink").wait_for(state="visible")
+    assert page.locator("#dlg-hyperlink").get_by_text("Edit Hyperlink").count() >= 1
+    assert (page.input_value("#dlg-text"), page.input_value("#dlg-target"), page.input_value("#dlg-tooltip")) == ("3", "https://example.com/a", "tip")
+    page.fill("#dlg-target", "https://example.com/b")
+    g.dialog_ok("hyperlink")
+    g.click("A12")
+    g.wait_formula_bar("=1+2")
+    menu_items(g, "A12")
+    menu_pick(g, "Open Hyperlink")
+    page.wait_for_function("() => window.__opened === 'https://example.com/b'", timeout=8000)
+    menu_items(g, "A12")
+    menu_pick(g, "Remove Hyperlink")
+    assert "Link…" in menu_items(g, "A12")
+    page.keyboard.press("Escape")
+    g.click("B12")
+
+    # GridCraft #3224: with a range selected, Find All lists only the matches in it.
+    for a in ("N1", "N2", "O1"):
+        g.type_in(a, "pear")
+    for sel, count in (("N1:N2", "2"), ("P5", "3")):
+        g.select(sel)
+        page.focus("#rg-editor")
+        g.key("Mod+f")
+        page.locator("#dlg-find").wait_for(state="visible")
+        page.fill("#dlg-what", "pear")
+        page.click("#dlg-find-all")
+        page.wait_for_function("c => (document.querySelector('#dlg-status') || {}).innerText === c + ' cell(s) found'", arg=count, timeout=8000)
+        page.keyboard.press("Escape")
+        page.locator("#dlg-find").wait_for(state="detached")
+
+    # GridCraft #2225: a cell with quotes is copied as it is; only tabs and line breaks quote.
+    page.evaluate("() => navigator.clipboard.writeText('')")
+    g.type_in("Q1", 'say "hi"')
+    g.click("Q1")
+    g.key("Mod+c")
+    page.wait_for_function("async () => (await navigator.clipboard.readText()).startsWith('say')", timeout=8000)
+    assert page.evaluate("() => navigator.clipboard.readText()").rstrip("\n") == 'say "hi"'
+    page.keyboard.press("Escape")
+
+    # GridCraft #3101: View › Show hides and shows the sheet tabs and the scroll bars.
+    page.click("#tab-view")
+    page.click("#rb-sheet-tabs")
+    page.locator("#rg-sheet-tab-bar").wait_for(state="detached")
+    page.click("#rb-sheet-tabs")
+    page.locator("#rg-sheet-tab-bar").wait_for(state="visible")
+    page.click("#rb-vscroll")
+    page.wait_for_function("() => document.querySelector('.rg-scroller').classList.contains('rg-no-vbar')", timeout=8000)
+    page.click("#rb-vscroll")
+    page.wait_for_function("() => !document.querySelector('.rg-scroller').classList.contains('rg-no-vbar')", timeout=8000)
+
+    # GridCraft #699: a picture on the clipboard (no text) is pasted at the active cell.
+    g.click("S3")
+    page.evaluate(
+        """async () => {
+            const c = document.createElement('canvas'); c.width = 30; c.height = 20;
+            const x = c.getContext('2d'); x.fillStyle = '#c00'; x.fillRect(0, 0, 30, 20);
+            const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+            const dt = new DataTransfer(); dt.items.add(new File([blob], 'shot.png', { type: 'image/png' }));
+            document.querySelector('#rg-editor').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+        }"""
+    )
+    page.locator(".rg-image").wait_for(state="visible")
+    page.keyboard.press("Escape")
+    g.click("B25")
+
+    # GridCraft #1823: every series of a doughnut is a ring.
+    g.type_in("D20", "k")
+    g.type_in("E20", "a")
+    g.type_in("F20", "b")
+    for r, (k, a, b) in enumerate((("p", 1, 2), ("q", 3, 4)), start=21):
+        g.type_in(f"D{r}", k)
+        g.type_in(f"E{r}", str(a))
+        g.type_in(f"F{r}", str(b))
+    g.select("D20:F22")
+    page.click("#tab-insert")
+    page.click('button[title="Pie"]')
+    page.locator("[role=menuitem]", has_text="Doughnut").click()
+    page.locator("[role=menu]").wait_for(state="detached")
+    chart = page.locator(".rg-chart").last
+    chart.wait_for(state="visible")
+    page.wait_for_function("() => [...document.querySelectorAll('.rg-chart')].some((c) => c.querySelectorAll('path[fill-rule=evenodd]').length === 4)", timeout=8000)
+    page.focus("#rg-editor")
+    page.keyboard.press("Delete")
+    page.wait_for_function("() => !document.querySelectorAll('.rg-chart path[fill-rule=evenodd]').length", timeout=8000)
+
+    # GridCraft #1343: Set Precision as Displayed asks first, then numbers are stored as they show.
+    g.type_in("H20", "$1.234")
+    g.type_in("I20", "=H20*1000")
+    g.wait_text("I20", "1234")
+    page.click("#tab-formulas")
+    page.click('button[title="Calculation Options"]')
+    page.locator("[role=menuitem]", has_text="Set Precision as Displayed").click()
+    page.locator("#dlg-confirm").wait_for(state="visible")
+    assert "permanently lose accuracy" in page.locator("#dlg-confirm-text").inner_text()
+    g.dialog_ok("confirm")
+    g.wait_text("I20", "1230")
+    page.click('button[title="Calculation Options"]')
+    page.locator("[role=menuitem]", has_text="Use Full Precision").click()
+    g.wait_idle(0.5)
+    g.type_in("H20", "$1.234")
+    g.wait_text("I20", "1234")
+    g.shot("november")
+
+    # GridCraft #3166: a web page saved as .xls opens its table (it opened as lines of markup).
+    src = g.out / "orders.xls"
+    src.write_text(
+        '<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body><table>'
+        "<tr><th>Item</th><th>Qty</th></tr><tr><td>Kiwi</td><td>12</td></tr><tr><td>Plum</td><td x:num=\"4.5\">4,50</td></tr></table></body></html>",
+        encoding="utf-8",
+    )
+    page.click("#tab-file")
+    page.click("#bs-open")
+    page.locator("#dlg-open").wait_for(state="visible")
+    page.locator('#dlg-open input[type="file"]').set_input_files(str(src))
+    g.wait_title("orders")
+    g.wait_idle(0.8)
+    g.wait_text("A1", "Item")
+    g.wait_text("B3", "4.5")
+    assert g.text("A2") == "Kiwi"
 
 
 if __name__ == "__main__":

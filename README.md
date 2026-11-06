@@ -18,7 +18,7 @@ and Microsoft Excel without conversion. It is written in Python, with [Reflex](h
 [AI that asks first](https://youtu.be/196pWZceyas?t=125) ·
 [Checked against Excel](https://youtu.be/196pWZceyas?t=161)
 
-| 479 | 231 | 749 of 757 | 1,030 |
+| 480 | 235 | 749 of 757 | 1,030 |
 |---|---|---|---|
 | worksheet functions, with dynamic arrays and `LET`/`LAMBDA` | commands: every action in the app is one you can script | published comparison cases that [matched Microsoft Excel](https://milochen0418.github.io/reflex_grid/compatibility.html) | unit tests on every change, plus 14 browser suites |
 
@@ -51,7 +51,7 @@ copy and paste with relative references, Paste Special, AutoSum, Format Cells, c
 validation dropdowns, AutoFilter, sorting, tables, charts, notes, freeze panes, zoom, undo and redo, and the
 familiar keyboard shortcuts.
 
-Behind them is a real calculation engine: 479 worksheet functions, dynamic arrays that spill (`FILTER`, `SORT`,
+Behind them is a real calculation engine: 480 worksheet functions, dynamic arrays that spill (`FILTER`, `SORT`,
 `UNIQUE`, `SEQUENCE`…), `LET`/`LAMBDA`/`MAP`/`REDUCE`, structured table references, 3-D references, legacy array
 formulas, iterative calculation and incremental recalculation.
 
@@ -417,7 +417,7 @@ back only your own changes. The server saves the workbook as `.xlsx` (`.xlsm` wi
 [Working together](#working-together).
 
 **Can I calculate Excel formulas in Python without Excel?**
-Yes. openpyxl reads and writes formulas but doesn't calculate them; gridcore does, with 479 functions, dynamic
+Yes. openpyxl reads and writes formulas but doesn't calculate them; gridcore does, with 480 functions, dynamic
 arrays that spill, `LET`/`LAMBDA`, structured references and incremental recalculation. Use `Session` (above)
 or `poetry run python -m gridcore.cli eval '=SUM(1,2)'`.
 
@@ -439,9 +439,9 @@ lists the macro limits.
 
 ## 中文簡介
 
-**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：479 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。搭配 re_ddns 的 AI Hub，AI 助手可以幫你改工作表、寫 VBA、設計 UserForm，每次修改都要你按 Accept 才生效，並可一鍵退回；VBA 編輯器裡可以打字或用說的請 AI 寫程式，編譯或執行出錯時按 Fix with AI 修正；模型可選 Claude 或本機模型。MIT 授權。最新介紹影片：[英文](https://youtu.be/196pWZceyas)，約 3 分鐘；示範影片：[中文](https://youtu.be/OvGv0PB3UKU)；[全部影片](https://milochen0418.github.io/reflex_grid/#videos)。
+**繁體中文**：ReflexGrid 是開源、可自架的線上 Excel。它在瀏覽器中開啟與儲存真正的 `.xlsx`、`.xlsm` 活頁簿，執行 Excel **VBA 巨集與 UserForm（使用者表單）**，多人透過連結即可**即時協作**編輯同一份活頁簿。Excel 網頁版無法執行 VBA 巨集，ReflexGrid 可以。引擎 gridcore 以純 Python 撰寫：480 個工作表函數、動態陣列、`LET`/`LAMBDA`，也能在沒有 Excel 的 Linux、macOS 或伺服器上用 Python 執行 VBA 巨集。搭配 re_ddns 的 AI Hub，AI 助手可以幫你改工作表、寫 VBA、設計 UserForm，每次修改都要你按 Accept 才生效，並可一鍵退回；VBA 編輯器裡可以打字或用說的請 AI 寫程式，編譯或執行出錯時按 Fix with AI 修正；模型可選 Claude 或本機模型。MIT 授權。最新介紹影片：[英文](https://youtu.be/196pWZceyas)，約 3 分鐘；示範影片：[中文](https://youtu.be/OvGv0PB3UKU)；[全部影片](https://milochen0418.github.io/reflex_grid/#videos)。
 
-**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：479 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。搭配 re_ddns 的 AI Hub，AI 助手可以帮你改工作表、写 VBA、设计 UserForm，每次修改都要你按 Accept 才生效，并可一键撤回；VBA 编辑器里可以打字或用说的请 AI 写代码，编译或运行出错时按 Fix with AI 修复；模型可选 Claude 或本地模型。MIT 许可。最新介绍视频：[英文](https://youtu.be/196pWZceyas)，约 3 分钟；演示视频：[中文](https://youtu.be/OvGv0PB3UKU)；[全部视频](https://milochen0418.github.io/reflex_grid/#videos)。
+**简体中文**：ReflexGrid 是开源、可自托管（私有部署）的在线 Excel。它在浏览器中打开和保存真正的 `.xlsx`、`.xlsm` 工作簿，运行 Excel **VBA 宏与 UserForm（用户窗体）**，多人通过链接即可**实时协作**编辑同一个工作簿。Excel 网页版无法运行 VBA 宏，ReflexGrid 可以。引擎 gridcore 由纯 Python 编写：480 个工作表函数、动态数组、`LET`/`LAMBDA`，也能在没有 Excel 的 Linux、macOS 或服务器上用 Python 运行 VBA 宏。搭配 re_ddns 的 AI Hub，AI 助手可以帮你改工作表、写 VBA、设计 UserForm，每次修改都要你按 Accept 才生效，并可一键撤回；VBA 编辑器里可以打字或用说的请 AI 写代码，编译或运行出错时按 Fix with AI 修复；模型可选 Claude 或本地模型。MIT 许可。最新介绍视频：[英文](https://youtu.be/196pWZceyas)，约 3 分钟；演示视频：[中文](https://youtu.be/OvGv0PB3UKU)；[全部视频](https://milochen0418.github.io/reflex_grid/#videos)。
 
 ## Tests
 
@@ -466,7 +466,7 @@ gridcore/                 the spreadsheet engine (no UI dependencies)
   core/                   addresses, values and errors, dates, typed-input parsing
   numfmt/                 number-format codes: parsing and rendering
   formula/                lexer, Pratt parser, AST, printer, reference adjustment
-  functions/              the worksheet function library (479 functions)
+  functions/              the worksheet function library (480 functions)
   model/                  workbook, sheets, copy-on-write cell store, styles, features
   calc/                   evaluator, dependency graph, recalculation, dynamic arrays
   xlsx/                   XLSX and CSV readers/writers; vbaProject.bin (cfb.py, ovba.py), UserForm designs

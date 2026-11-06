@@ -85,7 +85,9 @@ def range_text(wb, sheet, rng: RangeRef) -> str:
         parts = []
         for c in range(rng.c0, rng.c1 + 1):
             t = cell_text(wb, sheet, (r, c))
-            if "\t" in t or "\n" in t or '"' in t:
+            # Like Excel, only text with a tab or line break is quoted (its quotes doubled);
+            # `say "hi"` is copied as it is (GridCraft #2225).
+            if "\t" in t or "\n" in t or "\r" in t:
                 t = '"' + t.replace('"', '""') + '"'
             parts.append(t)
         lines.append("\t".join(parts))

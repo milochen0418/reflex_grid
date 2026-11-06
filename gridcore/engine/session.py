@@ -25,6 +25,11 @@ class EngineError(Exception):
     """A command could not run (bad parameters, disabled, protected sheet…)."""
 
 
+class Confirm(EngineError):
+    """A command that asks the person first ("There's already data here…"): nothing changed, and
+    running it again with its confirming parameter goes ahead."""
+
+
 @dataclass
 class HistoryEntry:
     label: str
@@ -278,6 +283,8 @@ def finish_edit(d: DocState, ctx: Ctx) -> None:
 
         sync_headers(wb, ctx.changed)
     check_protection(d.wb, wb, ctx.unprotected)
+    if getattr(wb.calc, "precision_as_displayed", False):
+        round_edited_as_displayed(d.wb, ctx)
     if ctx.structural or ctx.recalc:
         if wb.calc.mode == "manual" and not ctx.recalc:
             d.calc.rebuild(wb)
@@ -297,6 +304,94 @@ def finish_edit(d: DocState, ctx: Ctx) -> None:
     d.selection = ctx.sel
     if ctx.moved:
         d.cells_moved = True
+
+
+# ---------------------------------------------------------------- precision as displayed
+
+
+def round_edited_as_displayed(old: Workbook, ctx: Ctx) -> None:
+    """"Set precision as displayed": a number typed, pasted or reformatted is stored as its format
+    shows it (Excel rounds a constant when it is entered and when its cell's format changes;
+    GridCraft PR 1366). Only cells the edit touched are visited; formula cells whose format changed
+    are recalculated, and the recalculation rounds them. A structural edit recalculates everything
+    anyway, so it only rounds its constants."""
+    from ..calc import DisplayedPrecision
+
+    wb = ctx.wb
+    prec = DisplayedPrecision()
+    for si, after in enumerate(list(wb.sheets)):
+        oi = old.sheet_index(after.name)
+        before = old.sheets[oi] if oi is not None else None
+        if before is after:
+            continue
+        diffs = list(before.cells.diff_keys(after.cells)) if before is not None else [rc for rc, _ in after.cells.iter_sorted()]
+        anchors = set()
+        if not ctx.structural:
+            for rc in diffs:
+                c = after.cell(rc)
+                if c is not None and c.formula is not None:
+                    ctx.changed.append((si, rc[0], rc[1]))
+                    anchors.add(rc)
+            # A cell showing a spilled value has no cell of its own: reformatting it (or its row or
+            # column) changes nothing stored, so its anchor is recalculated to round it.
+            if before is not None:
+                for anchor, rng in after.spill_ranges.items():
+                    if anchor not in anchors and (
+                        any(rng.contains(rc) for rc in diffs)
+                        or _line_styles_differ(before.rows, after.rows, rng.r0, rng.r1)
+                        or _line_styles_differ(before.cols, after.cols, rng.c0, rng.c1)
+                    ):
+                        ctx.changed.append((si, anchor[0], anchor[1]))
+        updates = displayed_updates(prec, wb, si, diffs)
+        if updates:
+            sm = wb.sheet_mut(si)
+            for rc, r in updates:
+                cell = sm.cell(rc)
+                if cell is not None:
+                    sm.cells.set(rc, cell.with_value(r))
+                    if not ctx.structural:
+                        ctx.changed.append((si, rc[0], rc[1]))
+
+
+def round_all_constants_as_displayed(wb: Workbook) -> None:
+    """Turning "Set precision as displayed" on rounds every number constant of the workbook to its
+    format, for good (Excel warns "Data will permanently lose accuracy"). Formulas are rounded by
+    the recalculation that follows."""
+    from ..calc import DisplayedPrecision
+
+    prec = DisplayedPrecision()
+    for si, sh in enumerate(list(wb.sheets)):
+        updates = displayed_updates(prec, wb, si, [rc for rc, _ in sh.cells.iter_sorted()])
+        if updates:
+            sm = wb.sheet_mut(si)
+            for rc, r in updates:
+                sm.cells.set(rc, sm.cell(rc).with_value(r))
+
+
+def displayed_updates(prec, wb: Workbook, si: int, cells) -> List[Tuple[Tuple[int, int], float]]:
+    """The number constants among ``cells`` of sheet ``si`` whose value the option changes, with
+    their rounded values. A locked constant on a protected sheet keeps its value: rounding it would
+    change what the sheet protects."""
+    sh = wb.sheet(si)
+    if sh is None:
+        return []
+    out = []
+    for rc in cells:
+        cell = sh.cell(rc)
+        if cell is None or cell.formula is not None or type(cell.value) is not float:
+            continue
+        if sh.protection is not None and wb.styles.get(sh.style_id(rc)).protection.locked:
+            continue
+        r = prec.round(wb, si, rc, cell.value)
+        if r != cell.value:
+            out.append((rc, r))
+    return out
+
+
+def _line_styles_differ(before, after, lo: int, hi: int) -> bool:
+    """Whether a row (column) style in ``lo..hi`` differs between two sheets' line maps."""
+    keys = {k for k in before if lo <= k <= hi} | {k for k in after if lo <= k <= hi}
+    return any(getattr(before.get(k), "style", None) != getattr(after.get(k), "style", None) for k in keys)
 
 
 PROTECTED = "The cell or chart you're trying to change is on a protected sheet. To make a change, unprotect the sheet (Review › Unprotect Sheet)."

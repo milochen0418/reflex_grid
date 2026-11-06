@@ -2,6 +2,7 @@
 saved as they change, renamed, deleted, closed when idle — or, on re_ddns, as items of a shared
 collection."""
 
+import base64
 import io
 import json
 
@@ -195,3 +196,25 @@ def test_the_store_follows_the_install(tmp_path, monkeypatch):
     store = books._make_store()
     assert isinstance(store, ItemBookStore)
     assert store.items.own_dir == tmp_path / "spreadsheets" / "by-app" / "grid"
+
+
+def test_a_new_workbook_is_written_by_the_person_who_made_it(store):
+    # GridCraft #2448: a new workbook's Author (File › Info, dc:creator) is the name of the person
+    # who made it, as Excel fills it from the user's name; a guest leaves it blank, and an uploaded
+    # file keeps its own.
+    book = store.open("fresh2", creator={"email": "amy@example.com", "name": "Amy"})
+    assert book.doc.wb.props.author == "Amy"
+    meta = store.create_blank({"email": "bo@example.com", "name": ""}, "Budget")
+    assert store.open(meta.id).doc.wb.props.author == "bo@example.com"
+    meta = store.create_blank({"email": "", "name": "Guest"}, "Guest book")
+    assert store.open(meta.id).doc.wb.props.author == ""
+    from gridcore.engine import Session
+
+    src = Session()
+    src.new_workbook()
+    src.run("file.properties", author="Original Author")
+    raw = base64.b64decode(src.run("file.saveBytes")["data"])
+    meta, _ = store.create_from_file(raw, "theirs.xlsx", {"email": "amy@example.com", "name": "Amy"})
+    assert store.open(meta.id).doc.wb.props.author == "Original Author"
+    stored = openpyxl.load_workbook(io.BytesIO(store.file_bytes(store.create_blank({"email": "amy@example.com", "name": "Amy"}).id)[0]))
+    assert stored.properties.creator == "Amy"

@@ -281,6 +281,10 @@ class Chart:
     # Source range when created from a selection (for Switch Row/Column).
     source: Optional[str] = None
     by_rows: bool = False
+    # Doughnut hole size, % of the radius (Excel's 10–90; 75 for a new chart, as in Excel), and
+    # the first slice's angle in degrees clockwise from 12 o'clock (pie and doughnut).
+    hole_size: int = 75
+    first_slice_angle: int = 0
 
 
 @dataclass

@@ -20,7 +20,7 @@ from . import macro as _macro  # noqa: F401  (VBA: worksheet functions and event
 from .cmd_file import open_bytes
 from .collab import CollabSession, SharedBook, View
 from .selection import Selection
-from .session import COMMANDS, DocState, EngineError, Session
+from .session import COMMANDS, Confirm, DocState, EngineError, Session
 from .viewport import geometry, objects, ui_state, viewport
 
-__all__ = ["COMMANDS", "CollabSession", "DocState", "EngineError", "Selection", "Session", "SharedBook", "View", "geometry", "objects", "open_bytes", "ui_state", "viewport"]
+__all__ = ["COMMANDS", "CollabSession", "Confirm", "DocState", "EngineError", "Selection", "Session", "SharedBook", "View", "geometry", "objects", "open_bytes", "ui_state", "viewport"]

@@ -85,6 +85,21 @@ def _named(doc: DocState) -> DocState:
     return doc
 
 
+def _author(creator: Optional[dict]) -> str:
+    """A new workbook's Author (File › Info), as Excel fills it from the user's name: the person
+    who signed in and made it; nobody for a guest (GridCraft #2448)."""
+    creator = creator or {}
+    if not creator.get("email"):
+        return ""
+    return str(creator.get("name") or creator.get("email") or "")
+
+
+def _blank(creator: Optional[dict]) -> Workbook:
+    wb = Workbook()
+    wb.props.author = _author(creator)
+    return wb
+
+
 def clean_title(title: str) -> str:
     title = " ".join(str(title or "").split())[:MAX_TITLE]
     return title or DEFAULT_TITLE
@@ -297,12 +312,14 @@ class BookStore:
         return meta
 
     def create_blank(self, creator: Optional[dict] = None, title: str = DEFAULT_TITLE, book_id: str = "") -> BookMeta:
-        return self.create(_named(DocState(Workbook(), title)), title, creator, book_id)
+        return self.create(_named(DocState(_blank(creator), title)), title, creator, book_id)
 
     def create_sample(self, name: str, creator: Optional[dict] = None) -> BookMeta:
         if name not in SAMPLES:
             raise EngineError(f"no sample named `{name}`")
         d = new_sample(Session(), name)
+        if not d.wb.props.author:
+            d.wb.props.author = _author(creator)
         return self.create(d, name, creator)
 
     def create_from_file(self, data: bytes, filename: str, creator: Optional[dict] = None) -> Tuple[BookMeta, List[str]]:
@@ -327,7 +344,7 @@ class BookStore:
             meta = self.meta(book_id)
             if meta is None:
                 meta = self.create_blank(creator, book_id=book_id)
-                doc = _named(DocState(Workbook(), meta.title))
+                doc = _named(DocState(_blank(creator), meta.title))
             else:
                 try:
                     data, ext = self._read(book_id)

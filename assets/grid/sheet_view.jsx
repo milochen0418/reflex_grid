@@ -536,6 +536,19 @@ export function SheetView(props) {
 
   // ------------------------------------------------------------ sizing, scrolling
 
+  // The browser's scroll bar thickness, to push a bar the workbook hides out of sight (0 with
+  // overlay scroll bars).
+  const [sbSize, setSbSize] = useState({ w: 0, h: 0 });
+  const hideHBar = !!(ui && ui.bookView && ui.bookView.hScroll === false);
+  const hideVBar = !!(ui && ui.bookView && ui.bookView.vScroll === false);
+  useLayoutEffect(() => {
+    const d = document.createElement("div");
+    d.style.cssText = "position:absolute;top:-9999px;left:-9999px;width:100px;height:100px;overflow:scroll";
+    document.body.appendChild(d);
+    setSbSize({ w: d.offsetWidth - d.clientWidth, h: d.offsetHeight - d.clientHeight });
+    d.remove();
+  }, []);
+
   useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
@@ -644,6 +657,8 @@ export function SheetView(props) {
   }, [ui]);
 
   const reopenedRef = useRef(0);
+  // A Ctrl+arrow while pointing waits for the server to say where the data ends: {seq, anchor}.
+  const jumpReqRef = useRef(null);
   // The next selection from the server extends the current one (Ctrl+Shift+Arrow): reveal its moving
   // end, not the anchor, as Excel does.
   const revealEndRef = useRef(false);
@@ -699,6 +714,19 @@ export function SheetView(props) {
       setSel({ active: s.active, anchor: s.anchor || s.active, ranges: s.ranges });
       setEd({ r: err.r, c: err.c, text: err.text, mode: "edit", bar: false });
       setTimeout(() => kbdRef.current && kbdRef.current.focus(), 0);
+    }
+    const jr = jumpReqRef.current;
+    if (ui.jump && jr && ui.jump.seq === jr.seq) {
+      // Where Ctrl+arrow landed while pointing (see the "jump" event).
+      jumpReqRef.current = null;
+      if (edRef.current) {
+        const { r, c } = ui.jump;
+        const g0 = jr.anchor ? norm(jr.anchor, [r, c]) : [r, c, r, c];
+        if (pointTo(g0)) {
+          pointRef.current = { ...pointRef.current, anchor: jr.anchor || [r, c], cur: [r, c] };
+          ensureVisible(r, c);
+        }
+      }
     }
     if (ui.clipboardSet && ui.clipboardSet.seq === seqRef.current) {
       const set = ui.clipboardSet;
@@ -897,8 +925,12 @@ export function SheetView(props) {
   useEffect(() => {
     if (!editRequest || !editRequest.seq || editReqRef.current === editRequest.seq) return;
     editReqRef.current = editRequest.seq;
-    beginEdit(editRequest.text || "", "edit");
-    setTimeout(() => updateAc(editRequest.text || "", (editRequest.text || "").length), 10);
+    const text = editRequest.text || "";
+    beginEdit(text, editRequest.mode || "edit");
+    // AutoSum with nothing to add up puts the caret between its parentheses.
+    const caret = typeof editRequest.caret === "number" ? editRequest.caret : text.length;
+    caretRef.current = { pos: caret };
+    setTimeout(() => updateAc(text, caret), 10);
   }, [editRequest]);
 
   // Tell the server which object is selected (for the Chart Design tab).
@@ -1185,7 +1217,8 @@ export function SheetView(props) {
       for (let c = c0; c <= c1; c++) {
         const e = cellMap.get(key(r, c));
         let t = e && e.t ? e.t : "";
-        if (/[\t\n"]/.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
+        // Like Excel, only text with a tab or line break is quoted (its quotes doubled).
+        if (/[\t\n\r]/.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
         parts.push(t);
       }
       lines.push(parts.join("\t"));
@@ -1227,10 +1260,29 @@ export function SheetView(props) {
       const cd = e.clipboardData;
       if (!cd) return;
       e.preventDefault();
+      const text = cd.getData("text/plain");
+      // A picture with no text (a screenshot, an image copied in a browser) is pasted as a picture
+      // at the active cell, as Excel does.
+      const pic = !text ? Array.from(cd.files || []).find((f) => /^image\//.test(f.type)) : null;
+      if (pic) {
+        // Past the engine's 20 MB the bytes would only be refused (and a big one could pass the
+        // websocket's limit): say so without sending them.
+        if (pic.size > 20 * 1024 * 1024) {
+          send("pastePicture", { tooLarge: true });
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const url = String(reader.result || "");
+          send("pastePicture", { data: url.slice(url.indexOf(",") + 1), name: pic.name || "Picture.png" });
+        };
+        reader.readAsDataURL(pic);
+        return;
+      }
       // Only the text goes to the server (it pastes TSV, not an app's much bigger HTML).
-      sendPaste(cd.getData("text/plain"));
+      sendPaste(text);
     },
-    [sendPaste]
+    [sendPaste, send]
   );
 
   // ------------------------------------------------------------ keyboard
@@ -1332,6 +1384,12 @@ export function SheetView(props) {
             const pm = pointRef.current;
             const base = pm && pm.range ? (e.shiftKey ? pm.cur || [pm.range[2], pm.range[3]] : [pm.range[0], pm.range[1]]) : [editing.r, editing.c];
             const anchor = pm && pm.anchor && e.shiftKey ? pm.anchor : null;
+            if (mod) {
+              // Ctrl+arrow jumps to the edge of the data, and Ctrl+Shift+arrow extends the pointed
+              // range there, as in Excel: the server knows where the data ends.
+              jumpReqRef.current = { seq: send("jump", { from: base, dr, dc }), anchor };
+              return;
+            }
             const [r, c] = step(base[0], base[1], dr, dc);
             const g0 = anchor ? norm(anchor, [r, c]) : [r, c, r, c];
             pointTo(g0);
@@ -1360,6 +1418,12 @@ export function SheetView(props) {
         e.preventDefault();
         cmd("object.delete", { id: objSel });
         setObjSel(null);
+        return;
+      }
+      if (mod && !e.shiftKey && !e.altKey && k === ".") {
+        // Ctrl+. moves the active cell clockwise to the next corner of the selection.
+        e.preventDefault();
+        cmd("selection.nextCorner");
         return;
       }
       if (k.startsWith("Arrow")) {
@@ -2033,9 +2097,12 @@ export function SheetView(props) {
       { label: "Format Cells…", dialog: "formatCells", sc: "Ctrl+1" },
       ui && ui.dropdown ? { label: "Pick From Drop-down List", id: "ui.pickList" } : null,
       { label: "Define Name…", dialog: "defineName" },
-      { label: "Link…", dialog: "hyperlink", sc: "Ctrl+K" },
+      // A linked cell's menu edits, opens or removes its link, as in Excel (GridCraft #2120).
+      ...(linkMap.has(key(sel.active[0], sel.active[1]))
+        ? [{ label: "Edit Hyperlink…", dialog: "hyperlink", sc: "Ctrl+K" }, { label: "Open Hyperlink", id: "ui.openLink" }, { label: "Remove Hyperlink", id: "insert.removeHyperlink" }]
+        : [{ label: "Link…", dialog: "hyperlink", sc: "Ctrl+K" }]),
     ].filter(Boolean);
-  }, [menu, noteMap, sel, ui]);
+  }, [menu, noteMap, linkMap, sel, ui]);
 
   const runMenu = useCallback(
     (it) => {
@@ -2057,6 +2124,11 @@ export function SheetView(props) {
       }
       if (it.id === "ui.pickList") {
         setListOpen(true);
+        return;
+      }
+      if (it.id === "ui.openLink") {
+        const [r, c] = selRef.current.active;
+        send("link", { r, c });
         return;
       }
       cmd(it.id, it.params);
@@ -2368,7 +2440,9 @@ export function SheetView(props) {
         fontSize: fsShown + "px",
         fontFamily: family,
         color,
-        textDecoration: deco || undefined,
+        // Longhands only: a shorthand next to its longhand makes React warn when a cell gains or
+        // loses its underline (a link added or removed).
+        textDecorationLine: deco || undefined,
         textDecorationStyle: st.u === "double" || st.u === "doubleAccounting" ? "double" : undefined,
         whiteSpace: wrap ? "pre-wrap" : "pre",
         wordBreak: wrap ? "break-word" : undefined,
@@ -2866,6 +2940,8 @@ export function SheetView(props) {
           id="rg-formula-bar"
           ref={barRef}
           value={barValue}
+          // A cell showing a spilled value: its anchor's formula, greyed (typing replaces it).
+          placeholder={!ed && ui && ui.spillFormula && ui.selection && sel.active[0] === ui.selection.active[0] && sel.active[1] === ui.selection.active[1] ? ui.spillFormula : undefined}
           rows={Math.min(Math.max(1, (barValue || "").split("\n").length), 6)}
           onFocus={() => {
             if (!edRef.current) {
@@ -2889,7 +2965,15 @@ export function SheetView(props) {
       </div>
       {/* Grid */}
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        <div ref={scrollerRef} className="rg-scroller" onScroll={onScroll} style={{ position: "absolute", inset: 0, overflow: "scroll", background: "#FFFFFF" }}>
+        {/* A workbook can hide its scroll bars (File › Options › Advanced in Excel): the bar is
+            pushed out of this clipping box, and the sheet still scrolls. */}
+        <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+        <div
+          ref={scrollerRef}
+          className={"rg-scroller" + (hideHBar ? " rg-no-hbar" : "") + (hideVBar ? " rg-no-vbar" : "")}
+          onScroll={onScroll}
+          style={{ position: "absolute", top: 0, left: 0, right: hideVBar ? -sbSize.w : 0, bottom: hideHBar ? -sbSize.h : 0, overflow: "scroll", background: "#FFFFFF" }}
+        >
           <div style={{ width: totalW, height: totalH, position: "relative" }}>
             <div
               ref={viewRef}
@@ -3095,6 +3179,7 @@ export function SheetView(props) {
               )}
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>

@@ -21,7 +21,7 @@ from .ast import (
 )
 from .lexer import LexError, tokenize
 from .parser import ParseError, normalize_function_name, parse, parse_struct, try_parse
-from .printer import quote_sheet, reference_a1, sheet_prefix, to_text
+from .printer import quote_sheet, reference_a1, sheet_prefix, to_text, unquote_sheet
 
 
 def print_formula(e: Expr) -> str:

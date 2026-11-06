@@ -915,22 +915,26 @@ class Range(HostObject):
             self._fire_change()
         return True
 
+    # A Range method clears every row of the range, also the rows a filter hides, as in Excel
+    # (the ribbon's Clear leaves those).
+    _ALL_ROWS = {"filteredRows": True}
+
     def g_clearcontents(self, ex):
-        return self._each("edit.clearContents", fire=True)
+        return self._each("edit.clearContents", self._ALL_ROWS, fire=True)
 
     def g_clear(self, ex):
-        return self._each("edit.clearAll", fire=True)
+        return self._each("edit.clearAll", self._ALL_ROWS, fire=True)
 
     def g_clearformats(self, ex):
-        return self._each("edit.clearFormats")
+        return self._each("edit.clearFormats", self._ALL_ROWS)
 
     def g_clearcomments(self, ex):
-        return self._each("edit.clearComments")
+        return self._each("edit.clearComments", self._ALL_ROWS)
 
     g_clearnotes = g_clearcomments
 
     def g_clearhyperlinks(self, ex):
-        return self._each("edit.clearHyperlinks")
+        return self._each("edit.clearHyperlinks", self._ALL_ROWS)
 
     def g_clearoutline(self, ex):
         return True
@@ -1403,23 +1407,27 @@ class Range(HostObject):
     def g_name(self, ex):
         from .excel import Name
 
+        from ...formula.printer import unquote_sheet
+
         wb = self.h.wb()
         me = self.address()
         for n in wb.names:
             f = n.formula.lstrip("=")
-            if "!" in f and f.split("!", 1)[1].replace("$", "") == me.replace("$", "") and f.split("!", 1)[0].strip("'") == self.ws.name:
+            # The sheet is quoted as formulas quote it (`'Bob''s'!$A$1`), and may hold a `!`.
+            sheet, _, ref = f.rpartition("!")
+            if sheet and ref.replace("$", "") == me.replace("$", "") and unquote_sheet(sheet) == self.ws.name:
                 return Name(self.h, n.name, n.scope)
         raise VbaError(1004, "The range has no name")
 
     def l_name(self, ex, v):
-        from ...formula.printer import quote_sheet
+        from ...formula.printer import quote_sheet, unquote_sheet
 
         self.h.require_writable()
         name = _str(v)
         scope = None
         if "!" in name:
             sheet, name = name.rsplit("!", 1)
-            scope = sheet.strip("'")
+            scope = unquote_sheet(sheet)
         p = {"name": name, "refersTo": f"={quote_sheet(self.ws.name)}!{self.address()}", "replace": True}
         if scope:
             p["scope"] = scope

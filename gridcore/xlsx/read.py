@@ -185,6 +185,10 @@ def read_xlsx(data: bytes) -> Tuple[Workbook, List[str]]:
         wb.structure_password = attr(wpr, "workbookPassword")
     wv = path(wb_xml, "bookViews", "workbookView")
     active_tab = (attr_int(wv, "activeTab") or 0) if wv is not None else 0
+    if wv is not None:
+        wb.view.show_sheet_tabs = flag(wv, "showSheetTabs", True)
+        wb.view.show_horizontal_scroll = flag(wv, "showHorizontalScroll", True)
+        wb.view.show_vertical_scroll = flag(wv, "showVerticalScroll", True)
 
     file_to_model: List[Optional[int]] = []
     sheets_el = child(wb_xml, "sheets")

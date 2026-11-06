@@ -18,7 +18,7 @@ from .cmd_edit import cell_set, _json_value
 from .display import fmt
 from .entry import AUTO_DATE, parse_formula_input
 from .selection import Selection
-from .session import EngineError, Session, command, edit, need, p_bool, p_str, param_cell, param_sheet
+from .session import EngineError, Session, command, edit, need, p_bool, p_str, param_cell, param_sheet, round_all_constants_as_displayed
 
 AUTOSUM_FUNCTIONS = ("SUM", "AVERAGE", "COUNT", "MAX", "MIN")
 
@@ -306,7 +306,7 @@ def calculate_now(s: Session, p: Dict[str, Any]):
     return {"circular": len(d.calc.circular)}
 
 
-@command("formulas.calculationOptions", "Calculation Options", menu=("Formulas", "Calculation"), params="{mode: auto|autoNoTable|manual, iterative?: bool, maxIterations?, maxChange?}")
+@command("formulas.calculationOptions", "Calculation Options", menu=("Formulas", "Calculation"), params="{mode: auto|autoNoTable|manual, iterative?: bool, maxIterations?, maxChange?, precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant for good)}")
 def calculation_options(s: Session, p: Dict[str, Any]):
     mode = p_str(p, "mode")
     if mode is not None and mode not in ("auto", "autoNoTable", "manual"):
@@ -323,10 +323,18 @@ def calculation_options(s: Session, p: Dict[str, Any]):
         if p.get("maxChange") is not None:
             c.max_change = max(0.0, float(p["maxChange"]))
         ctx.structural = c.mode != "manual"
+        if p.get("precisionAsDisplayed") is not None:
+            on = p_bool(p, "precisionAsDisplayed")
+            if on != c.precision_as_displayed:
+                if on:
+                    round_all_constants_as_displayed(ctx.wb)
+                c.precision_as_displayed = on
+                # The values change at once, in manual mode too (GridCraft PR 1366).
+                ctx.structural = ctx.recalc = True
 
     edit(s, f)
     c = s.doc().wb.calc
-    return {"mode": c.mode, "iterative": c.iterative}
+    return {"mode": c.mode, "iterative": c.iterative, "precisionAsDisplayed": c.precision_as_displayed}
 
 
 @command("formulas.evaluate", "Evaluate", params="{formula, cell?, sheet?, check?: bool}", undoable=False, journal=False)

@@ -85,47 +85,60 @@ function legendBox(position, W, H, n) {
 }
 
 function PieChart({ chart, W, H, top, doughnut }) {
-  const s = chart.series[0] || { values: [] };
-  const vals = s.values.map((v) => (typeof v === "number" && v > 0 ? v : 0));
-  const total = vals.reduce((a, b) => a + b, 0);
   const items = chart.categories.map((c, i) => ({ label: String(c), color: seriesColor(chart, i) }));
   const lb = legendBox(chart.legend, W, H, items.length);
   const cx = (W - lb[1] + lb[3]) / 2;
   const cy = top + (H - top - lb[2] + lb[0]) / 2;
   const r = Math.max(10, Math.min(W - lb[1] - lb[3], H - top - lb[0] - lb[2]) / 2 - 12);
-  const inner = doughnut ? r * 0.5 : 0;
-  let a0 = -Math.PI / 2;
+  // The first slice starts at the chart's angle, clockwise from 12 o'clock.
+  const start = -Math.PI / 2 + (((chart.firstSliceAngle || 0) % 360) * Math.PI) / 180;
+  // A pie draws its first series. A doughnut draws every series as a ring, the first innermost,
+  // around a hole of the chart's size, as Excel does (GridCraft PR 1827).
+  const hole = doughnut ? Math.min(90, Math.max(10, chart.holeSize || 75)) / 100 : 0;
+  const all = doughnut ? chart.series.slice(0, 255) : chart.series.slice(0, 1);
+  const n = Math.max(1, all.length);
+  const ri = r * hole;
+  const band = Math.max(1, (r - ri) / n);
+  const rings = all
+    .map((s, si) => ({ s, outer: doughnut ? Math.min(r, r - (n - 1 - si) * band) : r, inner: doughnut ? Math.max(ri, r - (n - si) * band) : 0 }))
+    .filter((g) => !doughnut || g.outer - g.inner >= 1);
+  const p = (ang, rad) => [cx + rad * Math.cos(ang), cy + rad * Math.sin(ang)];
   const slices = [];
-  vals.forEach((v, i) => {
-    if (total <= 0 || v <= 0) return;
-    const a1 = a0 + (v / total) * Math.PI * 2;
-    const large = a1 - a0 > Math.PI ? 1 : 0;
-    const p = (ang, rad) => [cx + rad * Math.cos(ang), cy + rad * Math.sin(ang)];
-    const [x0, y0] = p(a0, r), [x1, y1] = p(a1, r);
-    let d;
-    if (vals.filter((x) => x > 0).length === 1) {
-      d = doughnut
-        ? `M ${cx - r} ${cy} A ${r} ${r} 0 1 1 ${cx + r} ${cy} A ${r} ${r} 0 1 1 ${cx - r} ${cy} M ${cx - inner} ${cy} A ${inner} ${inner} 0 1 0 ${cx + inner} ${cy} A ${inner} ${inner} 0 1 0 ${cx - inner} ${cy}`
-        : `M ${cx - r} ${cy} A ${r} ${r} 0 1 1 ${cx + r} ${cy} A ${r} ${r} 0 1 1 ${cx - r} ${cy}`;
-    } else if (doughnut) {
-      const [xi0, yi0] = p(a0, inner), [xi1, yi1] = p(a1, inner);
-      d = `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} L ${xi1} ${yi1} A ${inner} ${inner} 0 ${large} 0 ${xi0} ${yi0} Z`;
-    } else {
-      d = `M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`;
-    }
-    const mid = (a0 + a1) / 2;
-    const [lx, ly] = p(mid, doughnut ? (r + inner) / 2 : r * 0.65);
-    slices.push(
-      <g key={i}>
-        <path d={d} fill={seriesColor(chart, i)} stroke="#FFFFFF" strokeWidth={1.5} fillRule="evenodd" />
-        {chart.dataLabels && (
-          <text x={lx} y={ly + 4} textAnchor="middle" fontSize={11} fill="#FFFFFF" fontFamily={FONT}>
-            {Math.round((v / total) * 100) + "%"}
-          </text>
-        )}
-      </g>
-    );
-    a0 = a1;
+  rings.forEach(({ s, outer, inner }, k) => {
+    const vals = (s.values || []).map((v) => (typeof v === "number" ? (doughnut ? Math.abs(v) : v > 0 ? v : 0) : 0));
+    const total = vals.reduce((a, b) => a + b, 0);
+    if (!(total > 0)) return;
+    const one = vals.filter((x) => x > 0).length === 1;
+    let a0 = start;
+    vals.forEach((v, i) => {
+      if (v <= 0) return;
+      const a1 = a0 + (v / total) * Math.PI * 2;
+      const large = a1 - a0 > Math.PI ? 1 : 0;
+      const [x0, y0] = p(a0, outer), [x1, y1] = p(a1, outer);
+      let d;
+      if (one) {
+        d = `M ${cx - outer} ${cy} A ${outer} ${outer} 0 1 1 ${cx + outer} ${cy} A ${outer} ${outer} 0 1 1 ${cx - outer} ${cy}`;
+        if (inner > 0) d += ` M ${cx - inner} ${cy} A ${inner} ${inner} 0 1 0 ${cx + inner} ${cy} A ${inner} ${inner} 0 1 0 ${cx - inner} ${cy}`;
+      } else if (inner > 0) {
+        const [xi0, yi0] = p(a0, inner), [xi1, yi1] = p(a1, inner);
+        d = `M ${x0} ${y0} A ${outer} ${outer} 0 ${large} 1 ${x1} ${y1} L ${xi1} ${yi1} A ${inner} ${inner} 0 ${large} 0 ${xi0} ${yi0} Z`;
+      } else {
+        d = `M ${cx} ${cy} L ${x0} ${y0} A ${outer} ${outer} 0 ${large} 1 ${x1} ${y1} Z`;
+      }
+      const mid = (a0 + a1) / 2;
+      const [lx, ly] = p(mid, inner > 0 ? (outer + inner) / 2 : outer * 0.65);
+      slices.push(
+        <g key={`${k}:${i}`}>
+          <path d={d} fill={seriesColor(chart, i)} stroke="#FFFFFF" strokeWidth={outer - inner > 1.5 || !doughnut ? 1.5 : 0} fillRule="evenodd" />
+          {chart.dataLabels && (
+            <text x={lx} y={ly + 4} textAnchor="middle" fontSize={11} fill="#FFFFFF" fontFamily={FONT}>
+              {Math.round((v / total) * 100) + "%"}
+            </text>
+          )}
+        </g>
+      );
+      a0 = a1;
+    });
   });
   const lx = chart.legend === "right" ? W - lb[1] + 8 : chart.legend === "left" ? 8 : 12;
   const ly = chart.legend === "top" ? top + 12 : chart.legend === "bottom" ? H - 10 : top + 20;

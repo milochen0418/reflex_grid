@@ -27,6 +27,25 @@ def _sheet_flag(attr: str):
     return run
 
 
+def _book_flag(attr: str):
+    """A display option for this workbook (File › Options › Advanced in Excel, GridCraft #3101):
+    saved with the workbook, undoable, toggled without ``on``."""
+
+    def run(s: Session, p: Dict[str, Any]):
+        on = p_bool(p, "on", not getattr(s.doc().wb.view, attr))
+
+        def f(ctx):
+            ctx.wb.view = replace(ctx.wb.view, **{attr: on})
+
+        edit(s, f)
+        return {"on": on}
+
+    return run
+
+
+command("view.showSheetTabs", "Show Sheet Tabs", menu=("View", "Show"), params="{on?: bool} (this workbook; toggles without `on`)")(_book_flag("show_sheet_tabs"))
+command("view.showHorizontalScrollBar", "Show Horizontal Scroll Bar", menu=("View", "Show"), params="{on?: bool} (this workbook; toggles without `on`)")(_book_flag("show_horizontal_scroll"))
+command("view.showVerticalScrollBar", "Show Vertical Scroll Bar", menu=("View", "Show"), params="{on?: bool} (this workbook; toggles without `on`)")(_book_flag("show_vertical_scroll"))
 command("view.gridlines", "Gridlines", menu=("View", "Show"), params="{on?: bool}")(_sheet_flag("show_gridlines"))
 command("view.headings", "Headings", menu=("View", "Show"), params="{on?: bool}")(_sheet_flag("show_headings"))
 command("view.showZeros", "Show Zeros", params="{on?: bool}")(_sheet_flag("show_zeros"))

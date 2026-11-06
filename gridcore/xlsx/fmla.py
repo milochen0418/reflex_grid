@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from ..formula import Call, Err, Expr, Invoke, Name, Num, ParseError, Paren, Unary, Binary, parse, print_formula
+from ..formula import Call, Err, Expr, Invoke, Name, Num, ParseError, Paren, Str, Unary, Binary, parse, print_formula
 from ..formula.ast import StructRef
 from ..model.cell import Formula
 from .tables import file_function_name
@@ -149,6 +149,55 @@ def _strip_param_prefix(n: str) -> str:
     return n
 
 
+# The function Google Sheets' XLSX export wraps a formula in when it thinks Excel lacks one of its
+# functions: `IFERROR(__xludf.DUMMYFUNCTION("<formula, quotes doubled>"),<cached value>)`.
+_DUMMY = "__XLUDF.DUMMYFUNCTION"
+
+
+def _dummy_inner(e: Expr) -> Optional[Expr]:
+    """The original formula inside Google Sheets' export wrapper, if ``e`` is that wrapper, the
+    text parses and ReflexGrid calculates every function it calls (GridCraft #2871). A function it
+    can't calculate would show ``#NAME?`` where the wrapper shows the cached value, and a wrapper
+    inside the text is one of those: only one level is ever unwrapped."""
+    if not isinstance(e, Call) or len(e.args) != 2 or e.name.upper().replace("_XLFN.", "", 1) != "IFERROR":
+        return None
+    d = e.args[0]
+    if not isinstance(d, Call) or d.name.upper() != _DUMMY or len(d.args) != 1 or not isinstance(d.args[0], Str):
+        return None
+    try:
+        inner = parse(d.args[0].value)
+    except ParseError:
+        return None
+    from ..calc import is_known_function
+
+    if not all(is_known_function(x.name) for x in inner.walk() if isinstance(x, Call)):
+        return None
+    return inner
+
+
+def unwrap_google_sheets(e: Expr) -> Expr:
+    """``e`` with each of Google Sheets' export wrappers replaced by the formula it holds, for the
+    whole formula or anywhere inside it. Excel keeps the wrapper and shows its cached value; the
+    formula inside calculates, and keeps calculating when its cells change."""
+    whole = _dummy_inner(e)
+    if whole is not None:
+        return whole
+
+    def f(x: Expr) -> Expr:
+        inner = _dummy_inner(x)
+        if inner is None:
+            return x
+        # The printer writes no parentheses of its own: an operation keeps its precedence in some.
+        return Paren(inner) if isinstance(inner, (Unary, Binary)) else inner
+
+    out = e.map(f)
+    try:
+        parse(print_formula(out))
+    except ParseError:  # nested past the parser's limit: nothing is replaced
+        return e
+    return out
+
+
 def from_file(text: str) -> str:
     """Formula text read from a file → model text (prefixes stripped when it parses)."""
     body = text[1:] if text.startswith("=") else text
@@ -156,6 +205,8 @@ def from_file(text: str) -> str:
         e = parse(body)
     except ParseError:
         return body
+    if "DUMMYFUNCTION" in body.upper():
+        e = unwrap_google_sheets(e)
 
     def f(x: Expr) -> Expr:
         if isinstance(x, Name):

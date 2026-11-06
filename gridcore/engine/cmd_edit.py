@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import replace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core.addr import MAX_COLS, MAX_ROWS, RangeRef, a1, parse_cell
 from ..core.value import Array, CellError, display
@@ -23,6 +23,7 @@ from .selection import Selection, current_region, jump
 from .session import (
     PROTECTED,
     Clipboard,
+    Confirm,
     EngineError,
     HistoryEntry,
     Session,
@@ -189,7 +190,7 @@ def cell_set(s: Session, p: Dict[str, Any]):
         _set(ctx, si, at, cell)
         if cell is None or cell.formula is None:
             # Validation sees the new value in place (custom rules may refer to the cell itself).
-            bad = check_entry(ctx.wb, si, at, cell.value if cell is not None else None)
+            bad = check_entry(ctx.wb, si, at, cell.value if cell is not None else None, before=d.wb)
             if bad is not None:
                 if bad[0].error_style == "stop":
                     raise EngineError(bad[1])
@@ -232,7 +233,21 @@ def _json_value(v):
     return v
 
 
-@command("range.setValues", "Set Values", params='{range|cell: "A1", values: [[1, "text", "=A1*2"], …]}')
+# How many strings range.setValues reports it read as something else, and how much of each: the
+# report is a diagnostic, so a big write mustn't put a second copy of its data in the result.
+MAX_REPORTED_CONVERSIONS = 20
+MAX_REPORTED_CHARS = 32
+
+
+def _clipped(text: str) -> str:
+    return text if len(text) <= MAX_REPORTED_CHARS else text[:MAX_REPORTED_CHARS] + "…"
+
+
+@command(
+    "range.setValues",
+    "Set Values",
+    params='{range|cell: "A1", values: [[1, "text", "=A1*2"], …] (strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so "05.04.2026" becomes a date and "2.500" a number; false stores every other string as the text it is, a leading \' kept, "" clearing the cell)} → {range, convertedCount, converted: [{cell, input, stored}] (up to 20 strings typed input read as a number, date, boolean or error)}',
+)
 def range_set_values(s: Session, p: Dict[str, Any]):
     si = param_sheet(s, p)
     start = param_range(s, p).start
@@ -246,8 +261,14 @@ def range_set_values(s: Session, p: Dict[str, Any]):
     w = max((len(r) if isinstance(r, list) else 1 for r in rows), default=0)
     if h and w:
         check_locked(d.wb, si, RangeRef(start[0], start[1], min(start[0] + h - 1, MAX_ROWS - 1), min(start[1] + w - 1, MAX_COLS - 1)))
+    parse_strings = p_bool(p, "parse", True)
+    # The strings typed input read as something else, so a script (or the AI) notices a
+    # "05.04.2026" that became a date without reading the cells back (GridCraft #2255).
+    converted: List[Tuple[Tuple[int, int], str]] = []
+    count = 0
 
     def f(ctx):
+        nonlocal count
         wb = ctx.wb
         sheet = wb.sheet(si)
         for i, row in enumerate(rows):
@@ -259,12 +280,31 @@ def range_set_values(s: Session, p: Dict[str, Any]):
                     continue
                 if isinstance(v, bool) or isinstance(v, (int, float)) and not isinstance(v, bool):
                     cell = Cell(float(v) if not isinstance(v, bool) else v, None, sheet.style_id(rc))
+                elif isinstance(v, str) and not parse_strings and not v.startswith("="):
+                    # The text as it is; "" clears the cell, as null does (an empty text cell isn't
+                    # blank, and COUNTA would count it).
+                    cell = None
+                    if v != "":
+                        style = sheet.style_id(rc)
+                        if "\n" in v and not wb.styles.get(style).align.wrap:
+                            style = wb.styles.derive(style, lambda st: replace(st, align=replace(st.align, wrap=True)))
+                        cell = Cell(v, None, style)
                 else:
                     cell = input_to_cell(wb, sheet, rc, json_to_input(v))
+                    if isinstance(v, str) and cell is not None and cell.formula is None and isinstance(cell.value, (float, bool, CellError)):
+                        count += 1
+                        if len(converted) < MAX_REPORTED_CONVERSIONS:
+                            converted.append((rc, v))
                 _set(ctx, si, rc, cell)
 
     edit(s, f)
-    return {"range": RangeRef(start[0], start[1], start[0] + max(h - 1, 0), start[1] + max(w - 1, 0)).a1()}
+    wb = s.doc().wb
+    sh = wb.sheet(si)
+    return {
+        "range": RangeRef(start[0], start[1], start[0] + max(h - 1, 0), start[1] + max(w - 1, 0)).a1(),
+        "convertedCount": count,
+        "converted": [{"cell": a1(*rc), "input": _clipped(v), "stored": _clipped(cell_text(wb, sh, rc))} for rc, v in converted],
+    }
 
 
 @command("range.get", "Read Range", params='{range?, sheet?, formulas?: bool}', undoable=False, journal=False)
@@ -397,6 +437,41 @@ def selection_set(s: Session, p: Dict[str, Any]):
     sel.expand_merges(d.sheet)
     d.selection = sel
     return sel.to_json()
+
+
+@command("selection.nextCorner", "Next Corner of Selection", shortcut="Ctrl+.", params="{} (the active cell moves clockwise to the next corner of the selected area, which stays selected)", undoable=False, journal=False)
+def selection_next_corner(s: Session, p: Dict[str, Any]):
+    """Excel's Ctrl+. (GridCraft #1442): B2 → D2 → D4 → B4 on B2:D4. The new active cell is also the
+    anchor, so Shift+arrows then move the opposite corner. A corner in a merged cell lands on its
+    top-left cell; one in a hidden row or column, or one the sheet's protection doesn't let you
+    select, is skipped."""
+    d = s.doc()
+    sh = d.sheet
+    sel = d.selection
+    area = sel.current()
+    prot = sh.protection
+
+    def stop(c):
+        m = sh.merge_at(c)
+        if m is not None:
+            c = m.start
+        if not area.contains(c) or sh.is_row_hidden(c[0]) or sh.is_col_hidden(c[1]):
+            return None
+        if prot is not None:
+            locked = d.wb.styles.get(sh.style_id(c)).protection.locked
+            if (locked and not prot.select_locked) or (not locked and not prot.select_unlocked):
+                return None
+        return c
+
+    corners = [(area.r0, area.c0), (area.r0, area.c1), (area.r1, area.c1), (area.r1, area.c0)]
+    at = next((i for i in range(3, -1, -1) if stop(corners[i]) == sel.active), None)
+    if at is None:
+        nxt = next((c for c in map(stop, corners) if c is not None), None)
+    else:
+        nxt = next((c for c in (stop(corners[(at + k) % 4]) for k in range(1, 5)) if c is not None and c != sel.active), None)
+    if nxt is not None:
+        d.selection = Selection(nxt, nxt, list(sel.ranges))
+    return {"active": a1(*d.selection.active), "selection": d.selection.a1()}
 
 
 @command("selection.move", "Move Selection", params="{dr, dc, extend?: bool, jump?: bool (Ctrl+arrow)}", undoable=False, journal=False)
@@ -695,36 +770,33 @@ def clear_clipboard(s: Session, p: Dict[str, Any]):
 
 
 def parse_tsv(text: str) -> List[List[str]]:
-    """Tab-separated clipboard text; quoted fields may hold tabs, newlines and doubled quotes."""
+    """Tab-separated clipboard text, split as Excel splits pasted text (Excel 16 for Mac): a field
+    that starts with a quote is quoted (doubled quotes inside are one; tabs and line breaks inside
+    stay) up to a lone quote, and what follows that, up to the next tab or line break, is added as
+    it is (`"hi" there` is `hi there`, `"a"b"c` is `ab"c`); a quote that never closes takes in
+    the rest of the text. A quote anywhere else is a character like any other."""
     rows: List[List[str]] = []
     row: List[str] = []
+    field: List[str] = []
     i, n = 0, len(text)
-    field = []
     at_start = True
     while i < n:
         ch = text[i]
         if at_start and ch == '"':
-            # A quoted field runs to the closing quote that is followed by a separator.
-            j = i + 1
-            buf = []
-            closed = False
-            while j < n:
-                if text[j] == '"':
-                    if j + 1 < n and text[j + 1] == '"':
-                        buf.append('"')
-                        j += 2
+            i += 1
+            while i < n:
+                c = text[i]
+                if c == '"':
+                    if i + 1 < n and text[i + 1] == '"':
+                        field.append('"')
+                        i += 2
                         continue
-                    if j + 1 >= n or text[j + 1] in "\t\r\n":
-                        closed = True
-                        j += 1
-                        break
-                buf.append(text[j])
-                j += 1
-            if closed:
-                field = buf
-                i = j
-                at_start = False
-                continue
+                    i += 1
+                    break
+                field.append(c)
+                i += 1
+            at_start = False
+            continue
         if ch == "\t":
             row.append("".join(field))
             field = []
@@ -973,7 +1045,10 @@ def paste_special(s: Session, p: Dict[str, Any]):
     return {"range": dest.a1()}
 
 
-@command("edit.moveCells", "Move Cells", params='{from: "A1:B2", to: "D1" (top-left), sheet?, copy?: bool}')
+REPLACE_DATA = "There's already data here. Do you want to replace it?"
+
+
+@command("edit.moveCells", "Move Cells", params='{from: "A1:B2", to: "D1" (top-left), sheet?, copy?: bool, ask?: bool (drag and drop: a move asks before replacing cells that hold data; a copy doesn\'t, as in Excel)}')
 def move_cells(s: Session, p: Dict[str, Any]):
     d = s.doc()
     si = param_sheet(s, p)
@@ -985,6 +1060,15 @@ def move_cells(s: Session, p: Dict[str, Any]):
         raise EngineError("The data doesn't fit on the sheet.")
     dest = RangeRef(to[0], to[1], to[0] + src.height - 1, to[1] + src.width - 1)
     check_locked(d.wb, si, dest)
+    if p_bool(p, "ask") and not p_bool(p, "copy"):
+        # Moving cells onto cells that hold data, or show a dynamic array's spilled values, asks
+        # first, as in Excel (GridCraft #3136); the moved cells may land on their own old place.
+        # A copy (Ctrl or Option held) replaces them without asking, as Excel 16 for Mac does.
+        sh = d.wb.sheet(si)
+        if any(not src.contains(rc) and (c.value is not None or c.formula is not None) for rc, c in sh.cells.iter_range(dest)) or any(
+            dest.contains(rc) and not src.contains(rc) and v is not None for rc, v in sh.spill.items()
+        ):
+            raise Confirm(REPLACE_DATA)
     if p_bool(p, "copy"):
         saved = s.clipboard
         s.clipboard = Clipboard(d.wb, si, src, False, d.uid, "")
@@ -1006,24 +1090,65 @@ def move_cells(s: Session, p: Dict[str, Any]):
 # ---------------------------------------------------------------- clear
 
 
+def filtered_rows(sh, rng: RangeRef) -> Set[int]:
+    """The rows of ``rng`` an applied filter hides (rows hidden by hand are not among them)."""
+    if sh.autofilter is None and not any(t.filter for t in sh.tables):
+        return set()
+    return {r for r in sh.rows if rng.r0 <= r <= rng.r1 and sh.is_row_filtered(r)}
+
+
+def row_bands(rng: RangeRef, skip: Set[int]) -> List[RangeRef]:
+    """``rng`` cut into the runs of rows that aren't in ``skip``."""
+    if not skip:
+        return [rng]
+    out = []
+    start = None
+    for r in range(rng.r0, rng.r1 + 2):
+        if r <= rng.r1 and r not in skip:
+            if start is None:
+                start = r
+        elif start is not None:
+            out.append(RangeRef(start, rng.c0, r - 1, rng.c1))
+            start = None
+    return out
+
+
+_CLEAR_PARAMS = "{range?, filteredRows?: bool (also the rows a filter hides, as VBA's Range methods do)}"
+
+
 def _clear(s: Session, p: Dict[str, Any], what: str):
+    """The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
+    are left as they are (GridCraft #1419); rows hidden by hand are cleared. A macro's
+    ``Range.ClearContents`` clears every row of its range, as in Excel: ``filteredRows``."""
     d = s.doc()
     si = param_sheet(s, p)
     ranges = [param_range(s, p)] if p.get("range") else list(d.selection.ranges)
     sh = d.wb.sheet(si)
-    for rng in ranges:
+    keep_filtered = not p_bool(p, "filteredRows")
+    skips = [filtered_rows(sh, rng) if keep_filtered else set() for rng in ranges]
+    for rng, skip in zip(ranges, skips):
         if what in ("contents", "all"):
             if sh.protection is not None:
                 used = sh.used_range()
-                inter = rng.intersection(used) if used is not None else None
-                if inter is not None:
-                    check_locked(d.wb, si, inter)
+                for band in row_bands(rng, skip):
+                    inter = band.intersection(used) if used is not None else None
+                    if inter is not None:
+                        check_locked(d.wb, si, inter)
             check_arrays(sh, rng)
+        if what in ("comments", "hyperlinks", "all") and sh.protection is not None:
+            # A note or link on a locked cell is part of what the sheet protects (GridCraft PR 3244).
+            kept = [] if what == "hyperlinks" else list(sh.comments)
+            kept += [] if what == "comments" else list(sh.hyperlinks)
+            for rc in kept:
+                if rng.contains(rc) and rc[0] not in skip and d.wb.styles.get(sh.style_id(rc)).protection.locked:
+                    raise EngineError(PROTECTED)
 
     def f(ctx):
         sm = ctx.sheet_mut(si)
-        for rng in ranges:
+        for rng, skip in zip(ranges, skips):
             for rc, cell in list(sm.cells.iter_range(rng)):
+                if rc[0] in skip:
+                    continue
                 if what == "contents":
                     if cell.value is not None or cell.formula is not None:
                         _set(ctx, si, rc, Cell(None, None, cell.style))
@@ -1037,51 +1162,54 @@ def _clear(s: Session, p: Dict[str, Any], what: str):
                 # Spilled values belong to their anchor; clearing them is a no-op like Excel.
                 pass
             if what in ("formats", "all"):
-                sm.merges = [m for m in sm.merges if not m.intersects(rng)]
-                sm.cond_formats = remove_rules_in(sm.cond_formats, rng)
+                # A merge reaching into a row the filter hides stays, as that row's formats do.
+                sm.merges = [m for m in sm.merges if not m.intersects(rng) or any(m.r0 <= r <= m.r1 for r in skip)]
+                for band in row_bands(rng, skip):
+                    sm.cond_formats = remove_rules_in(sm.cond_formats, band)
                 if rng.is_full_rows() or rng.is_full_cols():
                     if rng.is_full_rows():
-                        for r in [r for r in sm.rows if rng.r0 <= r <= rng.r1]:
+                        for r in [r for r in sm.rows if rng.r0 <= r <= rng.r1 and r not in skip]:
                             info = sm.rows[r]
                             if info.style is not None:
                                 sm.set_row(r, replace(info, style=None))
-                    if rng.is_full_cols():
+                    # A column's format reaches the rows the filter hides too: it stays then.
+                    if rng.is_full_cols() and not skip:
                         for c in [c for c in sm.cols if rng.c0 <= c <= rng.c1]:
                             info = sm.cols[c]
                             if info.style is not None:
                                 sm.set_col(c, replace(info, style=None))
             if what in ("comments", "all"):
-                for rc in [rc for rc in sm.comments if rng.contains(rc)]:
+                for rc in [rc for rc in sm.comments if rng.contains(rc) and rc[0] not in skip]:
                     del sm.comments[rc]
             if what in ("hyperlinks", "all"):
-                for rc in [rc for rc in sm.hyperlinks if rng.contains(rc)]:
+                for rc in [rc for rc in sm.hyperlinks if rng.contains(rc) and rc[0] not in skip]:
                     del sm.hyperlinks[rc]
 
     edit(s, f)
     return None
 
 
-@command("edit.clearAll", "Clear All", menu=("Home", "Editing", "Clear"), params="{range?}")
+@command("edit.clearAll", "Clear All", menu=("Home", "Editing", "Clear"), params=_CLEAR_PARAMS)
 def clear_all(s, p):
     return _clear(s, p, "all")
 
 
-@command("edit.clearFormats", "Clear Formats", menu=("Home", "Editing", "Clear"), params="{range?}")
+@command("edit.clearFormats", "Clear Formats", menu=("Home", "Editing", "Clear"), params=_CLEAR_PARAMS)
 def clear_formats(s, p):
     return _clear(s, p, "formats")
 
 
-@command("edit.clearContents", "Clear Contents", menu=("Home", "Editing", "Clear"), shortcut="Delete", params="{range?}")
+@command("edit.clearContents", "Clear Contents", menu=("Home", "Editing", "Clear"), shortcut="Delete", params=_CLEAR_PARAMS)
 def clear_contents(s, p):
     return _clear(s, p, "contents")
 
 
-@command("edit.clearComments", "Clear Comments and Notes", menu=("Home", "Editing", "Clear"), params="{range?}")
+@command("edit.clearComments", "Clear Comments and Notes", menu=("Home", "Editing", "Clear"), params=_CLEAR_PARAMS)
 def clear_comments(s, p):
     return _clear(s, p, "comments")
 
 
-@command("edit.clearHyperlinks", "Clear Hyperlinks", menu=("Home", "Editing", "Clear"), params="{range?}")
+@command("edit.clearHyperlinks", "Clear Hyperlinks", menu=("Home", "Editing", "Clear"), params=_CLEAR_PARAMS)
 def clear_hyperlinks(s, p):
     return _clear(s, p, "hyperlinks")
 
@@ -1273,7 +1401,9 @@ def _search_text(wb, sh, rc, cell, look_in: str) -> Optional[str]:
     return value_text(wb, sh, rc)
 
 
-def _find_all(wb, sheets: List[int], pat, look_in: str, by_cols: bool, limit: int = 10000):
+def _find_all(wb, sheets: List[int], pat, look_in: str, by_cols: bool, limit: int = 10000, inside: Optional[Selection] = None):
+    """The matching cells of ``sheets`` in search order; with ``inside``, only the cells of that
+    selection (of the one sheet searched)."""
     out = []
     for si in sheets:
         sh = wb.sheets[si]
@@ -1283,6 +1413,8 @@ def _find_all(wb, sheets: List[int], pat, look_in: str, by_cols: bool, limit: in
             keys = [rc for rc, _ in sh.cells.iter_sorted()]
             if look_in == "values" and sh.spill:
                 keys = sorted(set(keys) | set(sh.spill))
+        if inside is not None:
+            keys = [rc for rc in keys if inside.contains(rc)]
         if by_cols:
             keys.sort(key=lambda rc: (rc[1], rc[0]))
         for rc in keys:
@@ -1302,22 +1434,28 @@ def _find_args(s: Session, p: Dict[str, Any], cid: str):
     look_in = p_str(p, "lookIn", "formulas")
     by_cols = p_bool(p, "byColumns")
     d = s.doc()
-    if p_str(p, "within", "sheet") == "workbook":
+    within = p_str(p, "within", "sheet")
+    inside = None
+    if within == "workbook":
         n = len(d.wb.sheets)
         a = d.wb.active_sheet
         sheets = [(a + i) % n for i in range(n) if d.wb.sheets[(a + i) % n].visibility == "visible"]
     else:
         sheets = [d.wb.active_sheet]
-    return pat, look_in, by_cols, sheets
+        if within == "selection":
+            # Only the selected cells of the active sheet, as Excel searches a selected range
+            # (GridCraft #3224).
+            inside = d.selection
+    return pat, look_in, by_cols, sheets, inside
 
 
 @command("edit.find", "Find…", menu=("Home", "Editing", "Find & Select"), shortcut="Ctrl+F",
-         params="{what, matchCase?, wholeCell?, lookIn?: formulas|values|comments, byColumns?, all?: bool, within?: sheet|workbook, previous?: bool}", undoable=False)
+         params="{what, matchCase?, wholeCell?, lookIn?: formulas|values|comments, byColumns?, all?: bool, within?: sheet|workbook|selection (selection: only the selected cells; Find Next keeps them selected and moves the active cell), previous?: bool}", undoable=False)
 def find(s: Session, p: Dict[str, Any]):
     d = s.doc()
-    pat, look_in, by_cols, sheets = _find_args(s, p, "edit.find")
+    pat, look_in, by_cols, sheets, inside = _find_args(s, p, "edit.find")
     s.last_find = dict(p)
-    hits = _find_all(d.wb, sheets, pat, look_in, by_cols)
+    hits = _find_all(d.wb, sheets, pat, look_in, by_cols, inside=inside)
     if p_bool(p, "all"):
         return {
             "matches": [
@@ -1344,7 +1482,8 @@ def find(s: Session, p: Dict[str, Any]):
     si, rc = hit
     _activate(s, si)
     sel = d.selection
-    if not sel.is_single_cell() and sel.contains(rc) and si == d.wb.active_sheet and len(hits) > 1:
+    if inside is not None or (not sel.is_single_cell() and sel.contains(rc) and si == d.wb.active_sheet and len(hits) > 1):
+        # The range stays selected and the active cell moves through it, as in Excel.
         d.selection = Selection(rc, sel.anchor, sel.ranges)
     else:
         d.selection = Selection.at(rc)
@@ -1352,14 +1491,14 @@ def find(s: Session, p: Dict[str, Any]):
 
 
 @command("edit.replace", "Replace…", menu=("Home", "Editing", "Find & Select"), shortcut="Ctrl+H",
-         params="{what, with, all?: bool, matchCase?, wholeCell?, within?: sheet|workbook, byColumns?}")
+         params="{what, with, all?: bool, matchCase?, wholeCell?, within?: sheet|workbook|selection (selection: only the selected cells), byColumns?}")
 def replace_cmd(s: Session, p: Dict[str, Any]):
     d = s.doc()
     p = dict(p)
     p["lookIn"] = "formulas"
-    pat, _look, by_cols, sheets = _find_args(s, p, "edit.replace")
+    pat, _look, by_cols, sheets, inside = _find_args(s, p, "edit.replace")
     repl = str(p.get("with", ""))
-    hits = _find_all(d.wb, sheets, pat, "formulas", by_cols, limit=1_000_000)
+    hits = _find_all(d.wb, sheets, pat, "formulas", by_cols, limit=1_000_000, inside=inside)
     if not p_bool(p, "all"):
         a = d.selection.active
         here = [(si, rc) for si, rc in hits if si == d.wb.active_sheet and rc == a]

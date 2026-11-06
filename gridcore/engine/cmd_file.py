@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from ..xlsx import XlsxError, read_csv, read_xlsx, sniff, write_csv, write_xlsx
 from ..xlsx.csv_io import CsvTooLarge
+from ..xlsx.html_table import read_page_table
 from .display import cell_text
 from .session import DocState, EngineError, Session, command, edit, p_int, p_str
 
@@ -27,6 +28,9 @@ def open_bytes(s: Session, data: bytes, name: str, path: Optional[str] = None, d
             wb, warnings = read_xlsx(data)
         except XlsxError as e:
             raise EngineError(f"ReflexGrid can't open `{name}`: {e}")
+    elif kind == "csv" and (page := read_page_table(data, os.path.basename(name))) is not None:
+        # A web page holding a table, whatever its name says (an "Export to Excel" saved as .xls).
+        wb, warnings = page
     elif kind == "csv" or lower.endswith((".csv", ".tsv", ".txt")):
         if lower.endswith(".tsv") and delimiter is None:
             delimiter = "\t"

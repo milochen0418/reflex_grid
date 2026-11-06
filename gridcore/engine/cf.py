@@ -13,6 +13,7 @@ from ..core.date import datetime_from_serial, now_serial, serial_in_system
 from ..core.value import Array, CellError, compare, display, to_bool, XlError
 from ..formula import ParseError, parse
 from ..formula.adjust import shift_relative
+from .ranges import top_left
 from ..model.features import CfValue, CondFormat, default_icon_thresholds, icon_count
 from ..model.style import AUTO, BorderLine, Style
 
@@ -199,7 +200,8 @@ class CfCache:
         hit = False
         for idx, cf in rules:
             rule = cf.rule
-            first = cf.ranges[0].start if cf.ranges else c
+            # Relative formulas are written for the top-left cell of all the areas (GridCraft #3152).
+            first = top_left(cf.ranges) or c
             t = rule.type
             matched: Optional[Style] = None
             ok = False

@@ -21,7 +21,7 @@ from .cmd_edit import _activate, _set, resolve_reference
 from .cmd_format import _ranges
 from .display import value_text
 from .selection import Selection, current_region
-from .session import EngineError, Session, command, edit, need, p_bool, p_float, p_int, p_str, param_cell, param_sheet
+from .session import PROTECTED, EngineError, Session, command, edit, need, p_bool, p_float, p_int, p_str, param_cell, param_sheet
 from .structure import shift_cells
 from .tables import TABLE_STYLE_NAMES, totals_formula, unique_column_name
 
@@ -438,7 +438,7 @@ def _object(s: Session, oid: int):
     raise EngineError(f"no object with id {oid}")
 
 
-@command("chart.update", "Format Chart", menu=("Chart Design",), params="{id, kind?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, xTitle?, yTitle?}")
+@command("chart.update", "Format Chart", menu=("Chart Design",), params="{id, kind?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, xTitle?, yTitle?, holeSize?: 10–90 (doughnut, %), firstSliceAngle?: 0–359 (pie and doughnut, degrees)}")
 def chart_update(s, p):
     oid = int(need(p, "id", "chart.update"))
     si, what = _object(s, oid)
@@ -463,6 +463,10 @@ def chart_update(s, p):
             ch.x_title = p["xTitle"] or None
         if "yTitle" in p:
             ch.y_title = p["yTitle"] or None
+        if p.get("holeSize") is not None:
+            ch.hole_size = min(max(p_int(p, "holeSize", 75), 10), 90)
+        if p.get("firstSliceAngle") is not None:
+            ch.first_slice_angle = p_int(p, "firstSliceAngle", 0) % 360
 
     edit(s, f)
     return None
@@ -693,6 +697,13 @@ _OPEN_SCHEMES = ("http", "https", "mailto")
 def remove_hyperlink(s, p):
     si = param_sheet(s, p)
     ranges = _ranges(s, p)
+    wb = s.doc().wb
+    sh = wb.sheet(si)
+    if sh.protection is not None:
+        # A link on a locked cell is part of what the sheet protects (GridCraft PR 3244).
+        for rc in sh.hyperlinks:
+            if any(r.contains(rc) for r in ranges) and wb.styles.get(sh.style_id(rc)).protection.locked:
+                raise EngineError(PROTECTED)
 
     def f(ctx):
         wb = ctx.wb

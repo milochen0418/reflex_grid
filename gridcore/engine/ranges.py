@@ -84,6 +84,32 @@ def shift_formula_text(text: str, dr: int, dc: int) -> str:
     return ("=" + out) if eq else out
 
 
+def top_left(ranges: Iterable[RangeRef]) -> Optional[Tuple[int, int]]:
+    """The top-left cell of a list of areas: the lowest row and the lowest column across all of them,
+    whatever order they are listed in. Excel writes the relative formulas of a multi-area validation
+    or conditional format for this cell (GridCraft #3152). ``None`` for no areas."""
+    ranges = list(ranges)
+    if not ranges:
+        return None
+    return (min(r.r0 for r in ranges), min(r.c0 for r in ranges))
+
+
+def rebase_rule(rule, frm: Optional[Tuple[int, int]], to: Optional[Tuple[int, int]]) -> None:
+    """Moves the relative references of a rule's formulas, written for the cell ``frm``, to be
+    written for ``to``, so each of its cells keeps reading the same cells (a validation's
+    ``f1``/``f2``, a conditional format's ``rule.formulas``)."""
+    if frm is None or to is None or frm == to:
+        return
+    dr, dc = to[0] - frm[0], to[1] - frm[1]
+    if hasattr(rule, "rule"):
+        rule.rule.formulas = [shift_formula_text(f, dr, dc) for f in rule.rule.formulas]
+    else:
+        if rule.f1 and not rule.f1.startswith('"'):
+            rule.f1 = shift_formula_text(rule.f1, dr, dc)
+        if rule.f2:
+            rule.f2 = shift_formula_text(rule.f2, dr, dc)
+
+
 def copy_rules(rules, src: RangeRef, dr: int, dc: int, transpose: bool = False) -> list:
     """Conditional formats or validations (objects with ``ranges``) that cover part of ``src``,
     as new rules for the copied block placed ``(dr, dc)`` away."""
@@ -93,7 +119,7 @@ def copy_rules(rules, src: RangeRef, dr: int, dc: int, transpose: bool = False) 
         parts = [p for p in parts if p is not None]
         if not parts:
             continue
-        top = rule.ranges[0].start
+        top = top_left(rule.ranges)
         new = copy.deepcopy(rule)
         moved = []
         for p in parts:
@@ -107,15 +133,9 @@ def copy_rules(rules, src: RangeRef, dr: int, dc: int, transpose: bool = False) 
         if not moved:
             continue
         new.ranges = moved
-        ndr = moved[0].r0 - top[0]
-        ndc = moved[0].c0 - top[1]
-        if hasattr(new, "rule"):
-            new.rule.formulas = [shift_formula_text(f, ndr, ndc) for f in new.rule.formulas]
-        else:
-            if new.f1 and not new.f1.startswith('"'):
-                new.f1 = shift_formula_text(new.f1, ndr, ndc)
-            if new.f2:
-                new.f2 = shift_formula_text(new.f2, ndr, ndc)
+        # The copy's formulas are written for its own top-left cell: a relative reference moves
+        # with the cells, as a copied formula's does.
+        rebase_rule(new, top, moved[0].start if transpose else top_left(moved))
         out.append(new)
     return out
 
@@ -129,7 +149,11 @@ def remove_rules_in(rules, area: RangeRef) -> list:
             continue
         rest = subtract_all(rule.ranges, area)
         if rest:
+            before = top_left(rule.ranges)
             rule.ranges = rest
+            # When the rule's top-left cell goes, its relative formulas are rewritten for the new
+            # one, so the cells left keep reading the same cells (GridCraft PR 3173).
+            rebase_rule(rule, before, top_left(rest))
             out.append(rule)
     return out
 

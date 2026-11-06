@@ -17,7 +17,7 @@ in Microsoft Excel:
 - **AI that asks first**: with the AI Hub of re_ddns, an assistant changes cells, VBA code and UserForms; each
   change waits for your Accept, shows as the AI's for everyone, and one click takes it back. Claude or a local
   model, as you choose.
-- **A Python spreadsheet engine**: gridcore calculates 479 Excel functions, with dynamic arrays and
+- **A Python spreadsheet engine**: gridcore calculates 480 Excel functions, with dynamic arrays and
   `LET`/`LAMBDA`, and runs VBA macros headless, with no Excel installed.
 - **Self-hosted, MIT-licensed.**
 

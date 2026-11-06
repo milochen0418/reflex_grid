@@ -459,6 +459,8 @@ def chart_data(wb, si: int, ch) -> Dict[str, Any]:
         "categories": cats,
         "series": series,
         "palette": accents,
+        "holeSize": getattr(ch, "hole_size", 75),
+        "firstSliceAngle": getattr(ch, "first_slice_angle", 0),
         "x": sh.col_left(a.col) + a.dx if a.mode != "absolute" else a.dx,
         "y": sh.row_top(a.row) + a.dy if a.mode != "absolute" else a.dy,
         "width": a.width,
@@ -557,9 +559,14 @@ def ui_state(session) -> Dict[str, Any]:
     link = sh.hyperlinks.get(rc)
     t = sh.table_at(rc)
     spill_anchor = None
+    spill_formula = None
     for anchor, r in sh.spill_ranges.items():
         if r.contains(rc) and not r.is_single():
             spill_anchor = [anchor[0], anchor[1], r.r0, r.c0, r.r1, r.c1]
+            # A cell showing a spilled value shows its anchor's formula, greyed and read only, as
+            # Excel's formula bar does (GridCraft #1297), unless protection hides that formula.
+            if anchor != rc and not (sh.protection is not None and wb.styles.get(sh.style_id(anchor)).protection.hidden):
+                spill_formula = edit_text(wb, sh, anchor)
             break
     return {
         "docName": d.name,
@@ -578,6 +585,9 @@ def ui_state(session) -> Dict[str, Any]:
         "link": link.target if link is not None else None,
         "table": t.name if t is not None else None,
         "spill": spill_anchor,
+        "spillFormula": spill_formula,
+        # Display options for this workbook: sheet tabs and scroll bars (GridCraft #3101).
+        "bookView": {"sheetTabs": wb.view.show_sheet_tabs, "hScroll": wb.view.show_horizontal_scroll, "vScroll": wb.view.show_vertical_scroll},
         "ribbon": ribbon_state(wb, sh, rc),
         "canUndo": bool(d.undo),
         "canRedo": bool(d.redo),

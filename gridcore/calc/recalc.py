@@ -22,6 +22,7 @@ from ..core.date import now_serial
 from ..core.value import Array, CellError, Value
 from ..formula import Call, Expr, ParseError, parse
 from .eval import Area, Evaluator, Host, precedents
+from .precision import DisplayedPrecision
 
 if sys.getrecursionlimit() < 20000:
     sys.setrecursionlimit(20000)
@@ -193,6 +194,9 @@ class _PassHost(Host):
         self.tainted: Set[Key] = set()
         self.taint = False
         self.volatile_hit = False
+        # "Set precision as displayed": results are rounded to their cells' formats before they are
+        # stored or read by other formulas.
+        self.precision = DisplayedPrecision() if getattr(wb.calc, "precision_as_displayed", False) else None
 
     # ------------------------------------------------------------ compute
 
@@ -241,6 +245,11 @@ class _PassHost(Host):
             a = v
             if not keep_blanks and any(x is None for x in a.data):
                 a = Array(a.rows, a.cols, [0.0 if x is None else x for x in a.data])
+            # Precision as displayed: each element takes the format of the cell it lands in.
+            p = self.precision
+            if p is not None and any(type(x) is float for x in a.data):
+                cols = max(a.cols, 1)
+                a = Array(a.rows, a.cols, [p.round_value(self.wb, k[0], (k[1] + i // cols, k[2] + i % cols), x) for i, x in enumerate(a.data)])
             # A dynamic-array formula anchors a spill range even while its result is one value —
             # a FILTER matching one row, a SORT or UNIQUE over one item, `=A1:A1` — so `C1#` is the
             # 1 x 1 range and ROWS(C1#) is 1, as in Excel. A formula whose result is a scalar never
@@ -251,6 +260,8 @@ class _PassHost(Host):
                 v = v.data[0] if v.data else None
         elif v is None:
             v = 0.0
+        elif type(v) is float and self.precision is not None:
+            v = self.precision.round_value(self.wb, k[0], (k[1], k[2]), v)
         a = self.spills.get(k)
         if a is not None and self._spill_blocked(k, a):
             del self.spills[k]

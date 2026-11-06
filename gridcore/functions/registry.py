@@ -172,6 +172,45 @@ def _invoke(spec: FnSpec, args: List[Arg], ctx: Ctx) -> Value:
         return CellError.VALUE
 
 
+# Lookups whose every call can scan the lookup vector from its start, so a call lifted over ``n``
+# needles does ``n`` x (vector length) work (GridCraft #2716). One cell like
+# `XMATCH(SEQUENCE(1048576), -SEQUENCE(1048576))` would run for days and hang the server with it.
+_SCANS = frozenset({"VLOOKUP", "HLOOKUP", "LOOKUP", "MATCH", "XLOOKUP", "XMATCH"})
+
+# Work budget of a lifted scanning lookup: needles times the length of the longest vector it
+# searches. Past it the call is ``#NUM!``, as MMULT is past its limit. GridCraft allows 5e8, a few
+# seconds in Rust; a scan here costs about 120 ns an entry, so 5e7 keeps the worst case to about six
+# seconds. It still admits 500 needles over a 100,000-row table, or 5,000 over 10,000 rows. A lookup
+# that searches by halves (approximate MATCH, VLOOKUP and LOOKUP, binary search modes) isn't metered.
+LIFTED_SCAN_BUDGET = 50_000_000
+
+
+def _searches_by_halves(name: str, args: List[Arg]) -> bool:
+    """Whether a call of lookup ``name`` uses binary search (a few compares per needle)."""
+
+    def opt(i: int):
+        return args[i].value if len(args) > i else True
+
+    if name == "LOOKUP":
+        return True
+    if name == "MATCH":
+        v = opt(2)
+        return type(v) in (float, bool) and v != 0
+    if name in ("VLOOKUP", "HLOOKUP"):
+        v = opt(3)
+        return type(v) in (float, bool) and bool(v)
+    v = args[3 if name == "XMATCH" else 5].value if len(args) > (3 if name == "XMATCH" else 5) else None
+    return type(v) is float and v in (2.0, -2.0)
+
+
+def _scan_len(spec: FnSpec, args: List[Arg]) -> int:
+    """The length of the longest vector a lifted call of ``spec`` scans per needle: 0 unless it is one
+    of the scanning lookups and searches linearly."""
+    if spec.name not in _SCANS or _searches_by_halves(spec.name, args):
+        return 0
+    return max((max(a.value.rows, a.value.cols) for i, a in enumerate(args) if isinstance(a.value, Array) and not spec.is_scalar_arg(i)), default=0)
+
+
 def call(spec: FnSpec, args: List[Arg], ctx: Ctx) -> Value:
     """Calls a function with array lifting applied. Wrong arity gives ``#VALUE!``."""
     if not spec.accepts(len(args)):
@@ -185,7 +224,7 @@ def call(spec: FnSpec, args: List[Arg], ctx: Ctx) -> Value:
             cols = max(cols, a.value.cols)
     if not lifted:
         return _invoke(spec, args, ctx)
-    if rows * cols > MAX_CELLS:
+    if rows * cols > MAX_CELLS or rows * cols * _scan_len(spec, args) > LIFTED_SCAN_BUDGET:
         return CellError.NUM
     cell_args = [Arg(a.value, a.from_ref) for a in args]
     data: List[Value] = []

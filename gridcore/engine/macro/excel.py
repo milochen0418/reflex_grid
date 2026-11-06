@@ -723,6 +723,14 @@ class Workbook(HostObject):
     def g_date1904(self, ex):
         return self.h.d1904()
 
+    def g_precisionasdisplayed(self, ex):
+        return bool(self.h.wb().calc.precision_as_displayed)
+
+    def l_precisionasdisplayed(self, ex, v):
+        # "Set precision as displayed": turning it on rounds every number constant for good.
+        self.h.require_writable()
+        self.h.command("formulas.calculationOptions", {"precisionAsDisplayed": _bool(v)})
+
     def g_followhyperlink(self, ex, *args):
         raise NotSupported("Opening links from a macro (FollowHyperlink)")
 
@@ -1553,8 +1561,10 @@ class Names(HostObject):
                     ref = "=" + (ref if not _looks_number(ref) else ref)
         scope = None
         if "!" in nm:
+            from ...formula.printer import unquote_sheet
+
             sheet, nm = nm.rsplit("!", 1)
-            scope = sheet.strip("'")
+            scope = unquote_sheet(sheet)
         elif self.scope is not None:
             scope = self.scope.name
         p: Dict[str, Any] = {"name": nm, "refersTo": ref, "replace": True}
@@ -1830,7 +1840,7 @@ class ListObject(HostObject):
         self.h.require_writable()
         r = self._t().range
         self.h.command("table.convertToRange", {"table": self.name}, self.ws.si)
-        self.h.command("edit.clearAll", {"range": r.a1()}, self.ws.si)
+        self.h.command("edit.clearAll", {"range": r.a1(), "filteredRows": True}, self.ws.si)
         return EMPTY
 
     def g_parent(self, ex):

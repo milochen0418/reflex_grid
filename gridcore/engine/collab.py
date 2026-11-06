@@ -54,7 +54,7 @@ _SHEET_SKIP = frozenset({"cells", "spill", "spill_ranges", "_row_index", "_col_i
 # Sheet attributes merged entry by entry: dicts keyed by row, column or cell.
 _SHEET_KEYED = ("rows", "cols", "comments", "hyperlinks")
 # Workbook attributes undo puts back as a whole.
-_BOOK_ATTRS = ("names", "props", "calc", "protected_structure", "structure_password", "cell_styles", "date_system", "theme", "csv_delimiter", "vba", "code_name")
+_BOOK_ATTRS = ("names", "props", "view", "calc", "protected_structure", "structure_password", "cell_styles", "date_system", "theme", "csv_delimiter", "vba", "code_name")
 
 
 @dataclass

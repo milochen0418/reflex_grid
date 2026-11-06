@@ -156,7 +156,18 @@ def write_xlsx(wb: Workbook, app_name: str = "ReflexGrid", macros: bool = True) 
     if wb.protected_structure:
         pw = f' workbookPassword="{esc_attr(wb.structure_password)}"' if wb.structure_password else ""
         w.append(f'<workbookProtection{pw} lockStructure="1"/>')
-    w.append(f'<bookViews><workbookView activeTab="{active}"/></bookViews><sheets>{"".join(sheets_xml)}</sheets>')
+    # Display options for this workbook (Excel writes only the ones turned off).
+    view = getattr(wb, "view", None)
+    shown = "".join(
+        f' {a}="0"'
+        for a, on in (
+            ("showHorizontalScroll", view.show_horizontal_scroll if view else True),
+            ("showVerticalScroll", view.show_vertical_scroll if view else True),
+            ("showSheetTabs", view.show_sheet_tabs if view else True),
+        )
+        if not on
+    )
+    w.append(f'<bookViews><workbookView{shown} activeTab="{active}"/></bookViews><sheets>{"".join(sheets_xml)}</sheets>')
     if names:
         w.append("<definedNames>" + "".join(names) + "</definedNames>")
     calc = ['<calcPr calcId="191029"']

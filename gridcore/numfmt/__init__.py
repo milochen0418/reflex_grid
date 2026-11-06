@@ -231,6 +231,44 @@ class NumberFormat:
             out.prepend("-")
         return Formatted(out.text, sec.color, out.fill, True), False
 
+    def round_as_displayed(self, n: float) -> float:
+        """``n`` as this format displays it: what Excel stores when "Set precision as displayed" is
+        on (GridCraft PR 1366, observed in Excel through COM). Fixed decimals, percent, thousands
+        scaling (``0.0,,``), scientific and fraction sections round to what they show. These keep
+        the full value: General, date and time formats (``mm:ss.0`` too), text formats and
+        sections without digits (``"x"``, ``;;;``). Never ``-0``."""
+        if self.general or not math.isfinite(n):
+            return n
+        sec = self._rounding_section(n)
+        if sec is None or sec.kind != "number":
+            return n
+        m = render.shown_value(sec, n)
+        if m is None:
+            return n
+        if m == 0.0:
+            return 0.0
+        return -m if n < 0 else m
+
+    def _rounding_section(self, n: float) -> Optional[Section]:
+        """The section whose digits "Set precision as displayed" rounds ``n`` by, which Excel
+        picks otherwise than the one that displays it: conditions are ignored and the sign picks
+        the section (``[<1]0.00;0`` shows 2.333 as ``2`` but stores 2.33); a format with a
+        condition and one number section keeps negatives whole (``[<1]0.00``) unless it has an
+        ``@`` section; a completely empty section passes to the next one (``0.0;;0.000`` stores
+        -2.333 as -2.333, ``;0.0`` stores 2.333 as 2.3)."""
+        secs = self._nums()
+        conditional = any(s.cond is not None for s in secs)
+        if n < 0 and len(secs) >= 2:
+            slot = 1
+        elif n < 0 and conditional and self.text_section is None:
+            return None
+        else:
+            slot = 0
+        for sec in secs[slot:]:
+            if sec.toks or sec.color is not None or sec.cond is not None:
+                return sec
+        return None
+
     def format_text(self, t: str) -> Formatted:
         if self.text_section is not None and self.text_section < len(self.sections):
             sec = self.sections[self.text_section]
